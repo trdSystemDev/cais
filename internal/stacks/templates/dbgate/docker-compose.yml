@@ -1,0 +1,69 @@
+name: dbgate
+
+services:
+  dbgate:
+    image: dbgate/dbgate:7.2.5-alpine
+    container_name: dbgate
+    restart: unless-stopped
+    environment:
+      CONNECTIONS: pg,mysql
+      LABEL_pg: "Postgres (infra)"
+      SERVER_pg: postgres
+      PORT_pg: 5432
+      USER_pg: postgres
+      ENGINE_pg: postgres@dbgate-plugin-postgres
+      LABEL_mysql: "MySQL (infra)"
+      SERVER_mysql: mysql
+      PORT_mysql: 3306
+      USER_mysql: root
+      ENGINE_mysql: mysql@dbgate-plugin-mysql
+    # dbgate nao suporta ler senha de arquivo (sem convencao *_FILE como
+    # postgres/mysql) -- entao le os secrets aqui e exporta so dentro do
+    # container, pra senha nunca aparecer em `docker inspect`/`compose config`
+    command:
+      - sh
+      - -c
+      - |
+        export PASSWORD_pg="$$(cat /run/secrets/postgres_password)"
+        export PASSWORD_mysql="$$(cat /run/secrets/mysql_root_password)"
+        export LOGIN="$$(cat /run/secrets/dbgate_login)"
+        export PASSWORD="$$(cat /run/secrets/dbgate_password)"
+        exec /home/dbgate-docker/entrypoint.sh
+    secrets:
+      - postgres_password
+      - mysql_root_password
+      - dbgate_login
+      - dbgate_password
+    labels:
+      bunkerweb.SERVER_NAME: "db.trds.com.br"
+      bunkerweb.USE_REVERSE_PROXY: "yes"
+      bunkerweb.REVERSE_PROXY_URL: "/"
+      bunkerweb.REVERSE_PROXY_HOST: "http://dbgate:3000"
+      bunkerweb.AUTO_LETS_ENCRYPT: "yes"
+    volumes:
+      - dbgate_data:/root/.dbgate
+    networks:
+      - infra_network
+      - proxy_network
+
+networks:
+  infra_network:
+    external: true
+    name: infra_network
+  proxy_network:
+    external: true
+    name: proxy_network
+
+volumes:
+  dbgate_data:
+    name: dbgate_data
+
+secrets:
+  postgres_password:
+    file: ../secrets/postgres_password.txt
+  mysql_root_password:
+    file: ../secrets/mysql_root_password.txt
+  dbgate_login:
+    file: ../secrets/dbgate_login.txt
+  dbgate_password:
+    file: ../secrets/dbgate_password.txt

@@ -1,0 +1,63 @@
+# Exemplo de pipeline: build com Kaniko (sem privileged) -> push no registry
+# interno -> deploy via SSH restrito. Copiar pra raiz do repo de cada app como
+# .woodpecker.yml.
+#
+# Cadastrar como secrets do repo no Woodpecker (repo > Settings > Secrets):
+#   registry_user       usuario gerado em scripts/registry-init.sh
+#   registry_password   senha gerada em scripts/registry-init.sh
+#   deploy_ssh_key      chave privada (a publica vai pro authorized_keys da VPS,
+#                       ver woodpecker/deploy/authorized_keys.example)
+#
+# Nao tem nome de app hardcoded aqui -- usa $CI_REPO_NAME (variavel embutida
+# do Woodpecker, nome do repositorio) em tudo. Por isso o nome do repositorio
+# Git precisa ser IDENTICO ao nome usado no apps-tui pra criar a pasta em
+# /deploy/apps/<nome> na VPS. Se os nomes divergirem, o deploy.sh rejeita
+# com "servico desconhecido" (falha visivel, nao silenciosa).
+#
+# O docker-compose.yml deste repo precisa referenciar a imagem com a tag
+# "REPLACE_TAG" (ex: "image: registry:5000/minha-app:REPLACE_TAG"), nunca
+# "latest". O step de deploy troca esse texto pelo hash do commit antes de
+# mandar pro deploy.sh -- assim cada deploy fica atrelado a um commit exato,
+# nao a uma tag flutuante, e rollback vira so reaplicar um docker-compose.yml
+# antigo (o hash do commit anterior ja esta gravado nele).
+#
+# NAO deixar "${CI_COMMIT_SHA}" (sintaxe de variavel) direto no arquivo: o
+# docker compose na VPS tentaria interpolar isso sozinho usando o ambiente
+# do host (que nao tem essa variavel), e quebraria silenciosamente.
+
+steps:
+  - name: build-and-push
+    image: woodpeckerci/plugin-kaniko
+    settings:
+      registry: registry:5000
+      repo: registry:5000/${CI_REPO_NAME}
+      tags: latest,${CI_COMMIT_SHA}
+      username:
+        from_secret: registry_user
+      password:
+        from_secret: registry_password
+      skip_tls_verify: true # registry interno e HTTP puro, nunca sai da rede docker
+
+  - name: deploy
+    image: kroniak/ssh-client
+    environment:
+      DEPLOY_KEY:
+        from_secret: deploy_ssh_key
+    commands:
+      # a rede docker do host aponta o gateway da bridge pro proprio host,
+      # entao da pra alcancar a VPS sem precisar de IP publico nem extra_hosts
+      - HOST_IP=$(ip route | awk '/default/ {print $3}')
+      - eval $(ssh-agent -s)
+      - echo "$DEPLOY_KEY" | tr -d '\r' | ssh-add -
+      - mkdir -p ~/.ssh
+      - ssh-keyscan -H "$HOST_IP" >> ~/.ssh/known_hosts
+      # troca o placeholder REPLACE_TAG pelo hash do commit atual, deixando
+      # o arquivo com uma tag concreta antes de mandar pro deploy.sh
+      - sed -i "s/REPLACE_TAG/${CI_COMMIT_SHA}/" docker-compose.yml
+      # o docker-compose.yml deste repo (so estrutura, nenhum secret dentro)
+      # viaja pelo stdin do ssh; o deploy.sh na VPS substitui o existente,
+      # filtra padroes perigosos, e so entao roda pull+up. secrets/ na VPS
+      # nunca e tocado por aqui.
+      - ssh deploy@"$HOST_IP" "$CI_REPO_NAME" < docker-compose.yml
+    when:
+      - branch: main

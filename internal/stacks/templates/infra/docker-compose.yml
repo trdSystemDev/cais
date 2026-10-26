@@ -1,0 +1,88 @@
+name: infra
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: infra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - infra_postgres_data:/var/lib/postgresql
+    networks:
+      - infra_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mysql:
+    image: mysql:9.7
+    container_name: infra-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: app
+      MYSQL_USER: app
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+    secrets:
+      - mysql_root_password
+      - mysql_password
+    volumes:
+      - infra_mysql_data:/var/lib/mysql
+    networks:
+      - infra_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  registry:
+    image: registry:3.1.1
+    container_name: infra-registry
+    restart: unless-stopped
+    environment:
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: "Registry"
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+    secrets:
+      - source: registry_htpasswd
+        target: /auth/htpasswd
+    volumes:
+      - infra_registry_data:/var/lib/registry
+    networks:
+      - infra_network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  infra_network:
+    name: infra_network
+    driver: bridge
+
+volumes:
+  infra_postgres_data:
+    name: infra_postgres_data
+  infra_mysql_data:
+    name: infra_mysql_data
+  infra_registry_data:
+    name: infra_registry_data
+
+secrets:
+  postgres_password:
+    file: ../secrets/postgres_password.txt
+  mysql_root_password:
+    file: ../secrets/mysql_root_password.txt
+  mysql_password:
+    file: ../secrets/mysql_password.txt
+  registry_htpasswd:
+    file: ../secrets/registry_htpasswd

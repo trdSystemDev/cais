@@ -1,0 +1,300 @@
+name: proxy
+
+services:
+  bunkerweb:
+    image: bunkerity/bunkerweb:1.6.13
+    container_name: proxy-bunkerweb
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+      - "8443:8443/udp"
+    extra_hosts:
+      # todo backend hoje eh localhost:PORTA no host -- o container enxerga
+      # via essa entrada em vez do IP de bridge (que pode mudar)
+      - "host.docker.internal:host-gateway"
+    labels:
+      # sem essa label o bw-autoconf nunca acha essa instancia via Docker
+      # e fica em loop "waiting for the database to be ready"
+      - "bunkerweb.INSTANCE=yes"
+    environment:
+      AUTOCONF_MODE: "yes"
+      API_WHITELIST_IP: "127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+    secrets:
+      - DATABASE_URI
+    networks:
+      - bw-universe
+      - proxy_network
+    depends_on:
+      - bw-db
+
+  bw-scheduler:
+    image: bunkerity/bunkerweb-scheduler:1.6.13
+    container_name: proxy-bw-scheduler
+    restart: unless-stopped
+    environment:
+      # vazio de proposito: em AUTOCONF_MODE quem informa as instancias e o
+      # autoconf (via label bunkerweb.INSTANCE, gravado no banco), nao essa var
+      BUNKERWEB_INSTANCES: ""
+      AUTOCONF_MODE: "yes"
+      MULTISITE: "yes"
+      API_WHITELIST_IP: "127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
+      # site identifiers (autoconf concatena os descobertos via label a essa lista)
+      SERVER_NAME: >-
+        api.vertex.trds.com.br
+        arborscan.trds.com.br
+        s3.arborscan.trds.com.br
+        automecanica.trds.com.br
+        crm.trds.com.br
+        eagles.trds.com.br
+        govdocs.com.br
+        govluz.com.br
+        govluz.trds.com.br
+        housedigital.trds.com.br
+        maginato.trds.com.br
+        neuromes.trds.com.br
+        nf.trds.com.br
+        plic.ia.br
+        portal.trds.com.br
+        sinalronda.trds.com.br
+        trds.com.br
+        trdsite.trds.com.br
+        trdsystem.com.br
+        vinica.trds.com.br
+
+      # --- api.vertex.trds.com.br ---
+      api.vertex.trds.com.br_USE_REVERSE_PROXY: "yes"
+      api.vertex.trds.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4032"
+      api.vertex.trds.com.br_REVERSE_PROXY_URL: "/"
+
+      # --- arborscan.trds.com.br ---
+      arborscan.trds.com.br_USE_REVERSE_PROXY: "yes"
+      arborscan.trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:4027"
+      arborscan.trds.com.br_REVERSE_PROXY_URL_1: "/"
+      arborscan.trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:4012"
+      arborscan.trds.com.br_REVERSE_PROXY_URL_2: "/api/"
+
+      # --- s3.arborscan.trds.com.br (estilo MinIO: upload grande, sem buffering) ---
+      s3.arborscan.trds.com.br_USE_REVERSE_PROXY: "yes"
+      s3.arborscan.trds.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4030"
+      s3.arborscan.trds.com.br_REVERSE_PROXY_URL: "/"
+      s3.arborscan.trds.com.br_MAX_CLIENT_SIZE: "0" # VERIFICAR nome exato da setting (unlimited)
+      s3.arborscan.trds.com.br_REVERSE_PROXY_BUFFERING: "no" # VERIFICAR se existe em 1.6.13
+
+      # --- automecanica.trds.com.br ---
+      automecanica.trds.com.br_USE_REVERSE_PROXY: "yes"
+      automecanica.trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:4022"
+      automecanica.trds.com.br_REVERSE_PROXY_URL_1: "/"
+      automecanica.trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:4018"
+      automecanica.trds.com.br_REVERSE_PROXY_URL_2: "/api/"
+      automecanica.trds.com.br_MAX_CLIENT_SIZE: "100m" # VERIFICAR nome exato
+
+      # --- crm.trds.com.br ---
+      crm.trds.com.br_USE_REVERSE_PROXY: "yes"
+      crm.trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:4026"
+      crm.trds.com.br_REVERSE_PROXY_URL_1: "/"
+      crm.trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:4024"
+      crm.trds.com.br_REVERSE_PROXY_URL_2: "/api/"
+
+      # --- eagles.trds.com.br ---
+      eagles.trds.com.br_USE_REVERSE_PROXY: "yes"
+      eagles.trds.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4007"
+      eagles.trds.com.br_REVERSE_PROXY_URL: "/"
+
+      # --- govdocs.com.br (hoje so permite GET/POST) ---
+      govdocs.com.br_USE_REVERSE_PROXY: "yes"
+      govdocs.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4004"
+      govdocs.com.br_REVERSE_PROXY_URL: "/"
+      govdocs.com.br_ALLOWED_METHODS: "GET|POST" # VERIFICAR sintaxe exata
+
+      # --- govluz.com.br ---
+      govluz.com.br_USE_REVERSE_PROXY: "yes"
+      govluz.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4015"
+      govluz.com.br_REVERSE_PROXY_URL: "/"
+
+      # --- govluz.trds.com.br (mesmo backend do govluz.com.br) ---
+      govluz.trds.com.br_USE_REVERSE_PROXY: "yes"
+      govluz.trds.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4015"
+      govluz.trds.com.br_REVERSE_PROXY_URL: "/"
+
+      # --- housedigital.trds.com.br (upload 500M + socket.io) ---
+      housedigital.trds.com.br_USE_REVERSE_PROXY: "yes"
+      housedigital.trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:4040"
+      housedigital.trds.com.br_REVERSE_PROXY_URL_1: "/"
+      housedigital.trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:4005"
+      housedigital.trds.com.br_REVERSE_PROXY_URL_2: "/api/"
+      housedigital.trds.com.br_REVERSE_PROXY_HOST_3: "http://host.docker.internal:4005/socket.io/"
+      housedigital.trds.com.br_REVERSE_PROXY_URL_3: "/api/socket.io/"
+      housedigital.trds.com.br_REVERSE_PROXY_WS_3: "yes" # VERIFICAR se existe em 1.6.13
+      housedigital.trds.com.br_MAX_CLIENT_SIZE: "500m" # VERIFICAR nome exato
+
+      # --- maginato.trds.com.br ---
+      maginato.trds.com.br_USE_REVERSE_PROXY: "yes"
+      maginato.trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:4046"
+      maginato.trds.com.br_REVERSE_PROXY_URL_1: "/"
+      maginato.trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:4045"
+      maginato.trds.com.br_REVERSE_PROXY_URL_2: "/api/"
+
+      # --- neuromes.trds.com.br ---
+      neuromes.trds.com.br_USE_REVERSE_PROXY: "yes"
+      neuromes.trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:4023"
+      neuromes.trds.com.br_REVERSE_PROXY_URL_1: "/"
+      neuromes.trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:4008"
+      neuromes.trds.com.br_REVERSE_PROXY_URL_2: "/api/"
+
+      # --- nf.trds.com.br ---
+      nf.trds.com.br_USE_REVERSE_PROXY: "yes"
+      nf.trds.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4049"
+      nf.trds.com.br_REVERSE_PROXY_URL: "/"
+      nf.trds.com.br_MAX_CLIENT_SIZE: "100m" # VERIFICAR nome exato
+
+      # --- plic.ia.br ---
+      plic.ia.br_USE_REVERSE_PROXY: "yes"
+      plic.ia.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4017"
+      plic.ia.br_REVERSE_PROXY_URL: "/"
+
+      # --- portal.trds.com.br ---
+      portal.trds.com.br_USE_REVERSE_PROXY: "yes"
+      portal.trds.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4036"
+      portal.trds.com.br_REVERSE_PROXY_URL: "/"
+
+      # --- sinalronda.trds.com.br (o /S3/ hoje forca Host: storage:9000) ---
+      sinalronda.trds.com.br_USE_REVERSE_PROXY: "yes"
+      sinalronda.trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:4020"
+      sinalronda.trds.com.br_REVERSE_PROXY_URL_1: "/"
+      sinalronda.trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:9002"
+      sinalronda.trds.com.br_REVERSE_PROXY_URL_2: "/S3/"
+      sinalronda.trds.com.br_REVERSE_PROXY_HEADERS_2: "Host storage:9000" # VERIFICAR sintaxe exata (override de Host)
+      sinalronda.trds.com.br_MAX_CLIENT_SIZE: "100m" # VERIFICAR nome exato
+
+      # --- trds.com.br (apex: jenkins fica em /jenkins/, nao e subdominio) ---
+      trds.com.br_USE_REVERSE_PROXY: "yes"
+      trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:8181/jenkins/"
+      trds.com.br_REVERSE_PROXY_URL_1: "/jenkins/"
+      trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:9000"
+      trds.com.br_REVERSE_PROXY_URL_2: "/s3/"
+      trds.com.br_REVERSE_PROXY_HOST_3: "http://host.docker.internal:9001"
+      trds.com.br_REVERSE_PROXY_URL_3: "/s3-console/"
+      trds.com.br_REVERSE_PROXY_HOST_4: "http://host.docker.internal:5678"
+      trds.com.br_REVERSE_PROXY_URL_4: "/n8n/"
+      trds.com.br_MAX_CLIENT_SIZE: "100m" # VERIFICAR nome exato
+
+      # --- trdsite.trds.com.br ---
+      trdsite.trds.com.br_USE_REVERSE_PROXY: "yes"
+      trdsite.trds.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4014"
+      trdsite.trds.com.br_REVERSE_PROXY_URL: "/"
+
+      # --- trdsystem.com.br (www.trdsystem.com.br redirect FICA DE FORA por ora, ver texto) ---
+      trdsystem.com.br_USE_REVERSE_PROXY: "yes"
+      trdsystem.com.br_REVERSE_PROXY_HOST: "http://host.docker.internal:4014"
+      trdsystem.com.br_REVERSE_PROXY_URL: "/"
+
+      # --- vinica.trds.com.br (sem location "/", so os 3 paths abaixo) ---
+      vinica.trds.com.br_USE_REVERSE_PROXY: "yes"
+      vinica.trds.com.br_REVERSE_PROXY_HOST_1: "http://host.docker.internal:4037"
+      vinica.trds.com.br_REVERSE_PROXY_URL_1: "/api/"
+      vinica.trds.com.br_REVERSE_PROXY_HOST_2: "http://host.docker.internal:4037/UploadChat/"
+      vinica.trds.com.br_REVERSE_PROXY_URL_2: "/UploadChat/"
+      vinica.trds.com.br_REVERSE_PROXY_HOST_3: "http://host.docker.internal:4038"
+      vinica.trds.com.br_REVERSE_PROXY_URL_3: "/ws/"
+      vinica.trds.com.br_REVERSE_PROXY_WS_3: "yes" # VERIFICAR se existe em 1.6.13
+    secrets:
+      - DATABASE_URI
+    volumes:
+      - bw_storage:/data
+    networks:
+      - bw-universe
+      # bw-universe e "internal" (sem rota pra internet) -- o scheduler
+      # precisa sair pra fora pra falar com a API do Let's Encrypt
+      # (certbot-new/renew) e os jobs de blacklist/mmdb/telemetria.
+      # proxy_network ja existe e nao e internal, entao serve de saida.
+      - proxy_network
+    depends_on:
+      - bw-db
+
+  bw-autoconf:
+    image: bunkerity/bunkerweb-autoconf:1.6.13
+    container_name: proxy-bw-autoconf
+    restart: unless-stopped
+    environment:
+      # padrao do SDK Docker (mesmo usado no docker CLI): aponta pro socket-proxy
+      # em vez do docker.sock real, que fica isolado dentro do bw-docker-proxy
+      DOCKER_HOST: tcp://bw-docker-proxy:2375
+      AUTOCONF_MODE: "yes"
+    secrets:
+      - DATABASE_URI
+    networks:
+      - bw-universe
+      - bw-docker-proxy-network
+    depends_on:
+      - bw-db
+      - bw-docker-proxy
+
+  # unico lugar que toca o docker.sock de verdade. bw-autoconf so precisa
+  # OBSERVAR containers/labels (nunca criar/executar nada), entao fica so
+  # leitura -- POST: 0 bloqueia qualquer escrita independente das outras flags.
+  bw-docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: proxy-bw-docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      POST: 0
+      EXEC: 0
+      SYSTEM: 0
+      SWARM: 0
+      SECRETS: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
+      PLUGINS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - bw-docker-proxy-network
+
+  bw-db:
+    image: mariadb:11
+    container_name: proxy-bw-db
+    restart: unless-stopped
+    environment:
+      # nunca usamos root depois do primeiro boot, entao nem gerenciamos essa
+      # senha -- fica aleatoria, so no log do primeiro start
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: bunkerweb
+      MYSQL_USER: bunkerweb
+      MYSQL_PASSWORD_FILE: /run/secrets/db_bunkerweb_password
+    secrets:
+      - db_bunkerweb_password
+    volumes:
+      - bw_db_data:/var/lib/mysql
+    networks:
+      - bw-universe
+
+networks:
+  proxy_network:
+    name: proxy_network
+    driver: bridge
+  bw-universe:
+    name: bw-universe
+    driver: bridge
+    internal: true
+  bw-docker-proxy-network:
+    name: bw-docker-proxy-network
+    driver: bridge
+    internal: true
+
+volumes:
+  bw_storage:
+    name: bw_storage
+  bw_db_data:
+    name: bw_db_data
+
+secrets:
+  db_bunkerweb_password:
+    file: ../secrets/db_bunkerweb_password.txt
+  DATABASE_URI:
+    file: ../secrets/database_uri.txt
