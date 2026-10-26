@@ -3,11 +3,13 @@ package ui
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/trdSystemDev/vpsctl/internal/core"
 	"github.com/trdSystemDev/vpsctl/internal/docker"
 )
 
@@ -25,9 +27,18 @@ func missingChecker(context.Context) docker.Status {
 
 // startSim sobe a App numa tela simulada 100x30 e devolve a tela pra
 // inspecao. A App e parada no fim do teste.
-func startSim(t *testing.T, check DockerChecker) tcell.SimulationScreen {
+func startSim(t *testing.T, check func(context.Context) docker.Status) tcell.SimulationScreen {
 	t.Helper()
-	a := New(check)
+	sim, _ := startSimCore(t, check)
+	return sim
+}
+
+// startSimCore e como startSim, mas devolve tambem o core, pra testes que
+// disparam acoes por fora da interface (como o MCP vai fazer).
+func startSimCore(t *testing.T, check func(context.Context) docker.Status) (tcell.SimulationScreen, *core.Core) {
+	t.Helper()
+	c := core.New(core.Deps{CheckDocker: check})
+	a := New(c)
 	sim := tcell.NewSimulationScreen("UTF-8")
 	a.app.SetScreen(sim)
 	sim.SetSize(100, 30)
@@ -40,7 +51,7 @@ func startSim(t *testing.T, check DockerChecker) tcell.SimulationScreen {
 			t.Errorf("Run devolveu erro: %v", err)
 		}
 	})
-	return sim
+	return sim, c
 }
 
 func screenText(sim tcell.SimulationScreen) []string {
@@ -100,6 +111,47 @@ func TestDashboardMostraDockerAusente(t *testing.T) {
 	waitFor(t, sim, "docker nao encontrado")
 	waitFor(t, sim, "Daemon   depende do CLI")
 	waitFor(t, sim, "Resolva os itens em vermelho")
+}
+
+// a tela tem que refletir uma acao disparada fora dela -- e o caso do MCP
+// publicando um app enquanto alguem esta com a TUI aberta
+func TestUIReageAAcaoExternaNoCore(t *testing.T) {
+	var installed atomic.Bool
+	sim, c := startSimCore(t, func(ctx context.Context) docker.Status {
+		if installed.Load() {
+			return okChecker(ctx)
+		}
+		return missingChecker(ctx)
+	})
+	waitFor(t, sim, "docker nao encontrado")
+
+	installed.Store(true)
+	c.CheckEnvironment(context.Background()) // ninguem clicou em nada
+	waitFor(t, sim, "Pronto.")
+}
+
+func TestBotaoVerificarDisparaAcao(t *testing.T) {
+	var calls atomic.Int32
+	sim := startSim(t, func(ctx context.Context) docker.Status {
+		calls.Add(1)
+		return okChecker(ctx)
+	})
+	waitFor(t, sim, "Pronto.")
+
+	rows := screenText(sim)
+	for y, row := range rows {
+		if strings.Contains(row, "Verificar novamente") {
+			click(t, sim, y, "Verificar novamente")
+			break
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := calls.Load(); n < 2 {
+		t.Fatalf("esperava a checagem inicial + a do clique, houve %d", n)
+	}
 }
 
 func TestCliqueTrocaDeAba(t *testing.T) {

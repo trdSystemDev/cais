@@ -7,12 +7,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/trdSystemDev/vpsctl/internal/docker"
+	"github.com/trdSystemDev/vpsctl/internal/core"
 )
-
-// DockerChecker e a funcao usada pelo Dashboard pra checar o Docker.
-// Em producao e docker.Check; nos testes, um fake.
-type DockerChecker func(context.Context) docker.Status
 
 var (
 	styleTab       = tcell.StyleDefault.Foreground(tcell.ColorSilver).Background(tcell.ColorDefault)
@@ -27,24 +23,27 @@ type tab struct {
 	page   tview.Primitive
 }
 
-// App e a aplicacao TUI inteira: barra de abas, paginas e rodape.
+// App e a aplicacao TUI inteira: barra de abas, paginas e rodape. E so uma
+// visao do core: le o estado via Subscribe e dispara acoes nele.
 type App struct {
+	core   *core.Core
 	app    *tview.Application
 	pages  *tview.Pages
 	tabs   []*tab
 	active int
+	dash   *dashboard
 }
 
 // New monta a interface. Nada e desenhado ate Run ser chamado.
-func New(check DockerChecker) *App {
+func New(c *core.Core) *App {
 	a := &App{
+		core:  c,
 		app:   tview.NewApplication().EnableMouse(true),
 		pages: tview.NewPages(),
+		dash:  newDashboard(c),
 	}
 
-	dash := newDashboard(a.app, check)
-
-	a.addTab("Dashboard", dash)
+	a.addTab("Dashboard", a.dash)
 	a.addTab("Apps", placeholder("Apps", 3, "Criar app pelo link do GitHub, deploy, logs ao vivo, restart."))
 	a.addTab("Secrets", placeholder("Secrets", 3, "Secrets centrais e por app: gerar, copiar, propagar."))
 	a.addTab("Bancos", placeholder("Bancos", 4, "Databases e usuarios no Postgres/MySQL, instancias dedicadas."))
@@ -73,9 +72,13 @@ func New(check DockerChecker) *App {
 	a.app.SetRoot(root, true)
 	a.app.SetInputCapture(a.globalKeys)
 	a.selectTab(0)
-
-	dash.refresh()
 	return a
+}
+
+// render redesenha todas as telas a partir de uma foto do core. Roda
+// sempre na goroutine da UI (via QueueUpdateDraw).
+func (a *App) render(s core.State) {
+	a.dash.render(s)
 }
 
 func (a *App) addTab(name string, page tview.Primitive) {
@@ -134,8 +137,18 @@ func (a *App) typing() bool {
 	return false
 }
 
-// Run desenha a interface e bloqueia ate o usuario sair.
+// Run se inscreve no core, dispara a checagem inicial do ambiente e
+// bloqueia ate o usuario sair.
 func (a *App) Run() error {
+	states, unsubscribe := a.core.Subscribe()
+	defer unsubscribe()
+	go func() {
+		for s := range states {
+			a.app.QueueUpdateDraw(func() { a.render(s) })
+		}
+	}()
+
+	go a.core.CheckEnvironment(context.Background())
 	return a.app.Run()
 }
 

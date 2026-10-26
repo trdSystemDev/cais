@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/trdSystemDev/vpsctl/internal/docker"
+	"github.com/trdSystemDev/vpsctl/internal/core"
 	"github.com/trdSystemDev/vpsctl/internal/ui"
 )
 
@@ -21,7 +21,8 @@ func main() {
 		return
 	}
 
-	if err := ui.New(docker.Check).Run(); err != nil {
+	c := core.New(core.Deps{})
+	if err := ui.New(c).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "vpsctl:", err)
 		os.Exit(1)
 	}

@@ -2,37 +2,33 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"runtime"
 	"strings"
 
 	"github.com/rivo/tview"
 
-	"github.com/trdSystemDev/vpsctl/internal/docker"
+	"github.com/trdSystemDev/vpsctl/internal/core"
 )
 
-// dashboard mostra o estado do ambiente (Docker, sistema) e tem um botao
-// pra checar de novo. A checagem roda fora da goroutine da UI.
+// dashboard mostra o estado do ambiente. Nao guarda estado proprio: o
+// botao so dispara a acao no core, e render redesenha a partir da foto
+// que o core publica (venha a acao daqui, do MCP ou de onde for).
 type dashboard struct {
 	*tview.Flex
-	app    *tview.Application
-	check  DockerChecker
 	status *tview.TextView
 	button *tview.Button
 }
 
-func newDashboard(app *tview.Application, check DockerChecker) *dashboard {
+func newDashboard(c *core.Core) *dashboard {
 	d := &dashboard{
 		Flex:   tview.NewFlex().SetDirection(tview.FlexRow),
-		app:    app,
-		check:  check,
 		status: tview.NewTextView().SetDynamicColors(true),
 	}
 	d.status.SetBorder(true).SetTitle(" Ambiente ")
 
-	d.button = tview.NewButton("Verificar novamente").SetSelectedFunc(d.refresh)
+	d.button = tview.NewButton("Verificar novamente").SetSelectedFunc(func() {
+		go c.CheckEnvironment(context.Background())
+	})
 
 	buttons := tview.NewFlex().
 		AddItem(tview.NewBox(), 1, 0, false).
@@ -46,56 +42,51 @@ func newDashboard(app *tview.Application, check DockerChecker) *dashboard {
 	return d
 }
 
-// refresh dispara uma checagem nova. Pode ser chamado antes de Run: a
-// atualizacao fica na fila do tview e e aplicada quando a UI subir.
-func (d *dashboard) refresh() {
-	d.status.SetText("\n [yellow]Verificando o ambiente...")
-	d.button.SetDisabled(true)
-	go func() {
-		s := d.check(context.Background())
-		d.app.QueueUpdateDraw(func() {
-			d.status.SetText(renderStatus(s))
-			d.button.SetDisabled(false)
-		})
-	}()
+func (d *dashboard) render(s core.State) {
+	d.status.SetText(renderEnvironment(s.Environment))
+	d.button.SetDisabled(s.Environment.Checking)
 }
 
-func renderStatus(s docker.Status) string {
+func renderEnvironment(e core.Environment) string {
+	if e.Checking || !e.Checked() {
+		return "\n [yellow]Verificando o ambiente..."
+	}
+
 	var b strings.Builder
 	b.WriteString("\n [::b]Docker[::-]\n")
-	line(&b, "CLI", s.ClientVersion, s.ClientErr)
-	if errors.Is(s.ClientErr, docker.ErrNotInstalled) {
+	line(&b, "CLI", e.Docker.CLI)
+	if !e.Docker.Installed {
 		// sem o CLI nao da pra checar o resto; nao repete a mesma mensagem
 		b.WriteString("   [gray]-  Daemon   depende do CLI\n")
 		b.WriteString("   [gray]-  Compose  depende do CLI\n")
 	} else {
-		line(&b, "Daemon", s.ServerVersion, s.ServerErr)
-		line(&b, "Compose", s.ComposeVersion, s.ComposeErr)
+		line(&b, "Daemon", e.Docker.Daemon)
+		line(&b, "Compose", e.Docker.Compose)
 	}
 
 	b.WriteString("\n [::b]Sistema[::-]\n")
-	host, _ := os.Hostname()
-	fmt.Fprintf(&b, "   [gray]Host     [white]%s\n", tview.Escape(host))
-	fmt.Fprintf(&b, "   [gray]Sistema  [white]%s/%s\n", runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS != "linux" {
+	fmt.Fprintf(&b, "   [gray]Host     [white]%s\n", tview.Escape(e.Host.Hostname))
+	fmt.Fprintf(&b, "   [gray]Sistema  [white]%s/%s\n", e.Host.OS, e.Host.Arch)
+	if !e.Host.Supported() {
 		b.WriteString("   [yellow]! O vpsctl foi feito pra rodar na VPS Linux; aqui so da pra navegar na interface.\n")
 	}
 
 	b.WriteString("\n")
-	if s.OK() {
+	if e.Ready() {
 		b.WriteString(" [green::b]Pronto.[-::-] O Docker esta funcionando -- o proximo passo e a aba Setup.\n")
 	} else {
 		b.WriteString(" [red::b]Resolva os itens em vermelho[-::-] antes de usar o Setup.\n")
 	}
+	fmt.Fprintf(&b, "\n [gray]Ultima verificacao: %s\n", e.CheckedAt.Local().Format("02/01/2006 15:04:05"))
 	return b.String()
 }
 
-func line(b *strings.Builder, label, version string, err error) {
-	if err != nil {
-		fmt.Fprintf(b, "   [red]x[-] [gray]%-8s [red]%s\n", label, tview.Escape(firstLine(err.Error())))
+func line(b *strings.Builder, label string, c core.Component) {
+	if !c.OK() {
+		fmt.Fprintf(b, "   [red]x[-] [gray]%-8s [red]%s\n", label, tview.Escape(firstLine(c.Error)))
 		return
 	}
-	fmt.Fprintf(b, "   [green]v[-] [gray]%-8s [white]%s\n", label, tview.Escape(version))
+	fmt.Fprintf(b, "   [green]v[-] [gray]%-8s [white]%s\n", label, tview.Escape(c.Version))
 }
 
 // firstLine corta mensagens de erro longas do docker (que as vezes vem
