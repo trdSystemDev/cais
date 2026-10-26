@@ -8,7 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/trdSystemDev/vpsctl/internal/core"
+	"github.com/trdSystemDev/cais/internal/core"
 )
 
 // Serve atende conexoes em ln ate ctx ser cancelado. Cada conexao pode

@@ -2,7 +2,7 @@ package core
 
 import "time"
 
-// State e uma foto imutavel de tudo que o vpsctl sabe naquele momento.
+// State e uma foto imutavel de tudo que o cais sabe naquele momento.
 // Quem recebe um State pode le-lo a vontade, de qualquer goroutine.
 //
 // Hoje State so tem valores (sem slices/maps/ponteiros), entao copiar ja
@@ -15,7 +15,7 @@ type State struct {
 	Environment Environment `json:"environment"`
 }
 
-// Environment e o estado da maquina onde o vpsctl roda.
+// Environment e o estado da maquina onde o cais roda.
 type Environment struct {
 	Checking  bool      `json:"checking"`
 	CheckedAt time.Time `json:"checked_at,omitzero"`
@@ -33,7 +33,7 @@ func (e Environment) Ready() bool {
 	return e.Checked() && e.Docker.OK()
 }
 
-// Host descreve o sistema operacional onde o vpsctl roda.
+// Host descreve o sistema operacional onde o cais roda.
 type Host struct {
 	Hostname string `json:"hostname"`
 	OS       string `json:"os"`

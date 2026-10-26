@@ -12,24 +12,24 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/trdSystemDev/vpsctl/internal/core"
-	"github.com/trdSystemDev/vpsctl/internal/rpc"
-	"github.com/trdSystemDev/vpsctl/internal/ui"
+	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/rpc"
+	"github.com/trdSystemDev/cais/internal/ui"
 )
 
 // version e preenchido no build via -ldflags "-X main.version=..."
 var version = "dev"
 
-const usage = `vpsctl -- painel da VPS
+const usage = `cais -- painel da VPS
 
 Uso:
-  vpsctl [--socket caminho]            abre a interface (TUI)
-  vpsctl daemon [--socket] [--group]   roda o daemon (dono do estado e das acoes)
-  vpsctl state [--socket]              imprime o estado atual em JSON
-  vpsctl check [--socket]              checa o ambiente e imprime o resultado em JSON
-  vpsctl version                       mostra a versao
+  cais [--socket caminho]            abre a interface (TUI)
+  cais daemon [--socket] [--group]   roda o daemon (dono do estado e das acoes)
+  cais state [--socket]              imprime o estado atual em JSON
+  cais check [--socket]              checa o ambiente e imprime o resultado em JSON
+  cais version                       mostra a versao
 
-O socket padrao e /run/vpsctl/vpsctl.sock (ou a variavel VPSCTL_SOCKET).
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET).
 `
 
 func main() {
@@ -49,7 +49,7 @@ func main() {
 	case "check":
 		err = runCheck(args)
 	case "version":
-		fmt.Println("vpsctl", version)
+		fmt.Println("cais", version)
 	case "help":
 		fmt.Print(usage)
 	default:
@@ -57,7 +57,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "vpsctl:", err)
+		fmt.Fprintln(os.Stderr, "cais:", err)
 		os.Exit(1)
 	}
 }
@@ -71,7 +71,7 @@ func newFlags(name string) (*flag.FlagSet, *string) {
 
 func runDaemon(args []string) error {
 	fs, socket := newFlags("daemon")
-	group := fs.String("group", "", "grupo que pode usar o vpsctl (alem do root)")
+	group := fs.String("group", "", "grupo que pode usar o cais (alem do root)")
 	fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -84,9 +84,9 @@ func runDaemon(args []string) error {
 	c := core.New(core.Deps{})
 	go c.CheckEnvironment(ctx)
 
-	log.Printf("vpsctl daemon %s ouvindo em %s", version, *socket)
+	log.Printf("cais daemon %s ouvindo em %s", version, *socket)
 	err = rpc.Serve(ctx, ln, c)
-	log.Print("vpsctl daemon encerrado")
+	log.Print("cais daemon encerrado")
 	return err
 }
 
@@ -100,7 +100,7 @@ func connect(socket string) (*rpc.Client, error) {
 	defer cancel()
 	c, err := rpc.Dial(ctx, socket)
 	if err != nil {
-		hint := "suba com: sudo systemctl start vpsctl (ou rode: vpsctl daemon)"
+		hint := "suba com: sudo systemctl start cais (ou rode: cais daemon)"
 		if errors.Is(err, os.ErrPermission) {
 			hint = "seu usuario nao tem permissao no socket: use sudo ou entre no grupo do --group do daemon"
 		}

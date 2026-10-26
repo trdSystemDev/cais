@@ -12,16 +12,16 @@ import (
 )
 
 // DefaultSocketPath e onde o daemon escuta se nada for informado. Pode ser
-// trocado pela variavel VPSCTL_SOCKET ou pela flag --socket.
+// trocado pela variavel CAIS_SOCKET ou pela flag --socket.
 func DefaultSocketPath() string {
-	if p := os.Getenv("VPSCTL_SOCKET"); p != "" {
+	if p := os.Getenv("CAIS_SOCKET"); p != "" {
 		return p
 	}
 	if runtime.GOOS == "linux" {
-		return "/run/vpsctl/vpsctl.sock"
+		return "/run/cais/cais.sock"
 	}
 	// fora do Linux e so desenvolvimento local
-	return filepath.Join(os.TempDir(), "vpsctl.sock")
+	return filepath.Join(os.TempDir(), "cais.sock")
 }
 
 // Listen cria o socket do daemon.

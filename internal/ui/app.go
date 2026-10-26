@@ -7,7 +7,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/trdSystemDev/vpsctl/internal/core"
+	"github.com/trdSystemDev/cais/internal/core"
 )
 
 var (
@@ -172,7 +172,7 @@ func (a *App) Run() error {
 // do que esta na tela e confiavel, entao nao deixa o usuario seguir.
 func (a *App) showDisconnected() {
 	modal := tview.NewModal().
-		SetText("A conexao com o daemon do vpsctl caiu.\n\nVeja: systemctl status vpsctl\ne abra o vpsctl de novo.").
+		SetText("A conexao com o daemon do cais caiu.\n\nVeja: systemctl status cais\ne abra o cais de novo.").
 		AddButtons([]string{"Sair"}).
 		SetDoneFunc(func(int, string) { a.app.Stop() })
 	// os atalhos de aba nao fazem mais sentido; so sair

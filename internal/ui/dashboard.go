@@ -7,7 +7,7 @@ import (
 
 	"github.com/rivo/tview"
 
-	"github.com/trdSystemDev/vpsctl/internal/core"
+	"github.com/trdSystemDev/cais/internal/core"
 )
 
 // dashboard mostra o estado do ambiente. Nao guarda estado proprio: o
@@ -68,7 +68,7 @@ func renderEnvironment(e core.Environment) string {
 	fmt.Fprintf(&b, "   [gray]Host     [white]%s\n", tview.Escape(e.Host.Hostname))
 	fmt.Fprintf(&b, "   [gray]Sistema  [white]%s/%s\n", e.Host.OS, e.Host.Arch)
 	if !e.Host.Supported() {
-		b.WriteString("   [yellow]! O vpsctl foi feito pra rodar na VPS Linux; aqui so da pra navegar na interface.\n")
+		b.WriteString("   [yellow]! O cais foi feito pra rodar na VPS Linux; aqui so da pra navegar na interface.\n")
 	}
 
 	b.WriteString("\n")

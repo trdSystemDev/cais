@@ -1,0 +1,27 @@
+# Daemon do cais: dono do estado e das acoes. A TUI, o CLI e o MCP sao
+# clientes dele pelo socket /run/cais/cais.sock.
+#
+# Instalar:
+#   cp cais /usr/local/bin/cais
+#   cp cais.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now cais
+#
+# Pra liberar um usuario sem sudo, crie o grupo (groupadd cais), coloque
+# o usuario nele e adicione "--group cais" no ExecStart. Quem esta no
+# grupo controla a VPS inteira, igual ao grupo docker.
+[Unit]
+Description=cais daemon
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cais daemon
+Restart=on-failure
+RestartSec=2
+# cria /run/cais (e apaga ao parar) com permissao so pro root
+RuntimeDirectory=cais
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

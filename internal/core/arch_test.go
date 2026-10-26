@@ -17,7 +17,7 @@ func TestNucleoNaoDependeDeInterface(t *testing.T) {
 	forbidden := []string{
 		"github.com/rivo/tview",
 		"github.com/gdamore/tcell",
-		"github.com/trdSystemDev/vpsctl/internal/ui",
+		"github.com/trdSystemDev/cais/internal/ui",
 	}
 
 	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {

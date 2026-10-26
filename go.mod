@@ -1,4 +1,4 @@
-module github.com/trdSystemDev/vpsctl
+module github.com/trdSystemDev/cais
 
 go 1.25
 

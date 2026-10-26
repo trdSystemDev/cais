@@ -10,9 +10,9 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/trdSystemDev/vpsctl/internal/core"
-	"github.com/trdSystemDev/vpsctl/internal/docker"
-	"github.com/trdSystemDev/vpsctl/internal/rpc"
+	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/rpc"
 )
 
 func okChecker(context.Context) docker.Status {
@@ -165,7 +165,7 @@ func TestBotaoVerificarDisparaAcao(t *testing.T) {
 // ponta a ponta: daemon real no socket, TUI como um cliente e um segundo
 // cliente fazendo o papel do MCP
 func TestTUIViaDaemonReageAOutroCliente(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "vpsctl.sock")
+	path := filepath.Join(t.TempDir(), "cais.sock")
 	ln, err := rpc.Listen(path, "")
 	if err != nil {
 		t.Fatal(err)
@@ -204,8 +204,8 @@ func TestTUIViaDaemonReageAOutroCliente(t *testing.T) {
 	// daemon cai com a TUI aberta: ela tem que avisar em vez de mostrar
 	// dados velhos como se estivessem certos
 	stopDaemon()
-	waitFor(t, sim, "A conexao com o daemon do vpsctl")
-	waitFor(t, sim, "Veja: systemctl status vpsctl")
+	waitFor(t, sim, "A conexao com o daemon do cais")
+	waitFor(t, sim, "Veja: systemctl status cais")
 }
 
 func TestCliqueTrocaDeAba(t *testing.T) {

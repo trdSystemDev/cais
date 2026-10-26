@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/trdSystemDev/vpsctl/internal/docker"
+	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 // Deps sao as dependencias externas do Core. Campos vazios recebem a

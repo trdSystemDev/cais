@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trdSystemDev/vpsctl/internal/core"
-	"github.com/trdSystemDev/vpsctl/internal/docker"
+	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 func okStatus(context.Context) docker.Status {
@@ -32,7 +32,7 @@ type daemon struct {
 // startDaemon sobe um daemon de verdade num socket temporario.
 func startDaemon(t *testing.T, check func(context.Context) docker.Status) *daemon {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "vpsctl.sock")
+	path := filepath.Join(t.TempDir(), "cais.sock")
 	ln, err := Listen(path, "")
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestListenRecusaSegundoDaemon(t *testing.T) {
 }
 
 func TestListenRemoveSocketOrfao(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "vpsctl.sock")
+	path := filepath.Join(t.TempDir(), "cais.sock")
 	// arquivo no lugar do socket, sem ninguem ouvindo: sobra de um daemon morto
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)

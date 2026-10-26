@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trdSystemDev/vpsctl/internal/docker"
+	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 var fixedNow = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)

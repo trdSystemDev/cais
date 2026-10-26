@@ -6,7 +6,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/trdSystemDev/vpsctl/internal/docker"
+	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 // CheckEnvironment checa Docker e sistema, publica o resultado no estado e

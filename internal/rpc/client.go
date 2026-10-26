@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/trdSystemDev/vpsctl/internal/core"
+	"github.com/trdSystemDev/cais/internal/core"
 )
 
 // Client fala com o daemon pelo socket e implementa core.API: quem usa
