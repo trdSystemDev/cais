@@ -39,11 +39,12 @@ func New(d Deps) *Core {
 	return &Core{deps: d, subs: map[int]chan State{}}
 }
 
-// Snapshot devolve a foto atual do estado.
-func (c *Core) Snapshot() State {
+// Snapshot devolve a foto atual do estado. Localmente nunca falha; o erro
+// existe pelo contrato da API (via socket pode falhar).
+func (c *Core) Snapshot(context.Context) (State, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.state
+	return c.state, nil
 }
 
 // Subscribe devolve um canal que recebe o estado atual na hora e depois
@@ -51,7 +52,7 @@ func (c *Core) Snapshot() State {
 // e ele recebe so a mais recente -- interface reativa so precisa do ultimo
 // estado, e um leitor lento nunca trava o Core. A funcao devolvida cancela
 // a inscricao e fecha o canal; pode ser chamada mais de uma vez.
-func (c *Core) Subscribe() (<-chan State, func()) {
+func (c *Core) Subscribe(context.Context) (<-chan State, func(), error) {
 	ch := make(chan State, 1)
 
 	c.mu.Lock()
@@ -69,7 +70,7 @@ func (c *Core) Subscribe() (<-chan State, func()) {
 			close(ch)
 			c.mu.Unlock()
 		})
-	}
+	}, nil
 }
 
 // update aplica fn no estado, publica a nova foto pra todos os inscritos e

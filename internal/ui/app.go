@@ -24,9 +24,10 @@ type tab struct {
 }
 
 // App e a aplicacao TUI inteira: barra de abas, paginas e rodape. E so uma
-// visao do core: le o estado via Subscribe e dispara acoes nele.
+// visao do core: le o estado via Subscribe e dispara acoes nele. Nao sabe
+// se o core esta no mesmo processo ou no daemon, do outro lado do socket.
 type App struct {
-	core   *core.Core
+	core   core.API
 	app    *tview.Application
 	pages  *tview.Pages
 	tabs   []*tab
@@ -35,7 +36,7 @@ type App struct {
 }
 
 // New monta a interface. Nada e desenhado ate Run ser chamado.
-func New(c *core.Core) *App {
+func New(c core.API) *App {
 	a := &App{
 		core:  c,
 		app:   tview.NewApplication().EnableMouse(true),
@@ -140,16 +141,49 @@ func (a *App) typing() bool {
 // Run se inscreve no core, dispara a checagem inicial do ambiente e
 // bloqueia ate o usuario sair.
 func (a *App) Run() error {
-	states, unsubscribe := a.core.Subscribe()
-	defer unsubscribe()
+	states, unsubscribe, err := a.core.Subscribe(context.Background())
+	if err != nil {
+		return err
+	}
+
+	exiting := make(chan struct{})
+	defer func() {
+		close(exiting)
+		unsubscribe()
+	}()
+
 	go func() {
 		for s := range states {
 			a.app.QueueUpdateDraw(func() { a.render(s) })
+		}
+		// canal fechado sem o usuario ter saido: a conexao com o daemon caiu
+		select {
+		case <-exiting:
+		default:
+			a.app.QueueUpdateDraw(a.showDisconnected)
 		}
 	}()
 
 	go a.core.CheckEnvironment(context.Background())
 	return a.app.Run()
+}
+
+// showDisconnected troca a tela inteira por um aviso: sem o daemon nada
+// do que esta na tela e confiavel, entao nao deixa o usuario seguir.
+func (a *App) showDisconnected() {
+	modal := tview.NewModal().
+		SetText("A conexao com o daemon do vpsctl caiu.\n\nVeja: systemctl status vpsctl\ne abra o vpsctl de novo.").
+		AddButtons([]string{"Sair"}).
+		SetDoneFunc(func(int, string) { a.app.Stop() })
+	// os atalhos de aba nao fazem mais sentido; so sair
+	a.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		if ev.Key() == tcell.KeyCtrlQ {
+			a.app.Stop()
+			return nil
+		}
+		return ev
+	})
+	a.app.SetRoot(modal, true)
 }
 
 // ActiveTab devolve o nome da aba selecionada.

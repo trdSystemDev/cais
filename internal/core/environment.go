@@ -12,8 +12,9 @@ import (
 // CheckEnvironment checa Docker e sistema, publica o resultado no estado e
 // tambem o devolve (clientes como o MCP precisam da resposta da chamada).
 // Chamadas simultaneas sao permitidas; Checking fica verdadeiro ate a
-// ultima terminar.
-func (c *Core) CheckEnvironment(ctx context.Context) Environment {
+// ultima terminar. Problemas no Docker nao sao erro da chamada: fazem parte
+// do resultado (Environment.Docker).
+func (c *Core) CheckEnvironment(ctx context.Context) (Environment, error) {
 	c.update(func(s *State) {
 		c.checks++
 		s.Environment.Checking = true
@@ -29,7 +30,7 @@ func (c *Core) CheckEnvironment(ctx context.Context) Environment {
 		s.Environment.Host = host
 		s.Environment.Docker = dockerFromStatus(status)
 	})
-	return s.Environment
+	return s.Environment, nil
 }
 
 func currentHost() Host {

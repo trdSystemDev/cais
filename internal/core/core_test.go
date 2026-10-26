@@ -38,7 +38,7 @@ func recv(t *testing.T, ch <-chan State) State {
 func TestCheckEnvironmentAtualizaEDevolve(t *testing.T) {
 	c := newTestCore(okStatus)
 
-	env := c.CheckEnvironment(context.Background())
+	env, _ := c.CheckEnvironment(context.Background())
 	if !env.Ready() || env.Checking {
 		t.Fatalf("esperava pronto e sem checagem em andamento: %+v", env)
 	}
@@ -48,7 +48,7 @@ func TestCheckEnvironmentAtualizaEDevolve(t *testing.T) {
 	if !env.CheckedAt.Equal(fixedNow) {
 		t.Fatalf("CheckedAt = %v", env.CheckedAt)
 	}
-	if got := c.Snapshot().Environment; got != env {
+	if got := snap(t, c).Environment; got != env {
 		t.Fatalf("Snapshot diverge do retorno:\n%+v\n%+v", got, env)
 	}
 }
@@ -59,7 +59,7 @@ func TestSubscribePublicaCheckingEResultado(t *testing.T) {
 		<-release
 		return okStatus(ctx)
 	})
-	states, cancel := c.Subscribe()
+	states, cancel, _ := c.Subscribe(context.Background())
 	defer cancel()
 
 	if s := recv(t, states); s.Version != 0 || s.Environment.Checked() {
@@ -81,7 +81,7 @@ func TestSubscribePublicaCheckingEResultado(t *testing.T) {
 
 func TestSubscribeLeitorLentoRecebeSoOUltimo(t *testing.T) {
 	c := newTestCore(okStatus)
-	states, cancel := c.Subscribe()
+	states, cancel, _ := c.Subscribe(context.Background())
 	defer cancel()
 
 	// ninguem le enquanto 3 checagens (6 publicacoes) acontecem
@@ -101,7 +101,7 @@ func TestSubscribeLeitorLentoRecebeSoOUltimo(t *testing.T) {
 
 func TestUnsubscribeFechaCanalEEIdempotente(t *testing.T) {
 	c := newTestCore(okStatus)
-	states, cancel := c.Subscribe()
+	states, cancel, _ := c.Subscribe(context.Background())
 	<-states
 	cancel()
 	cancel()
@@ -123,7 +123,7 @@ func TestCheckingContaChamadasSimultaneas(t *testing.T) {
 
 	results := make(chan Environment, 2)
 	for i := 0; i < 2; i++ {
-		go func() { results <- c.CheckEnvironment(context.Background()) }()
+		go func() { env, _ := c.CheckEnvironment(context.Background()); results <- env }()
 	}
 	<-started
 	<-started
@@ -143,7 +143,7 @@ func TestDockerAusenteViraNaoInstalado(t *testing.T) {
 	c := newTestCore(func(context.Context) docker.Status {
 		return docker.Status{ClientErr: docker.ErrNotInstalled, ServerErr: docker.ErrNotInstalled, ComposeErr: docker.ErrNotInstalled}
 	})
-	env := c.CheckEnvironment(context.Background())
+	env, _ := c.CheckEnvironment(context.Background())
 	if env.Docker.Installed || env.Ready() {
 		t.Fatalf("esperava nao instalado: %+v", env.Docker)
 	}
@@ -161,7 +161,7 @@ func TestEstadoSerializaEmJSON(t *testing.T) {
 	})
 	c.CheckEnvironment(context.Background())
 
-	out, err := json.Marshal(c.Snapshot())
+	out, err := json.Marshal(snap(t, c))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,4 +170,13 @@ func TestEstadoSerializaEmJSON(t *testing.T) {
 			t.Errorf("JSON sem %s:\n%s", want, out)
 		}
 	}
+}
+
+func snap(t *testing.T, c *Core) State {
+	t.Helper()
+	s, err := c.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

@@ -19,7 +19,7 @@ type dashboard struct {
 	button *tview.Button
 }
 
-func newDashboard(c *core.Core) *dashboard {
+func newDashboard(c core.API) *dashboard {
 	d := &dashboard{
 		Flex:   tview.NewFlex().SetDirection(tview.FlexRow),
 		status: tview.NewTextView().SetDynamicColors(true),

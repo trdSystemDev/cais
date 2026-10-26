@@ -11,17 +11,35 @@ Roda direto no host, pela sessao SSH: nao abre porta e nao tem login proprio.
 O projeto e agnostico a interface. O `core` e o unico dono do estado e o
 unico que executa acoes; as interfaces so chamam acoes e reagem ao estado.
 
+O core roda num unico processo, o **daemon** (`vpsctl daemon`, via systemd).
+TUI, CLI e o futuro MCP sao clientes dele por um socket Unix, entao todos
+enxergam o mesmo estado ao mesmo tempo.
+
 ```
-   TUI (internal/ui)          MCP (futuro)
-   acoes  -> c.Acao()         tool -> c.Acao()
-   estado <- c.Subscribe()    c.Snapshot() em JSON
-              \                /
-               internal/core: estado imutavel + acoes
-                       |
+   vpsctl (TUI)     vpsctl state/check (CLI)     MCP (futuro)
+        \                   |                       /
+         \------ rpc.Client (implementa core.API) -/
+                            |
+          /run/vpsctl/vpsctl.sock  (JSON-RPC 2.0, uma msg por linha)
+                            |
+   vpsctl daemon:  rpc.Serve -> internal/core (estado + acoes)
+                            |
      docker / secrets / databases / apps / github / woodpecker
 ```
 
 Regras:
+
+- **Um contrato so.** `core.API` e implementada pelo `*core.Core` (local, usado
+  nos testes) e pelo `rpc.Client` (remoto). As interfaces dependem so dela.
+- **Protocolo.** JSON-RPC 2.0 sobre o socket; mudancas de estado chegam como
+  notificacao `state` depois de um `state.subscribe`. Metodos em
+  `internal/rpc/protocol.go`.
+- **Socket e root.** Nasce com permissao `0660`: so root, ou o grupo passado em
+  `--group`. Quem acessa o socket controla a VPS (como o `docker.sock`).
+- **Acoes nao morrem com o cliente.** Rodam com o contexto do daemon: se a TUI
+  cair no meio de um deploy, o deploy termina.
+- **Daemon unico.** `Listen` recusa um segundo daemon no mesmo socket e remove
+  socket orfao de um daemon que morreu.
 
 - **Estado imutavel e serializavel.** `core.State` e uma foto; quem altera e
   so o core. Tudo tem tag JSON e erros viram texto, pra o MCP devolver direto.
@@ -40,6 +58,7 @@ Regras:
 |---|---|
 | `cmd/vpsctl` | ponto de entrada: monta o core e a interface |
 | `internal/core` | estado, acoes e inscricoes -- o que as interfaces usam |
+| `internal/rpc` | socket do daemon: servidor, cliente (`core.API`) e protocolo |
 | `internal/ui` | paginas tview clicaveis (so le estado e chama acoes) |
 | `internal/bootstrap` | assistente da VPS vazia |
 | `internal/stacks` | stacks base + `templates/` embutidos |
@@ -51,7 +70,7 @@ Regras:
 | `internal/github` | link do GitHub, deteccao de CI |
 | `internal/woodpecker` | cliente da API do Woodpecker |
 | `internal/config` | `/etc/vpsctl/config.yaml` |
-| `assets/` | `deploy.sh` (forced command) e CI de exemplo |
+| `assets/` | `deploy.sh` (forced command), CI de exemplo e unidade systemd |
 
 Os arquivos em `internal/stacks/templates/` sao copia dos compose do repo `VPS`
 e ainda serao parametrizados (dominio, e-mail etc.) na fase 2.
@@ -64,6 +83,18 @@ e ainda serao parametrizados (dominio, e-mail etc.) na fase 2.
 4. Bancos
 5. GitHub + Woodpecker: criar app pelo link, detectar/gerar CI
 6. Backups, releases e `install.sh`
+
+## Uso
+
+```sh
+vpsctl daemon        # normalmente via systemd (assets/systemd/vpsctl.service)
+vpsctl               # abre a TUI
+vpsctl state         # estado atual em JSON
+vpsctl check         # checa o ambiente e imprime o resultado
+```
+
+Em desenvolvimento (Windows/macOS) o socket padrao fica na pasta temporaria;
+rode `vpsctl daemon` num terminal e `vpsctl` em outro.
 
 ## Build
 
