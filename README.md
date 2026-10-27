@@ -104,14 +104,15 @@ e o usuario `deploy` nao tem acesso a nenhum arquivo.
 `/etc/cais/config.yaml` guarda so o que um humano decide (secrets nunca):
 
 ```yaml
-domain: exemplo.com.br          # ci.<domain> e db.<domain> saem daqui
+domain: exemplo.com.br          # ci., db. e registry.<domain> saem daqui
 email: admin@exemplo.com.br     # avisos do Let's Encrypt
-stacks: [proxy, infra, woodpecker, dbgate]
+stacks: [proxy, infra, registry, woodpecker, dbgate]
 proxy:
   http_port: 80                 # outra porta so numa migracao
   https_port: 443
 hosts:                          # opcional: troca o nome padrao
   ci: build.exemplo.com.br
+  registry: imagens.exemplo.com.br
 woodpecker:
   github_client: Ov23li...      # Client ID do OAuth app do GitHub
   admin: seu-usuario-github
@@ -121,6 +122,11 @@ Campo desconhecido e erro (pega erro de digitacao). Os compose das stacks sao
 gerados de `internal/stacks/templates/*/docker-compose.yml.tmpl` com esses
 valores; o proxy nasce sem nenhum site, e cada servico se publica com labels
 `bunkerweb.*` na `proxy_network` (autoconf).
+
+O registry de imagens e publico em `https://registry.<domain>` (TLS do Let's
+Encrypt + login), numa stack propria: CI e VPS fazem push/pull pelo mesmo nome,
+sem `insecure-registries`. Os bancos (`infra`) nunca entram na `proxy_network`,
+e os builds do CI rodam fora da rede deles.
 
 ## Roadmap
 

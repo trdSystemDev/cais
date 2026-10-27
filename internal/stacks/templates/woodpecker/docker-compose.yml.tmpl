@@ -14,6 +14,9 @@ services:
       WOODPECKER_GITHUB_CLIENT: "{{.GitHubClient}}"
       WOODPECKER_GITHUB_CLIENT_SECRET_FILE: /run/secrets/github_client_secret
       WOODPECKER_ADMIN: "{{.Admin}}"
+      # variaveis globais dos pipelines: o .woodpecker.yml dos apps usa
+      # a variavel CAIS_REGISTRY e fica igual em qualquer VPS
+      WOODPECKER_ENVIRONMENT: "CAIS_REGISTRY:{{.RegistryHost}}"
       WOODPECKER_AGENT_SECRET_FILE: /run/secrets/agent_secret
     labels:
       bunkerweb.SERVER_NAME: "{{.CIHost}}"
@@ -39,9 +42,8 @@ services:
       WOODPECKER_SERVER: woodpecker-server:9000
       WOODPECKER_AGENT_SECRET_FILE: /run/secrets/agent_secret
       WOODPECKER_MAX_WORKFLOWS: "2"
-      # anexa os containers de cada step nessa rede tambem, pra alcancarem
-      # o registry interno (registry:5000) durante build/push
-      WOODPECKER_BACKEND_DOCKER_NETWORK: infra_network
+      # os steps rodam na bridge padrao, sem rede da infra: o build so
+      # precisa de internet e do registry, que e publico em {{.RegistryHost}}
       DOCKER_HOST: tcp://woodpecker-docker-proxy:2375
     secrets:
       - agent_secret

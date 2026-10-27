@@ -28,8 +28,9 @@ type Stack struct {
 // All lista as stacks na ordem de subida: cada uma so depende das anteriores.
 var All = []Stack{
 	{Name: "proxy", Desc: "BunkerWeb: reverse proxy, TLS e WAF, sites por label"},
-	{Name: "infra", Desc: "Postgres, MySQL e registry de imagens"},
-	{Name: "woodpecker", Desc: "CI ligado ao GitHub", Requires: []string{"proxy", "infra"}},
+	{Name: "infra", Desc: "Postgres e MySQL compartilhados"},
+	{Name: "registry", Desc: "Registry de imagens publico, com TLS e login", Requires: []string{"proxy"}},
+	{Name: "woodpecker", Desc: "CI ligado ao GitHub", Requires: []string{"proxy", "registry"}},
 	{Name: "dbgate", Desc: "Interface web dos bancos", Requires: []string{"proxy", "infra"}},
 }
 
@@ -107,6 +108,7 @@ type vars struct {
 	HTTPSPort    int
 	CIHost       string
 	DBHost       string
+	RegistryHost string
 	GitHubClient string
 	Admin        string
 }
@@ -156,6 +158,7 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 		HTTPSPort:    c.Proxy.HTTPSPort,
 		CIHost:       c.CIHost(),
 		DBHost:       c.DBHost(),
+		RegistryHost: c.RegistryHost(),
 		GitHubClient: c.Woodpecker.GitHubClient,
 		Admin:        c.Woodpecker.Admin,
 	})

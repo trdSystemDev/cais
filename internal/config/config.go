@@ -20,11 +20,11 @@ var ErrNotFound = errors.New("config.yaml nao encontrado (rode o Setup)")
 // decide; secrets nunca entram aqui (ficam em SecretsDir).
 type Config struct {
 	// Domain e o dominio base da VPS. Os subdominios das stacks saem dele
-	// (ci.<domain>, db.<domain>) se Hosts nao disser outra coisa.
+	// (ci.<domain>, db.<domain>, registry.<domain>) se Hosts nao disser outra coisa.
 	Domain string `yaml:"domain" json:"domain"`
 	// Email recebe os avisos do Let's Encrypt.
 	Email string `yaml:"email" json:"email"`
-	// Stacks sao as stacks base ativas (proxy, infra, woodpecker, dbgate).
+	// Stacks sao as stacks base ativas (proxy, infra, registry, woodpecker, dbgate).
 	Stacks     []string   `yaml:"stacks" json:"stacks"`
 	Proxy      Proxy      `yaml:"proxy" json:"proxy"`
 	Hosts      Hosts      `yaml:"hosts,omitempty" json:"hosts"`
@@ -42,6 +42,9 @@ type Proxy struct {
 type Hosts struct {
 	CI string `yaml:"ci,omitempty" json:"ci,omitempty"`
 	DB string `yaml:"db,omitempty" json:"db,omitempty"`
+	// Registry e o nome do registry de imagens, usado no push do CI e no
+	// pull da VPS (e de qualquer outra maquina com o login).
+	Registry string `yaml:"registry,omitempty" json:"registry,omitempty"`
 }
 
 // Woodpecker e o que o CI precisa e nao e secret. O client secret do app
@@ -56,7 +59,7 @@ type Woodpecker struct {
 // Default devolve a configuracao inicial do Setup, sem dominio e e-mail.
 func Default() Config {
 	return Config{
-		Stacks: []string{"proxy", "infra", "woodpecker", "dbgate"},
+		Stacks: []string{"proxy", "infra", "registry", "woodpecker", "dbgate"},
 		Proxy:  Proxy{HTTPPort: 80, HTTPSPort: 443},
 	}
 }
@@ -75,6 +78,14 @@ func (c Config) DBHost() string {
 		return c.Hosts.DB
 	}
 	return "db." + c.Domain
+}
+
+// RegistryHost e o nome publico do registry de imagens.
+func (c Config) RegistryHost() string {
+	if c.Hosts.Registry != "" {
+		return c.Hosts.Registry
+	}
+	return "registry." + c.Domain
 }
 
 // HasStack diz se a stack esta ativa.
@@ -112,6 +123,11 @@ func (c Config) Validate() error {
 	if c.Hosts.DB != "" {
 		if err := validHost(c.Hosts.DB); err != nil {
 			errs = append(errs, fmt.Errorf("hosts.db: %w", err))
+		}
+	}
+	if c.Hosts.Registry != "" {
+		if err := validHost(c.Hosts.Registry); err != nil {
+			errs = append(errs, fmt.Errorf("hosts.registry: %w", err))
 		}
 	}
 	if !validPort(c.Proxy.HTTPPort) {

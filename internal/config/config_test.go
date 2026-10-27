@@ -20,6 +20,7 @@ func TestSaveLoadIdaEVolta(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "etc", "config.yaml")
 	want := validConfig()
 	want.Hosts.CI = "build.exemplo.com.br"
+	want.Hosts.Registry = "imagens.exemplo.com.br"
 
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
@@ -69,8 +70,8 @@ func TestLoadAplicaPadroes(t *testing.T) {
 	if strings.Join(c.Stacks, ",") != "proxy,infra" {
 		t.Errorf("a lista do arquivo tem que substituir a padrao, veio %v", c.Stacks)
 	}
-	if c.CIHost() != "ci.exemplo.com" || c.DBHost() != "db.exemplo.com" {
-		t.Errorf("hosts padrao errados: %s %s", c.CIHost(), c.DBHost())
+	if c.CIHost() != "ci.exemplo.com" || c.DBHost() != "db.exemplo.com" || c.RegistryHost() != "registry.exemplo.com" {
+		t.Errorf("hosts padrao errados: %s %s %s", c.CIHost(), c.DBHost(), c.RegistryHost())
 	}
 }
 
@@ -95,6 +96,7 @@ func TestValidateRecusa(t *testing.T) {
 		"email dominio invalido": func(c *Config) { c.Email = "a@b" },
 		"email com aspas":        func(c *Config) { c.Email = `a"b@exemplo.com` },
 		"host ci invalido":       func(c *Config) { c.Hosts.CI = "ci_x.exemplo.com" },
+		"host registry invalido": func(c *Config) { c.Hosts.Registry = "registry" },
 		"porta zero":             func(c *Config) { c.Proxy.HTTPPort = 0 },
 		"porta alta":             func(c *Config) { c.Proxy.HTTPSPort = 70000 },
 		"portas iguais":          func(c *Config) { c.Proxy.HTTPSPort = c.Proxy.HTTPPort },

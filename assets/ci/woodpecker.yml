@@ -1,5 +1,5 @@
 # Exemplo de pipeline: build com Kaniko (sem privileged) -> push no registry
-# interno -> deploy via SSH restrito. Copiar pra raiz do repo de cada app como
+# da VPS (https://registry.<dominio>) -> deploy via SSH restrito. Copiar pra raiz do repo de cada app como
 # .woodpecker.yml.
 #
 # Cadastrar como secrets do repo no Woodpecker (repo > Settings > Secrets):
@@ -9,15 +9,19 @@
 #                       usuario "deploy" na VPS com o cais como forced command:
 #                       command="/usr/local/bin/cais deploy",restrict ssh-ed25519 AAAA...
 #
+# Nao tem dominio hardcoded aqui: CAIS_REGISTRY e variavel global que o cais
+# configura no Woodpecker (WOODPECKER_ENVIRONMENT) com o host do registry.
+#
 # Nao tem nome de app hardcoded aqui -- usa $CI_REPO_NAME (variavel embutida
 # do Woodpecker, nome do repositorio) em tudo. Por isso o nome do repositorio
 # Git precisa ser IDENTICO ao nome do app criado no cais (pasta
 # /var/lib/cais/apps/<nome> na VPS). Se os nomes divergirem, o cais deploy
 # rejeita com "app desconhecido" (falha visivel, nao silenciosa).
 #
-# O docker-compose.yml deste repo precisa referenciar a imagem com a tag
-# "REPLACE_TAG" (ex: "image: registry:5000/minha-app:REPLACE_TAG"), nunca
-# "latest". O step de deploy troca esse texto pelo hash do commit antes de
+# O docker-compose.yml deste repo precisa referenciar a imagem como
+# "image: REPLACE_REGISTRY/minha-app:REPLACE_TAG", nunca "latest". O step de
+# deploy troca REPLACE_REGISTRY pelo host do registry e REPLACE_TAG pelo
+# hash do commit antes de
 # mandar pro cais deploy -- assim cada deploy fica atrelado a um commit exato,
 # nao a uma tag flutuante, e rollback vira so reaplicar um docker-compose.yml
 # antigo (o hash do commit anterior ja esta gravado nele).
@@ -30,14 +34,13 @@ steps:
   - name: build-and-push
     image: woodpeckerci/plugin-kaniko
     settings:
-      registry: registry:5000
-      repo: registry:5000/${CI_REPO_NAME}
+      registry: ${CAIS_REGISTRY}
+      repo: ${CAIS_REGISTRY}/${CI_REPO_NAME}
       tags: latest,${CI_COMMIT_SHA}
       username:
         from_secret: registry_user
       password:
         from_secret: registry_password
-      skip_tls_verify: true # registry interno e HTTP puro, nunca sai da rede docker
 
   - name: deploy
     image: kroniak/ssh-client
@@ -52,9 +55,9 @@ steps:
       - echo "$DEPLOY_KEY" | tr -d '\r' | ssh-add -
       - mkdir -p ~/.ssh
       - ssh-keyscan -H "$HOST_IP" >> ~/.ssh/known_hosts
-      # troca o placeholder REPLACE_TAG pelo hash do commit atual, deixando
-      # o arquivo com uma tag concreta antes de mandar pro cais deploy
-      - sed -i "s/REPLACE_TAG/${CI_COMMIT_SHA}/" docker-compose.yml
+      # troca os placeholders pelo registry e pelo hash do commit atual,
+      # deixando o arquivo com uma imagem concreta antes de mandar pro cais deploy
+      - sed -i -e "s/REPLACE_REGISTRY/${CAIS_REGISTRY}/" -e "s/REPLACE_TAG/${CI_COMMIT_SHA}/" docker-compose.yml
       # o docker-compose.yml deste repo (so estrutura, nenhum secret dentro)
       # viaja pelo stdin do ssh; o cais deploy na VPS manda pro daemon, que
       # valida (recusa padroes perigosos), substitui o existente e so entao

@@ -32,6 +32,7 @@ type compose struct {
 		Ports       []string          `yaml:"ports"`
 		Environment map[string]string `yaml:"environment"`
 		Labels      yaml.Node         `yaml:"labels"`
+		Networks    []string          `yaml:"networks"`
 	} `yaml:"services"`
 	Secrets map[string]struct {
 		File string `yaml:"file"`
@@ -131,17 +132,77 @@ func TestHostsSaemDaConfig(t *testing.T) {
 	}
 }
 
+func TestRegistryPublicadoPeloProxy(t *testing.T) {
+	c := validConfig()
+	c.Hosts.Registry = "registry.trds.com.br"
+	_, cf := render(t, "registry", c)
+
+	reg := cf.Services["registry"]
+	if len(reg.Ports) != 0 {
+		t.Errorf("registry nao pode publicar porta no host, so passar pelo proxy: %v", reg.Ports)
+	}
+	if !slices.Equal(reg.Networks, []string{"proxy_network"}) {
+		t.Errorf("redes do registry %v, esperava so proxy_network", reg.Networks)
+	}
+	var labels map[string]string
+	if err := reg.Labels.Decode(&labels); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"bunkerweb.SERVER_NAME":       "registry.trds.com.br",
+		"bunkerweb.AUTO_LETS_ENCRYPT": "yes",
+		"bunkerweb.MAX_CLIENT_SIZE":   "0",
+		// sem isso o push quebra: metodos, 401/404 do protocolo e rajada de requests
+		"bunkerweb.ALLOWED_METHODS":  "GET|HEAD|POST|PUT|PATCH|DELETE",
+		"bunkerweb.USE_BAD_BEHAVIOR": "no",
+		"bunkerweb.USE_LIMIT_REQ":    "no",
+	}
+	for k, v := range want {
+		if labels[k] != v {
+			t.Errorf("label %s = %q, esperava %q", k, labels[k], v)
+		}
+	}
+}
+
+// os bancos nunca ficam alcancaveis pela rede publica nem pelos builds do CI
+func TestBancosIsolados(t *testing.T) {
+	c := validConfig()
+	_, infra := render(t, "infra", c)
+	for name, svc := range infra.Services {
+		if slices.Contains(svc.Networks, "proxy_network") {
+			t.Errorf("infra/%s na proxy_network", name)
+		}
+		if len(svc.Ports) != 0 {
+			t.Errorf("infra/%s publica porta no host: %v", name, svc.Ports)
+		}
+	}
+	if _, ok := infra.Services["registry"]; ok {
+		t.Error("registry ainda na stack infra")
+	}
+
+	r, wp := render(t, "woodpecker", c)
+	if strings.Contains(string(r.Compose), "infra_network") {
+		t.Error("woodpecker pendura os builds na infra_network")
+	}
+	env := wp.Services["woodpecker-server"].Environment
+	if env["WOODPECKER_ENVIRONMENT"] != "CAIS_REGISTRY:registry.exemplo.com.br" {
+		t.Errorf("WOODPECKER_ENVIRONMENT = %q", env["WOODPECKER_ENVIRONMENT"])
+	}
+}
+
 func TestEnabledValidaDependencias(t *testing.T) {
 	cases := map[string]struct {
 		stacks []string
 		mutate func(*config.Config)
 		errHas string
 	}{
-		"desconhecida":         {[]string{"proxy", "redis"}, nil, `"redis"`},
-		"repetida":             {[]string{"proxy", "proxy"}, nil, "repetida"},
-		"dbgate sem infra":     {[]string{"proxy", "dbgate"}, nil, `precisa da stack "infra"`},
-		"woodpecker sem proxy": {[]string{"infra", "woodpecker"}, nil, `precisa da stack "proxy"`},
-		"woodpecker sem github": {[]string{"proxy", "infra", "woodpecker"},
+		"desconhecida":            {[]string{"proxy", "redis"}, nil, `"redis"`},
+		"repetida":                {[]string{"proxy", "proxy"}, nil, "repetida"},
+		"dbgate sem infra":        {[]string{"proxy", "dbgate"}, nil, `precisa da stack "infra"`},
+		"woodpecker sem proxy":    {[]string{"registry", "woodpecker"}, nil, `precisa da stack "proxy"`},
+		"woodpecker sem registry": {[]string{"proxy", "woodpecker"}, nil, `precisa da stack "registry"`},
+		"registry sem proxy":      {[]string{"registry"}, nil, `precisa da stack "proxy"`},
+		"woodpecker sem github": {[]string{"proxy", "registry", "woodpecker"},
 			func(c *config.Config) { c.Woodpecker = config.Woodpecker{} }, "github_client"},
 	}
 	for name, tc := range cases {
@@ -161,7 +222,7 @@ func TestEnabledValidaDependencias(t *testing.T) {
 
 func TestEnabledDevolveNaOrdemDeSubida(t *testing.T) {
 	c := validConfig()
-	c.Stacks = []string{"dbgate", "infra", "proxy"}
+	c.Stacks = []string{"dbgate", "registry", "infra", "proxy"}
 	got, err := Enabled(c)
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +231,7 @@ func TestEnabledDevolveNaOrdemDeSubida(t *testing.T) {
 	for _, s := range got {
 		names = append(names, s.Name)
 	}
-	if strings.Join(names, ",") != "proxy,infra,dbgate" {
+	if strings.Join(names, ",") != "proxy,infra,registry,dbgate" {
 		t.Fatalf("ordem %v", names)
 	}
 }

@@ -45,27 +45,6 @@ services:
       timeout: 5s
       retries: 5
 
-  registry:
-    image: registry:3.1.1
-    container_name: infra-registry
-    restart: unless-stopped
-    environment:
-      REGISTRY_AUTH: htpasswd
-      REGISTRY_AUTH_HTPASSWD_REALM: "Registry"
-      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
-    secrets:
-      - source: registry_htpasswd
-        target: /auth/htpasswd
-    volumes:
-      - infra_registry_data:/var/lib/registry
-    networks:
-      - infra_network
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5000/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
 networks:
   infra_network:
     name: infra_network
@@ -76,8 +55,6 @@ volumes:
     name: infra_postgres_data
   infra_mysql_data:
     name: infra_mysql_data
-  infra_registry_data:
-    name: infra_registry_data
 
 secrets:
   postgres_password:
@@ -86,5 +63,3 @@ secrets:
     file: "{{secret "mysql_root_password"}}"
   mysql_password:
     file: "{{secret "mysql_password"}}"
-  registry_htpasswd:
-    file: "{{secret "registry_htpasswd"}}"
