@@ -1,0 +1,146 @@
+# gerado pelo cais a partir de /etc/cais/config.yaml -- nao edite aqui,
+# o proximo Setup sobrescreve
+name: proxy
+
+# O proxy nasce vazio: nenhum site e declarado aqui. Cada servico que quer
+# ser publicado entra na proxy_network e se anuncia por labels
+# (bunkerweb.SERVER_NAME, bunkerweb.REVERSE_PROXY_HOST...), e o bw-autoconf
+# configura o BunkerWeb sozinho ao ver o container subir.
+
+services:
+  bunkerweb:
+    image: bunkerity/bunkerweb:1.6.13
+    container_name: proxy-bunkerweb
+    restart: unless-stopped
+    ports:
+      - "{{.HTTPPort}}:8080"
+      - "{{.HTTPSPort}}:8443"
+      - "{{.HTTPSPort}}:8443/udp"
+    labels:
+      # sem essa label o bw-autoconf nunca acha essa instancia via Docker
+      # e fica em loop "waiting for the database to be ready"
+      - "bunkerweb.INSTANCE=yes"
+    environment:
+      AUTOCONF_MODE: "yes"
+      API_WHITELIST_IP: "127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+    secrets:
+      - DATABASE_URI
+    networks:
+      - bw-universe
+      - proxy_network
+    depends_on:
+      - bw-db
+
+  bw-scheduler:
+    image: bunkerity/bunkerweb-scheduler:1.6.13
+    container_name: proxy-bw-scheduler
+    restart: unless-stopped
+    environment:
+      # vazio de proposito: em AUTOCONF_MODE quem informa as instancias e o
+      # autoconf (via label bunkerweb.INSTANCE, gravado no banco), nao essa var
+      BUNKERWEB_INSTANCES: ""
+      AUTOCONF_MODE: "yes"
+      MULTISITE: "yes"
+      API_WHITELIST_IP: "127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+      # sites vem todos das labels; nenhum declarado aqui
+      SERVER_NAME: ""
+      EMAIL_LETS_ENCRYPT: "{{.Email}}"
+    secrets:
+      - DATABASE_URI
+    volumes:
+      - bw_storage:/data
+    networks:
+      - bw-universe
+      # bw-universe e "internal" (sem rota pra internet) -- o scheduler
+      # precisa sair pra fora pra falar com a API do Let's Encrypt
+      # (certbot-new/renew) e os jobs de blacklist/mmdb/telemetria.
+      # proxy_network nao e internal, entao serve de saida.
+      - proxy_network
+    depends_on:
+      - bw-db
+
+  bw-autoconf:
+    image: bunkerity/bunkerweb-autoconf:1.6.13
+    container_name: proxy-bw-autoconf
+    restart: unless-stopped
+    environment:
+      # padrao do SDK Docker (mesmo usado no docker CLI): aponta pro socket-proxy
+      # em vez do docker.sock real, que fica isolado dentro do bw-docker-proxy
+      DOCKER_HOST: tcp://bw-docker-proxy:2375
+      AUTOCONF_MODE: "yes"
+    secrets:
+      - DATABASE_URI
+    networks:
+      - bw-universe
+      - bw-docker-proxy-network
+    depends_on:
+      - bw-db
+      - bw-docker-proxy
+
+  # unico lugar que toca o docker.sock de verdade. bw-autoconf so precisa
+  # OBSERVAR containers/labels (nunca criar/executar nada), entao fica so
+  # leitura -- POST: 0 bloqueia qualquer escrita independente das outras flags.
+  bw-docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: proxy-bw-docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      POST: 0
+      EXEC: 0
+      SYSTEM: 0
+      SWARM: 0
+      SECRETS: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
+      PLUGINS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - bw-docker-proxy-network
+
+  bw-db:
+    image: mariadb:11
+    container_name: proxy-bw-db
+    restart: unless-stopped
+    environment:
+      # nunca usamos root depois do primeiro boot, entao nem gerenciamos essa
+      # senha -- fica aleatoria, so no log do primeiro start
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: bunkerweb
+      MYSQL_USER: bunkerweb
+      MYSQL_PASSWORD_FILE: /run/secrets/db_bunkerweb_password
+    secrets:
+      - db_bunkerweb_password
+    volumes:
+      - bw_db_data:/var/lib/mysql
+    networks:
+      - bw-universe
+
+networks:
+  proxy_network:
+    name: proxy_network
+    driver: bridge
+  bw-universe:
+    name: bw-universe
+    driver: bridge
+    internal: true
+  bw-docker-proxy-network:
+    name: bw-docker-proxy-network
+    driver: bridge
+    internal: true
+
+volumes:
+  bw_storage:
+    name: bw_storage
+  bw_db_data:
+    name: bw_db_data
+
+secrets:
+  db_bunkerweb_password:
+    file: "{{secret "db_bunkerweb_password"}}"
+  DATABASE_URI:
+    file: "{{secret "database_uri"}}"

@@ -1,0 +1,166 @@
+package stacks
+
+import (
+	"bytes"
+	"embed"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"text/template"
+
+	"github.com/trdSystemDev/cais/internal/config"
+)
+
+//go:embed templates/*/docker-compose.yml.tmpl
+var templates embed.FS
+
+// Stack e uma stack base da VPS.
+type Stack struct {
+	Name string `json:"name"`
+	Desc string `json:"desc"`
+	// Requires sao as stacks que precisam estar de pe antes (redes externas).
+	Requires []string `json:"requires,omitempty"`
+}
+
+// All lista as stacks na ordem de subida: cada uma so depende das anteriores.
+var All = []Stack{
+	{Name: "proxy", Desc: "BunkerWeb: reverse proxy, TLS e WAF, sites por label"},
+	{Name: "infra", Desc: "Postgres, MySQL e registry de imagens"},
+	{Name: "woodpecker", Desc: "CI ligado ao GitHub", Requires: []string{"proxy", "infra"}},
+	{Name: "dbgate", Desc: "Interface web dos bancos", Requires: []string{"proxy", "infra"}},
+}
+
+// Get procura uma stack pelo nome.
+func Get(name string) (Stack, bool) {
+	i := slices.IndexFunc(All, func(s Stack) bool { return s.Name == name })
+	if i < 0 {
+		return Stack{}, false
+	}
+	return All[i], true
+}
+
+// Enabled valida as stacks ativas na config e as devolve na ordem de subida.
+func Enabled(c config.Config) ([]Stack, error) {
+	var errs []error
+	seen := map[string]bool{}
+	for _, name := range c.Stacks {
+		if _, ok := Get(name); !ok {
+			errs = append(errs, fmt.Errorf("stack desconhecida %q", name))
+		} else if seen[name] {
+			errs = append(errs, fmt.Errorf("stack %q repetida", name))
+		}
+		seen[name] = true
+	}
+
+	var out []Stack
+	for _, s := range All {
+		if !seen[s.Name] {
+			continue
+		}
+		for _, req := range s.Requires {
+			if !seen[req] {
+				errs = append(errs, fmt.Errorf("stack %q precisa da stack %q", s.Name, req))
+			}
+		}
+		if err := checkStack(s.Name, c); err != nil {
+			errs = append(errs, err)
+		}
+		out = append(out, s)
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// checkStack confere os campos da config que so uma stack exige.
+func checkStack(name string, c config.Config) error {
+	if name == "woodpecker" {
+		var errs []error
+		if c.Woodpecker.GitHubClient == "" {
+			errs = append(errs, errors.New("stack woodpecker: falta woodpecker.github_client (Client ID do OAuth app do GitHub)"))
+		}
+		if c.Woodpecker.Admin == "" {
+			errs = append(errs, errors.New("stack woodpecker: falta woodpecker.admin (usuario do GitHub)"))
+		}
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+// Rendered e o compose de uma stack pronto pra gravar.
+type Rendered struct {
+	Compose []byte
+	// Secrets sao os nomes dos arquivos em secretsDir que o compose usa,
+	// na ordem em que aparecem. Saem do proprio template, entao nunca
+	// divergem dele.
+	Secrets []string
+}
+
+// vars e o que os templates enxergam.
+type vars struct {
+	Email        string
+	HTTPPort     int
+	HTTPSPort    int
+	CIHost       string
+	DBHost       string
+	GitHubClient string
+	Admin        string
+}
+
+var secretName = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// Render gera o docker-compose.yml de uma stack. Os secrets viram caminhos
+// absolutos em secretsDir: as stacks compartilham secrets centrais (a senha
+// do Postgres e da infra e do dbgate) e o compose fica valido de qualquer
+// pasta.
+func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
+	if _, ok := Get(name); !ok {
+		return Rendered{}, fmt.Errorf("stack desconhecida %q", name)
+	}
+	if err := c.Validate(); err != nil {
+		return Rendered{}, err
+	}
+	if err := checkStack(name, c); err != nil {
+		return Rendered{}, err
+	}
+	if !filepath.IsAbs(secretsDir) || strings.ContainsAny(secretsDir, "\"\\\n") {
+		return Rendered{}, fmt.Errorf("pasta de secrets invalida %q: precisa ser absoluta e sem aspas", secretsDir)
+	}
+
+	var used []string
+	funcs := template.FuncMap{
+		"secret": func(n string) (string, error) {
+			if !secretName.MatchString(n) {
+				return "", fmt.Errorf("nome de secret invalido %q", n)
+			}
+			if !slices.Contains(used, n) {
+				used = append(used, n)
+			}
+			return filepath.Join(secretsDir, n), nil
+		},
+	}
+	path := "templates/" + name + "/docker-compose.yml.tmpl"
+	tmpl, err := template.New(filepath.Base(path)).Funcs(funcs).ParseFS(templates, path)
+	if err != nil {
+		return Rendered{}, err
+	}
+
+	var buf bytes.Buffer
+	err = tmpl.Execute(&buf, vars{
+		Email:        c.Email,
+		HTTPPort:     c.Proxy.HTTPPort,
+		HTTPSPort:    c.Proxy.HTTPSPort,
+		CIHost:       c.CIHost(),
+		DBHost:       c.DBHost(),
+		GitHubClient: c.Woodpecker.GitHubClient,
+		Admin:        c.Woodpecker.Admin,
+	})
+	if err != nil {
+		return Rendered{}, fmt.Errorf("stack %s: %w", name, err)
+	}
+	return Rendered{Compose: buf.Bytes(), Secrets: used}, nil
+}

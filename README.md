@@ -99,8 +99,28 @@ e o forced command da chave e o proprio `cais deploy` (fase 3), que manda o
 compose pro daemon pelo socket. O daemon valida, grava e roda `pull`/`up -d`,
 e o usuario `deploy` nao tem acesso a nenhum arquivo.
 
-Os arquivos em `internal/stacks/templates/` sao copia dos compose do repo `VPS`
-e ainda serao parametrizados (dominio, e-mail etc.) na fase 2.
+## Configuracao
+
+`/etc/cais/config.yaml` guarda so o que um humano decide (secrets nunca):
+
+```yaml
+domain: exemplo.com.br          # ci.<domain> e db.<domain> saem daqui
+email: admin@exemplo.com.br     # avisos do Let's Encrypt
+stacks: [proxy, infra, woodpecker, dbgate]
+proxy:
+  http_port: 80                 # outra porta so numa migracao
+  https_port: 443
+hosts:                          # opcional: troca o nome padrao
+  ci: build.exemplo.com.br
+woodpecker:
+  github_client: Ov23li...      # Client ID do OAuth app do GitHub
+  admin: seu-usuario-github
+```
+
+Campo desconhecido e erro (pega erro de digitacao). Os compose das stacks sao
+gerados de `internal/stacks/templates/*/docker-compose.yml.tmpl` com esses
+valores; o proxy nasce sem nenhum site, e cada servico se publica com labels
+`bunkerweb.*` na `proxy_network` (autoconf).
 
 ## Roadmap
 

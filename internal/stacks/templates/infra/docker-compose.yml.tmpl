@@ -1,3 +1,5 @@
+# gerado pelo cais a partir de /etc/cais/config.yaml -- nao edite aqui,
+# o proximo Setup sobrescreve
 name: infra
 
 services:
@@ -79,10 +81,10 @@ volumes:
 
 secrets:
   postgres_password:
-    file: ../secrets/postgres_password.txt
+    file: "{{secret "postgres_password"}}"
   mysql_root_password:
-    file: ../secrets/mysql_root_password.txt
+    file: "{{secret "mysql_root_password"}}"
   mysql_password:
-    file: ../secrets/mysql_password.txt
+    file: "{{secret "mysql_password"}}"
   registry_htpasswd:
-    file: ../secrets/registry_htpasswd
+    file: "{{secret "registry_htpasswd"}}"

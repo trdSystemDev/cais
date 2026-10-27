@@ -3,8 +3,8 @@
 # .woodpecker.yml.
 #
 # Cadastrar como secrets do repo no Woodpecker (repo > Settings > Secrets):
-#   registry_user       usuario gerado em scripts/registry-init.sh
-#   registry_password   senha gerada em scripts/registry-init.sh
+#   registry_user       usuario do registry gerado pelo Setup do cais
+#   registry_password   senha desse usuario (o cais mostra no Setup)
 #   deploy_ssh_key      chave privada; a publica vai pro authorized_keys do
 #                       usuario "deploy" na VPS com o cais como forced command:
 #                       command="/usr/local/bin/cais deploy",restrict ssh-ed25519 AAAA...

@@ -1,3 +1,5 @@
+# gerado pelo cais a partir de /etc/cais/config.yaml -- nao edite aqui,
+# o proximo Setup sobrescreve
 name: dbgate
 
 services:
@@ -35,7 +37,7 @@ services:
       - dbgate_login
       - dbgate_password
     labels:
-      bunkerweb.SERVER_NAME: "db.trds.com.br"
+      bunkerweb.SERVER_NAME: "{{.DBHost}}"
       bunkerweb.USE_REVERSE_PROXY: "yes"
       bunkerweb.REVERSE_PROXY_URL: "/"
       bunkerweb.REVERSE_PROXY_HOST: "http://dbgate:3000"
@@ -60,10 +62,10 @@ volumes:
 
 secrets:
   postgres_password:
-    file: ../secrets/postgres_password.txt
+    file: "{{secret "postgres_password"}}"
   mysql_root_password:
-    file: ../secrets/mysql_root_password.txt
+    file: "{{secret "mysql_root_password"}}"
   dbgate_login:
-    file: ../secrets/dbgate_login.txt
+    file: "{{secret "dbgate_login"}}"
   dbgate_password:
-    file: ../secrets/dbgate_password.txt
+    file: "{{secret "dbgate_password"}}"
