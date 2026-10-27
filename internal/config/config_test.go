@@ -97,6 +97,8 @@ func TestValidateRecusa(t *testing.T) {
 		"email com aspas":        func(c *Config) { c.Email = `a"b@exemplo.com` },
 		"host ci invalido":       func(c *Config) { c.Hosts.CI = "ci_x.exemplo.com" },
 		"host registry invalido": func(c *Config) { c.Hosts.Registry = "registry" },
+		"dominio .local":         func(c *Config) { c.Domain = "trd.local" },
+		"tls desconhecido":       func(c *Config) { c.TLS = "acme" },
 		"porta zero":             func(c *Config) { c.Proxy.HTTPPort = 0 },
 		"porta alta":             func(c *Config) { c.Proxy.HTTPSPort = 70000 },
 		"portas iguais":          func(c *Config) { c.Proxy.HTTPSPort = c.Proxy.HTTPPort },
@@ -114,6 +116,11 @@ func TestValidateRecusa(t *testing.T) {
 	}
 	if err := validConfig().Validate(); err != nil {
 		t.Fatalf("recusou config valida: %v", err)
+	}
+	local := validConfig()
+	local.Domain, local.TLS = "trd.localhost", TLSSelfSigned
+	if err := local.Validate(); err != nil {
+		t.Fatalf("recusou config de teste local: %v", err)
 	}
 }
 

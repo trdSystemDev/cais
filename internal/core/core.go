@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
 
@@ -13,12 +14,25 @@ import (
 type Deps struct {
 	CheckDocker func(context.Context) docker.Status
 	Now         func() time.Time
+
+	// Caminhos no disco (padrao: internal/config/paths.go).
+	ConfigPath string
+	SecretsDir string
+	StackDir   func(name string) string
+
+	// Comandos do docker usados pelo Setup e pelo registry.
+	ComposeUp func(ctx context.Context, file string, recreate bool) error
+	Login     func(ctx context.Context, host, user string, password []byte) error
 }
 
 // Core guarda o estado e executa as acoes. E seguro pra uso concorrente:
 // a TUI e o MCP podem chamar acoes ao mesmo tempo.
 type Core struct {
 	deps Deps
+
+	// infra serializa as acoes que mexem na VPS (Setup, usuarios do
+	// registry): uma segunda chamada falha na hora em vez de esperar.
+	infra sync.Mutex
 
 	mu      sync.Mutex
 	state   State
@@ -35,6 +49,21 @@ func New(d Deps) *Core {
 	}
 	if d.Now == nil {
 		d.Now = time.Now
+	}
+	if d.ConfigPath == "" {
+		d.ConfigPath = config.ConfigFile()
+	}
+	if d.SecretsDir == "" {
+		d.SecretsDir = config.SecretsDir()
+	}
+	if d.StackDir == nil {
+		d.StackDir = config.StackDir
+	}
+	if d.ComposeUp == nil {
+		d.ComposeUp = docker.ComposeUp
+	}
+	if d.Login == nil {
+		d.Login = docker.Login
 	}
 	return &Core{deps: d, subs: map[int]chan State{}}
 }

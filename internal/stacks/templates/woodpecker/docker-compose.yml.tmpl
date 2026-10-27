@@ -23,7 +23,12 @@ services:
       bunkerweb.USE_REVERSE_PROXY: "yes"
       bunkerweb.REVERSE_PROXY_URL: "/"
       bunkerweb.REVERSE_PROXY_HOST: "http://woodpecker-server:8000"
+{{- if .LetsEncrypt}}
       bunkerweb.AUTO_LETS_ENCRYPT: "yes"
+{{- else}}
+      bunkerweb.GENERATE_SELF_SIGNED_SSL: "yes"
+      bunkerweb.SELF_SIGNED_SSL_SUBJ: "/CN={{.CIHost}}/"
+{{- end}}
     secrets:
       - github_client_secret
       - agent_secret

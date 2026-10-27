@@ -52,12 +52,59 @@ type SecretsResult struct {
 	RegistryChanged bool `json:"registry_changed,omitempty"`
 }
 
+// Needed lista os secrets que as stacks ativas usam, sem repetir, na ordem
+// de subida. Sai dos proprios templates.
+func Needed(c config.Config) ([]string, error) {
+	enabled, err := Enabled(c)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, st := range enabled {
+		// a pasta nao importa aqui, so os nomes
+		r, err := Render(st.Name, c, "/")
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range r.Secrets {
+			if !slices.Contains(names, n) {
+				names = append(names, n)
+			}
+		}
+	}
+	return names, nil
+}
+
+// PlanSecrets diz, sem gravar nada, quais secrets EnsureSecrets criaria e
+// quais o usuario ainda precisa informar.
+func PlanSecrets(s secrets.Store, c config.Config) (create []string, missing []Provided, err error) {
+	names, err := Needed(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, n := range names {
+		exists, err := secrets.Exists(s, n)
+		if err != nil {
+			return nil, nil, err
+		}
+		if exists {
+			continue
+		}
+		if desc, ok := provided[n]; ok {
+			missing = append(missing, Provided{Name: n, Desc: desc})
+		} else {
+			create = append(create, n)
+		}
+	}
+	return create, missing, nil
+}
+
 // EnsureSecrets garante os secrets de todas as stacks ativas: gera os que
 // faltam, nunca troca os que existem e lista os que o usuario precisa
 // informar. Pode rodar quantas vezes quiser.
 func EnsureSecrets(s secrets.Store, c config.Config) (SecretsResult, error) {
 	var res SecretsResult
-	enabled, err := Enabled(c)
+	names, err := Needed(c)
 	if err != nil {
 		return res, err
 	}
@@ -65,22 +112,9 @@ func EnsureSecrets(s secrets.Store, c config.Config) (SecretsResult, error) {
 	if err != nil {
 		return res, err
 	}
-
-	seen := map[string]bool{}
-	for _, st := range enabled {
-		// a lista sai do proprio template; a pasta nao importa aqui
-		r, err := Render(st.Name, c, "/")
-		if err != nil {
+	for _, name := range names {
+		if err := ensureOne(s, name, &res); err != nil {
 			return res, err
-		}
-		for _, name := range r.Secrets {
-			if seen[name] {
-				continue
-			}
-			seen[name] = true
-			if err := ensureOne(s, name, &res); err != nil {
-				return res, err
-			}
 		}
 	}
 

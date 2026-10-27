@@ -154,6 +154,29 @@ cais state         # estado atual em JSON
 cais check         # checa o ambiente e imprime o resultado
 ```
 
+Setup de uma VPS nova (pode rodar de novo a qualquer momento: nada que existe
+e regenerado e stacks sem mudanca nao sao recriadas):
+
+```sh
+cais setup config --domain exemplo.com.br --email voce@exemplo.com.br \
+    --github-client <client id> --github-admin <usuario>
+cais setup secret github_client_secret   # le sem eco, ou do stdin
+cais setup                               # plano: o que falta e o que muda
+cais setup run                           # gera secrets, grava os compose, sobe tudo
+```
+
+O `run` sobe as stacks em ordem com `docker compose up -d --wait` (cada uma
+saudavel antes da proxima) e termina com o `docker login` da VPS no registry.
+Antes, o DNS de `ci.`, `db.` e `registry.<dominio>` precisa apontar pra VPS.
+
+Acesso ao registry de imagens:
+
+```sh
+cais registry add patrick      # mostra a senha uma vez
+cais registry users
+cais registry remove patrick
+```
+
 Em desenvolvimento (Windows/macOS) o socket padrao fica na pasta temporaria;
 rode `cais daemon` num terminal e `cais` em outro.
 

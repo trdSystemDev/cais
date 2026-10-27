@@ -104,6 +104,7 @@ type Rendered struct {
 // vars e o que os templates enxergam.
 type vars struct {
 	Email        string
+	LetsEncrypt  bool
 	HTTPPort     int
 	HTTPSPort    int
 	CIHost       string
@@ -154,6 +155,7 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 	var buf bytes.Buffer
 	err = tmpl.Execute(&buf, vars{
 		Email:        c.Email,
+		LetsEncrypt:  c.LetsEncrypt(),
 		HTTPPort:     c.Proxy.HTTPPort,
 		HTTPSPort:    c.Proxy.HTTPSPort,
 		CIHost:       c.CIHost(),

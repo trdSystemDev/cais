@@ -41,7 +41,12 @@ services:
       bunkerweb.USE_REVERSE_PROXY: "yes"
       bunkerweb.REVERSE_PROXY_URL: "/"
       bunkerweb.REVERSE_PROXY_HOST: "http://dbgate:3000"
+{{- if .LetsEncrypt}}
       bunkerweb.AUTO_LETS_ENCRYPT: "yes"
+{{- else}}
+      bunkerweb.GENERATE_SELF_SIGNED_SSL: "yes"
+      bunkerweb.SELF_SIGNED_SSL_SUBJ: "/CN={{.DBHost}}/"
+{{- end}}
     volumes:
       - dbgate_data:/root/.dbgate
     networks:

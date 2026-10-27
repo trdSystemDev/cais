@@ -26,7 +26,12 @@ services:
         target: /auth/htpasswd
     labels:
       bunkerweb.SERVER_NAME: "{{.RegistryHost}}"
+{{- if .LetsEncrypt}}
       bunkerweb.AUTO_LETS_ENCRYPT: "yes"
+{{- else}}
+      bunkerweb.GENERATE_SELF_SIGNED_SSL: "yes"
+      bunkerweb.SELF_SIGNED_SSL_SUBJ: "/CN={{.RegistryHost}}/"
+{{- end}}
       bunkerweb.USE_REVERSE_PROXY: "yes"
       bunkerweb.REVERSE_PROXY_URL: "/"
       bunkerweb.REVERSE_PROXY_HOST: "http://registry:5000"

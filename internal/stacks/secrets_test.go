@@ -103,6 +103,30 @@ func TestEnsureSecretsSoDasStacksAtivas(t *testing.T) {
 	}
 }
 
+func TestPlanSecretsNaoGrava(t *testing.T) {
+	s := secrets.FileStore{Dir: filepath.Join(t.TempDir(), "secrets")}
+	c := validConfig()
+	create, missing, err := PlanSecrets(s, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0].Name != "github_client_secret" {
+		t.Errorf("missing = %+v", missing)
+	}
+	if !slices.Contains(create, "postgres_password") || !slices.Contains(create, "registry_htpasswd") {
+		t.Errorf("create = %v", create)
+	}
+	if names, _ := s.List(); len(names) != 0 {
+		t.Fatalf("plano gravou secrets: %v", names)
+	}
+
+	EnsureSecrets(s, c)
+	create, _, _ = PlanSecrets(s, c)
+	if len(create) != 0 {
+		t.Errorf("depois de gerar, o plano ainda cria %v", create)
+	}
+}
+
 func TestSetProvidedRecusa(t *testing.T) {
 	s := secrets.FileStore{Dir: filepath.Join(t.TempDir(), "secrets")}
 	if err := SetProvided(s, "postgres_password", []byte("x")); err == nil {

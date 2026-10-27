@@ -1,6 +1,11 @@
 package core
 
-import "context"
+import (
+	"context"
+
+	"github.com/trdSystemDev/cais/internal/bootstrap"
+	"github.com/trdSystemDev/cais/internal/config"
+)
 
 // API e o contrato que toda interface usa pra falar com o nucleo. *Core
 // implementa direto (mesmo processo); rpc.Client implementa via socket do
@@ -19,6 +24,35 @@ type API interface {
 
 	// CheckEnvironment checa Docker e sistema e devolve o resultado.
 	CheckEnvironment(ctx context.Context) (Environment, error)
+
+	// LoadConfig le o config.yaml. Sem arquivo, devolve Exists falso e a
+	// config padrao (ponto de partida do Setup).
+	LoadConfig(ctx context.Context) (ConfigInfo, error)
+	// SaveConfig valida (inclusive as stacks) e grava o config.yaml.
+	SaveConfig(ctx context.Context, c config.Config) error
+	// SetSecret grava um secret que o usuario informa (ex: o client secret
+	// do GitHub). Secrets gerados pelo cais nao podem ser sobrescritos.
+	SetSecret(ctx context.Context, name, value string) error
+
+	// PlanSetup diz o que o Setup faria agora, sem mudar nada.
+	PlanSetup(ctx context.Context) (bootstrap.Plan, error)
+	// RunSetup executa o Setup, publicando o progresso em State.Setup.
+	RunSetup(ctx context.Context) (Setup, error)
+
+	// RegistryUsers lista quem pode entrar no registry.
+	RegistryUsers(ctx context.Context) ([]string, error)
+	// AddRegistryUser cria o acesso de uma pessoa e devolve a senha, que
+	// nao fica guardada: e a unica vez que ela aparece.
+	AddRegistryUser(ctx context.Context, user string) (string, error)
+	// RemoveRegistryUser tira o acesso de uma pessoa.
+	RemoveRegistryUser(ctx context.Context, user string) error
+}
+
+// ConfigInfo e o config.yaml atual.
+type ConfigInfo struct {
+	Exists bool          `json:"exists"`
+	Path   string        `json:"path"`
+	Config config.Config `json:"config"`
 }
 
 var _ API = (*Core)(nil)

@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 )
 
@@ -141,6 +143,47 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodEnvironmentCheck:
 		return wrap(s.api.CheckEnvironment(s.ctx))
 
+	case MethodConfigGet:
+		return wrap(s.api.LoadConfig(s.ctx))
+
+	case MethodConfigSave:
+		var cfg config.Config
+		if err := params(m, &cfg); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SaveConfig(s.ctx, cfg))
+
+	case MethodSecretSet:
+		var p secretParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetSecret(s.ctx, p.Name, p.Value))
+
+	case MethodSetupPlan:
+		return wrap(s.api.PlanSetup(s.ctx))
+
+	case MethodSetupRun:
+		return wrap(s.api.RunSetup(s.ctx))
+
+	case MethodRegistryUsers:
+		return wrap(s.api.RegistryUsers(s.ctx))
+
+	case MethodRegistryUserAdd:
+		var p userParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		pw, err := s.api.AddRegistryUser(s.ctx, p.User)
+		return wrap(passwordResult{Password: pw}, err)
+
+	case MethodRegistryUserDel:
+		var p userParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.RemoveRegistryUser(s.ctx, p.User))
+
 	case MethodStateSubscribe:
 		if !c.subscribed.CompareAndSwap(false, true) {
 			return map[string]bool{"subscribed": true}, nil // ja inscrito
@@ -186,6 +229,25 @@ func wrap[T any](v T, err error) (any, *Error) {
 		return nil, actionError(err)
 	}
 	return v, nil
+}
+
+// ok e o wrap das acoes que so devolvem erro.
+func ok(err error) (any, *Error) {
+	if err != nil {
+		return nil, actionError(err)
+	}
+	return map[string]bool{"ok": true}, nil
+}
+
+// params decodifica os parametros de uma requisicao. Campo desconhecido e
+// erro: cliente e daemon de versoes diferentes falham alto, nao em silencio.
+func params(m message, out any) *Error {
+	dec := json.NewDecoder(bytes.NewReader(m.Params))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		return &Error{Code: CodeInvalidParams, Message: "parametros invalidos para " + m.Method + ": " + err.Error()}
+	}
+	return nil
 }
 
 func actionError(err error) *Error {

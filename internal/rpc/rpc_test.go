@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
@@ -32,13 +33,20 @@ type daemon struct {
 // startDaemon sobe um daemon de verdade num socket temporario.
 func startDaemon(t *testing.T, check func(context.Context) docker.Status) *daemon {
 	t.Helper()
+	return startDaemonDeps(t, core.Deps{CheckDocker: check})
+}
+
+// startDaemonDeps e como startDaemon, com as dependencias do core escolhidas
+// pelo teste (caminhos temporarios, docker falso).
+func startDaemonDeps(t *testing.T, deps core.Deps) *daemon {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "cais.sock")
 	ln, err := Listen(path, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &daemon{path: path, core: core.New(core.Deps{CheckDocker: check}), cancel: cancel, done: make(chan error, 1)}
+	d := &daemon{path: path, core: core.New(deps), cancel: cancel, done: make(chan error, 1)}
 	go func() { d.done <- Serve(ctx, ln, d.core) }()
 	t.Cleanup(d.stop)
 	return d
@@ -207,7 +215,7 @@ func TestMetodoDesconhecido(t *testing.T) {
 	d := startDaemon(t, okStatus)
 	c := dial(t, d.path)
 
-	err := c.call(context.Background(), "nao.existe", nil)
+	err := c.call(context.Background(), "nao.existe", nil, nil)
 	var rerr *Error
 	if !errors.As(err, &rerr) || rerr.Code != CodeMethodNotFound {
 		t.Fatalf("esperava CodeMethodNotFound, veio %v", err)
@@ -268,5 +276,102 @@ func TestListenRecusaCaminhoLongo(t *testing.T) {
 	path := filepath.Join(t.TempDir(), strings.Repeat("x", 120)+".sock")
 	if _, err := Listen(path, ""); err == nil || !strings.Contains(err.Error(), "o maximo e 107") {
 		t.Fatalf("esperava erro claro de caminho longo, veio %v", err)
+	}
+}
+
+// daemon com caminhos temporarios e docker falso, pra testar as acoes que
+// mexem na VPS pelo socket
+func startSetupDaemon(t *testing.T) (*daemon, *atomic.Int32) {
+	t.Helper()
+	root := t.TempDir()
+	var ups atomic.Int32
+	d := startDaemonDeps(t, core.Deps{
+		CheckDocker: okStatus,
+		ConfigPath:  filepath.Join(root, "config.yaml"),
+		SecretsDir:  filepath.Join(root, "secrets"),
+		StackDir:    func(n string) string { return filepath.Join(root, "stacks", n) },
+		ComposeUp: func(context.Context, string, bool) error {
+			ups.Add(1)
+			return nil
+		},
+		Login: func(context.Context, string, string, []byte) error { return nil },
+	})
+	return d, &ups
+}
+
+func TestConfigESetupPeloSocket(t *testing.T) {
+	d, ups := startSetupDaemon(t)
+	c := dial(t, d.path)
+	ctx := context.Background()
+
+	info, err := c.LoadConfig(ctx)
+	if err != nil || info.Exists {
+		t.Fatalf("sem config: %+v, %v", info, err)
+	}
+	cfg := info.Config
+	cfg.Domain = "exemplo.com.br"
+	cfg.Email = "admin@exemplo.com.br"
+	cfg.Stacks = []string{"proxy", "infra", "registry"}
+	if err := c.SaveConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ = c.LoadConfig(ctx); !info.Exists || info.Config.Domain != "exemplo.com.br" {
+		t.Fatalf("config nao gravou: %+v", info)
+	}
+
+	plan, err := c.PlanSetup(ctx)
+	if err != nil || !plan.Ready() || len(plan.Stacks) != 3 {
+		t.Fatalf("plano: %+v, %v", plan, err)
+	}
+
+	states, unsub, _ := c.Subscribe(ctx)
+	defer unsub()
+	setup, err := c.RunSetup(ctx)
+	if err != nil || setup.Running || setup.Error != "" {
+		t.Fatalf("RunSetup: %+v, %v", setup, err)
+	}
+	if ups.Load() != 3 {
+		t.Errorf("%d compose up, esperava 3", ups.Load())
+	}
+	// o progresso chegou pela notificacao de estado
+	st := recv(t, states, func(s core.State) bool { return !s.Setup.Running && !s.Setup.FinishedAt.IsZero() })
+	if len(st.Setup.Steps) == 0 {
+		t.Fatal("estado sem os passos do Setup")
+	}
+
+	pw, err := c.AddRegistryUser(ctx, "patrick")
+	if err != nil || len(pw) != 26 {
+		t.Fatalf("AddRegistryUser: %q, %v", pw, err)
+	}
+	users, _ := c.RegistryUsers(ctx)
+	if strings.Join(users, ",") != "ci,vps,patrick" {
+		t.Errorf("usuarios %v", users)
+	}
+	if ups.Load() != 4 {
+		t.Error("registry nao foi recriado depois de criar usuario")
+	}
+	if err := c.RemoveRegistryUser(ctx, "ci"); err == nil {
+		t.Error("removeu usuario de servico pelo socket")
+	}
+}
+
+func TestConfigInvalidaVoltaComoErro(t *testing.T) {
+	d, _ := startSetupDaemon(t)
+	c := dial(t, d.path)
+	cfg := config.Default()
+	cfg.Domain = "sem-ponto"
+	err := c.SaveConfig(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "domain") {
+		t.Fatalf("esperava erro de dominio, veio %v", err)
+	}
+}
+
+func TestParametroDesconhecidoERecusado(t *testing.T) {
+	d, _ := startSetupDaemon(t)
+	c := dial(t, d.path)
+	err := c.call(context.Background(), MethodRegistryUserAdd, map[string]string{"usuario": "x"}, nil)
+	var rerr *Error
+	if !errors.As(err, &rerr) || rerr.Code != CodeInvalidParams {
+		t.Fatalf("esperava CodeInvalidParams, veio %v", err)
 	}
 }

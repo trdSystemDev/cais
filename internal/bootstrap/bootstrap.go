@@ -1,0 +1,333 @@
+package bootstrap
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/fsx"
+	"github.com/trdSystemDev/cais/internal/secrets"
+	"github.com/trdSystemDev/cais/internal/stacks"
+)
+
+// Status e a situacao de um passo do Setup.
+type Status string
+
+const (
+	Pending Status = "pending"
+	Running Status = "running"
+	Done    Status = "done"
+	Failed  Status = "failed"
+)
+
+// Step e um passo do Setup, na ordem em que roda.
+type Step struct {
+	ID     string `json:"id"`
+	Desc   string `json:"desc"`
+	Status Status `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// Deps sao os caminhos e comandos que o Setup usa. Os testes trocam os
+// comandos do docker por fakes e os caminhos por pastas temporarias.
+type Deps struct {
+	ConfigPath string
+	// SecretsDir e a pasta dos secrets centrais; vai como caminho absoluto
+	// pros compose.
+	SecretsDir string
+	StackDir   func(name string) string
+
+	CheckDocker func(ctx context.Context) error
+	ComposeUp   func(ctx context.Context, file string, recreate bool) error
+	Login       func(ctx context.Context, host, user string, password []byte) error
+
+	// o login no registry depende do DNS e do certificado do Let's Encrypt,
+	// que podem levar um tempo depois do proxy subir
+	LoginAttempts int
+	LoginDelay    time.Duration
+}
+
+func (d Deps) store() secrets.FileStore { return secrets.FileStore{Dir: d.SecretsDir} }
+
+// ComposeFile e o caminho do compose gerado de uma stack.
+func (d Deps) ComposeFile(stack string) string {
+	return filepath.Join(d.StackDir(stack), "docker-compose.yml")
+}
+
+// Mudancas no compose de uma stack em relacao ao que esta no disco.
+const (
+	ChangeNew       = "nova"
+	ChangeModified  = "alterada"
+	ChangeUnchanged = "igual"
+)
+
+// StackPlan e o que o Setup vai fazer com uma stack.
+type StackPlan struct {
+	Name   string `json:"name"`
+	Desc   string `json:"desc"`
+	File   string `json:"file"`
+	Change string `json:"change"`
+}
+
+// Plan e o que o Setup faria agora. Montar o plano nao grava nada.
+type Plan struct {
+	Configured bool          `json:"configured"`
+	Config     config.Config `json:"config"`
+	// Problems impedem o Setup de rodar (config ausente ou invalida).
+	Problems []string `json:"problems,omitempty"`
+	// Missing sao secrets que o usuario precisa informar antes.
+	Missing       []stacks.Provided `json:"missing,omitempty"`
+	CreateSecrets []string          `json:"create_secrets,omitempty"`
+	Stacks        []StackPlan       `json:"stacks,omitempty"`
+	Steps         []Step            `json:"steps,omitempty"`
+}
+
+// Ready diz se o Setup pode rodar.
+func (p Plan) Ready() bool {
+	return p.Configured && len(p.Problems) == 0 && len(p.Missing) == 0
+}
+
+// Blockers descreve, em texto, o que impede o Setup de rodar.
+func (p Plan) Blockers() []string {
+	out := slices.Clone(p.Problems)
+	for _, m := range p.Missing {
+		out = append(out, fmt.Sprintf("falta informar o secret %s: %s", m.Name, m.Desc))
+	}
+	return out
+}
+
+// MakePlan monta o plano a partir do config.yaml e do que ja existe no
+// disco. Config ausente ou invalida nao e erro: vira Problems. Erro so
+// quando nao da pra ler o disco.
+func MakePlan(d Deps) (Plan, error) {
+	var p Plan
+	cfg, err := config.Load(d.ConfigPath)
+	if errors.Is(err, config.ErrNotFound) {
+		p.Config = config.Default()
+		p.Problems = append(p.Problems, err.Error())
+		return p, nil
+	}
+	if err != nil {
+		p.Problems = append(p.Problems, err.Error())
+		return p, nil
+	}
+	p.Configured = true
+	p.Config = cfg
+
+	enabled, err := stacks.Enabled(cfg)
+	if err != nil {
+		p.Problems = append(p.Problems, err.Error())
+		return p, nil
+	}
+	if p.CreateSecrets, p.Missing, err = stacks.PlanSecrets(d.store(), cfg); err != nil {
+		return p, err
+	}
+	for _, st := range enabled {
+		r, err := stacks.Render(st.Name, cfg, d.SecretsDir)
+		if err != nil {
+			return p, err
+		}
+		file := d.ComposeFile(st.Name)
+		change, err := compare(file, r.Compose)
+		if err != nil {
+			return p, err
+		}
+		p.Stacks = append(p.Stacks, StackPlan{Name: st.Name, Desc: st.Desc, File: file, Change: change})
+	}
+	p.Steps = steps(enabled, cfg)
+	return p, nil
+}
+
+func compare(file string, want []byte) (string, error) {
+	have, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return ChangeNew, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if bytes.Equal(have, want) {
+		return ChangeUnchanged, nil
+	}
+	return ChangeModified, nil
+}
+
+const (
+	stepDocker        = "docker"
+	stepSecrets       = "secrets"
+	stepFiles         = "files"
+	stepRegistryLogin = "registry-login"
+	stackStepPrefix   = "stack:"
+)
+
+func steps(enabled []stacks.Stack, cfg config.Config) []Step {
+	out := []Step{
+		{ID: stepDocker, Desc: "Docker e Compose funcionando"},
+		{ID: stepSecrets, Desc: "Gerar os secrets que faltam"},
+		{ID: stepFiles, Desc: "Gravar o compose das stacks"},
+	}
+	for _, st := range enabled {
+		out = append(out, Step{ID: stackStepPrefix + st.Name, Desc: "Subir " + st.Name + " (" + st.Desc + ")"})
+	}
+	if cfg.HasStack("registry") {
+		out = append(out, Step{ID: stepRegistryLogin, Desc: "Login da VPS em " + cfg.RegistryHost()})
+	}
+	for i := range out {
+		out[i].Status = Pending
+	}
+	return out
+}
+
+// Run executa o Setup: gera secrets, grava os compose e sobe as stacks em
+// ordem, esperando cada uma ficar saudavel antes da proxima. report recebe
+// uma copia dos passos a cada mudanca. Pode rodar de novo a qualquer
+// momento: nada que ja existe e regenerado e stacks iguais nao sao
+// recriadas. Para no primeiro passo que falhar.
+func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
+	plan, err := MakePlan(d)
+	if err != nil {
+		return nil, err
+	}
+	if !plan.Ready() {
+		return nil, fmt.Errorf("setup nao pode rodar:\n- %s", strings.Join(plan.Blockers(), "\n- "))
+	}
+
+	r := &runner{steps: plan.Steps, report: report}
+	cfg := plan.Config
+
+	if err := r.do(stepDocker, func() (string, error) {
+		return "", d.CheckDocker(ctx)
+	}); err != nil {
+		return r.steps, err
+	}
+
+	var created stacks.SecretsResult
+	if err := r.do(stepSecrets, func() (string, error) {
+		res, err := stacks.EnsureSecrets(d.store(), cfg)
+		if err != nil {
+			return "", err
+		}
+		if len(res.Missing) > 0 {
+			return "", fmt.Errorf("falta informar o secret %s", res.Missing[0].Name)
+		}
+		created = res
+		if len(res.Created) == 0 {
+			return "nenhum novo", nil
+		}
+		return fmt.Sprintf("%d gerados", len(res.Created)), nil
+	}); err != nil {
+		return r.steps, err
+	}
+
+	if err := r.do(stepFiles, func() (string, error) {
+		var changed []string
+		for _, sp := range plan.Stacks {
+			if sp.Change == ChangeUnchanged {
+				continue
+			}
+			rendered, err := stacks.Render(sp.Name, cfg, d.SecretsDir)
+			if err != nil {
+				return "", err
+			}
+			if err := os.MkdirAll(filepath.Dir(sp.File), 0o700); err != nil {
+				return "", err
+			}
+			if err := fsx.WriteAtomic(sp.File, rendered.Compose, 0o644); err != nil {
+				return "", err
+			}
+			changed = append(changed, sp.Name)
+		}
+		if len(changed) == 0 {
+			return "nenhum mudou", nil
+		}
+		return strings.Join(changed, ", "), nil
+	}); err != nil {
+		return r.steps, err
+	}
+
+	for _, sp := range plan.Stacks {
+		// o registry so le o htpasswd ao subir o container
+		recreate := sp.Name == "registry" && created.RegistryChanged
+		if err := r.do(stackStepPrefix+sp.Name, func() (string, error) {
+			return "", d.ComposeUp(ctx, sp.File, recreate)
+		}); err != nil {
+			return r.steps, err
+		}
+	}
+
+	if cfg.HasStack("registry") {
+		host := cfg.RegistryHost()
+		if err := r.do(stepRegistryLogin, func() (string, error) {
+			pw, err := d.store().Get(secrets.RegistryPasswordSecret(secrets.RegistryVPS))
+			if err != nil {
+				return "", err
+			}
+			if err := retry(ctx, d.LoginAttempts, d.LoginDelay, func() error {
+				return d.Login(ctx, host, secrets.RegistryVPS, pw)
+			}); err != nil {
+				return "", fmt.Errorf("%w\nconfira se o DNS de %s aponta pra esta VPS e se o certificado ja foi emitido; depois rode o Setup de novo", err, host)
+			}
+			return "", nil
+		}); err != nil {
+			return r.steps, err
+		}
+	}
+	return r.steps, nil
+}
+
+type runner struct {
+	steps  []Step
+	report func([]Step)
+}
+
+// do roda um passo, publicando running e depois done ou failed.
+func (r *runner) do(id string, fn func() (string, error)) error {
+	i := slices.IndexFunc(r.steps, func(s Step) bool { return s.ID == id })
+	r.set(i, Running, "")
+	detail, err := fn()
+	if err != nil {
+		r.set(i, Failed, err.Error())
+		return fmt.Errorf("%s: %w", r.steps[i].Desc, err)
+	}
+	r.set(i, Done, detail)
+	return nil
+}
+
+// set troca o passo numa lista nova: a anterior pode estar publicada.
+func (r *runner) set(i int, st Status, detail string) {
+	steps := slices.Clone(r.steps)
+	steps[i].Status = st
+	steps[i].Detail = detail
+	r.steps = steps
+	if r.report != nil {
+		r.report(steps)
+	}
+}
+
+func retry(ctx context.Context, attempts int, delay time.Duration, fn func() error) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var err error
+	for i := range attempts {
+		if err = fn(); err == nil {
+			return nil
+		}
+		if i == attempts-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return err
+}

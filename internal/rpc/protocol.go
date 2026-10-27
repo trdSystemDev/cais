@@ -17,6 +17,14 @@ const (
 	MethodStateGet         = "state.get"
 	MethodStateSubscribe   = "state.subscribe"
 	MethodEnvironmentCheck = "environment.check"
+	MethodConfigGet        = "config.get"
+	MethodConfigSave       = "config.save" // params: config.Config
+	MethodSecretSet        = "secret.set"  // params: secretParams
+	MethodSetupPlan        = "setup.plan"
+	MethodSetupRun         = "setup.run"
+	MethodRegistryUsers    = "registry.users"
+	MethodRegistryUserAdd  = "registry.user.add"    // params: userParams
+	MethodRegistryUserDel  = "registry.user.remove" // params: userParams
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -27,6 +35,7 @@ const (
 const (
 	CodeParseError     = -32700
 	CodeMethodNotFound = -32601
+	CodeInvalidParams  = -32602
 	CodeActionFailed   = -32000
 )
 
@@ -40,7 +49,13 @@ type Error struct {
 	Message string `json:"message"`
 }
 
+// Error de uma acao que falhou e so a mensagem dela, que ja diz o que
+// fazer; os codigos de protocolo continuam aparecendo porque indicam
+// cliente e daemon desencontrados.
 func (e *Error) Error() string {
+	if e.Code == CodeActionFailed {
+		return e.Message
+	}
 	return fmt.Sprintf("daemon: %s (codigo %d)", e.Message, e.Code)
 }
 
@@ -53,4 +68,17 @@ type message struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *Error          `json:"error,omitempty"`
+}
+
+type secretParams struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type userParams struct {
+	User string `json:"user"`
+}
+
+type passwordResult struct {
+	Password string `json:"password"`
 }

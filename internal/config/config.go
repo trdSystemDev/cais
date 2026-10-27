@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/trdSystemDev/cais/internal/fsx"
 )
 
 // ErrNotFound indica que ainda nao existe config.yaml: a VPS nao passou
@@ -24,6 +26,10 @@ type Config struct {
 	Domain string `yaml:"domain" json:"domain"`
 	// Email recebe os avisos do Let's Encrypt.
 	Email string `yaml:"email" json:"email"`
+	// TLS e de onde vem o certificado dos sites: TLSLetsEncrypt (padrao,
+	// precisa de DNS publico) ou TLSSelfSigned (teste local, ex: dominio
+	// .localhost, que nao tem como ter certificado publico).
+	TLS string `yaml:"tls,omitempty" json:"tls,omitempty"`
 	// Stacks sao as stacks base ativas (proxy, infra, registry, woodpecker, dbgate).
 	Stacks     []string   `yaml:"stacks" json:"stacks"`
 	Proxy      Proxy      `yaml:"proxy" json:"proxy"`
@@ -55,6 +61,15 @@ type Woodpecker struct {
 	// Admin e o usuario do GitHub que administra o Woodpecker.
 	Admin string `yaml:"admin,omitempty" json:"admin,omitempty"`
 }
+
+// Modos de TLS.
+const (
+	TLSLetsEncrypt = "letsencrypt"
+	TLSSelfSigned  = "selfsigned"
+)
+
+// LetsEncrypt diz se os certificados vem do Let's Encrypt.
+func (c Config) LetsEncrypt() bool { return c.TLS == "" || c.TLS == TLSLetsEncrypt }
 
 // Default devolve a configuracao inicial do Setup, sem dominio e e-mail.
 func Default() Config {
@@ -130,6 +145,9 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("hosts.registry: %w", err))
 		}
 	}
+	if c.TLS != "" && c.TLS != TLSLetsEncrypt && c.TLS != TLSSelfSigned {
+		errs = append(errs, fmt.Errorf("tls: %q invalido (use %s ou %s)", c.TLS, TLSLetsEncrypt, TLSSelfSigned))
+	}
 	if !validPort(c.Proxy.HTTPPort) {
 		errs = append(errs, fmt.Errorf("proxy.http_port: porta invalida %d", c.Proxy.HTTPPort))
 	}
@@ -163,6 +181,10 @@ func validHost(h string) error {
 		if !hostLabel.MatchString(l) {
 			return fmt.Errorf("%q nao e um dominio valido (so minusculas, numeros, '-' e '.')", h)
 		}
+	}
+	if labels[len(labels)-1] == "local" {
+		// .local e do mDNS: o sistema pergunta pro Avahi e nem le o /etc/hosts
+		return fmt.Errorf("%q usa .local, que e reservado pro mDNS; pra teste local use .localhost (ex: trd.localhost)", h)
 	}
 	return nil
 }
@@ -223,25 +245,5 @@ func Save(path string, c Config) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".config-*.yaml")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // no-op depois do rename
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return fsx.WriteAtomic(path, data, 0o644)
 }

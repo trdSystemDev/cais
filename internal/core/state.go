@@ -1,18 +1,31 @@
 package core
 
-import "time"
+import (
+	"time"
+
+	"github.com/trdSystemDev/cais/internal/bootstrap"
+)
 
 // State e uma foto imutavel de tudo que o cais sabe naquele momento.
 // Quem recebe um State pode le-lo a vontade, de qualquer goroutine.
 //
-// Hoje State so tem valores (sem slices/maps/ponteiros), entao copiar ja
-// basta. Quando entrar lista de apps etc., quem altera deve criar uma
-// lista nova (copy-on-write) em vez de mexer na que ja foi publicada.
+// Slices do estado (ex: Setup.Steps) sao copy-on-write: quem altera cria
+// uma lista nova em vez de mexer na que ja foi publicada.
 type State struct {
 	// Version aumenta a cada mudanca; interfaces podem usar pra ignorar
 	// fotos repetidas.
 	Version     uint64      `json:"version"`
 	Environment Environment `json:"environment"`
+	Setup       Setup       `json:"setup"`
+}
+
+// Setup e o andamento da ultima execucao do Setup (bootstrap da VPS).
+type Setup struct {
+	Running    bool             `json:"running"`
+	Steps      []bootstrap.Step `json:"steps,omitempty"`
+	StartedAt  time.Time        `json:"started_at,omitzero"`
+	FinishedAt time.Time        `json:"finished_at,omitzero"`
+	Error      string           `json:"error,omitempty"`
 }
 
 // Environment e o estado da maquina onde o cais roda.

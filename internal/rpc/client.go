@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 
+	"github.com/trdSystemDev/cais/internal/bootstrap"
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 )
 
@@ -55,13 +57,53 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Snapshot(ctx context.Context) (st core.State, err error) {
-	err = c.call(ctx, MethodStateGet, &st)
+	err = c.call(ctx, MethodStateGet, nil, &st)
 	return
 }
 
 func (c *Client) CheckEnvironment(ctx context.Context) (env core.Environment, err error) {
-	err = c.call(ctx, MethodEnvironmentCheck, &env)
+	err = c.call(ctx, MethodEnvironmentCheck, nil, &env)
 	return
+}
+
+func (c *Client) LoadConfig(ctx context.Context) (info core.ConfigInfo, err error) {
+	err = c.call(ctx, MethodConfigGet, nil, &info)
+	return
+}
+
+func (c *Client) SaveConfig(ctx context.Context, cfg config.Config) error {
+	return c.call(ctx, MethodConfigSave, cfg, nil)
+}
+
+func (c *Client) SetSecret(ctx context.Context, name, value string) error {
+	return c.call(ctx, MethodSecretSet, secretParams{Name: name, Value: value}, nil)
+}
+
+func (c *Client) PlanSetup(ctx context.Context) (p bootstrap.Plan, err error) {
+	err = c.call(ctx, MethodSetupPlan, nil, &p)
+	return
+}
+
+// RunSetup bloqueia ate o Setup terminar (pode levar minutos); o progresso
+// chega pelo Subscribe. Se o cliente desistir, o Setup continua no daemon.
+func (c *Client) RunSetup(ctx context.Context) (st core.Setup, err error) {
+	err = c.call(ctx, MethodSetupRun, nil, &st)
+	return
+}
+
+func (c *Client) RegistryUsers(ctx context.Context) (users []string, err error) {
+	err = c.call(ctx, MethodRegistryUsers, nil, &users)
+	return
+}
+
+func (c *Client) AddRegistryUser(ctx context.Context, user string) (string, error) {
+	var r passwordResult
+	err := c.call(ctx, MethodRegistryUserAdd, userParams{User: user}, &r)
+	return r.Password, err
+}
+
+func (c *Client) RemoveRegistryUser(ctx context.Context, user string) error {
+	return c.call(ctx, MethodRegistryUserDel, userParams{User: user}, nil)
 }
 
 // Subscribe tem a mesma semantica do core: recebe a foto atual (se o
@@ -97,7 +139,7 @@ func (c *Client) Subscribe(ctx context.Context) (<-chan core.State, func(), erro
 	}
 
 	if needRemote {
-		if err := c.call(ctx, MethodStateSubscribe, nil); err != nil {
+		if err := c.call(ctx, MethodStateSubscribe, nil, nil); err != nil {
 			c.mu.Lock()
 			c.subscribed = false
 			c.mu.Unlock()
@@ -108,7 +150,16 @@ func (c *Client) Subscribe(ctx context.Context) (<-chan core.State, func(), erro
 	return ch, unsubscribe, nil
 }
 
-func (c *Client) call(ctx context.Context, method string, out any) error {
+func (c *Client) call(ctx context.Context, method string, in, out any) error {
+	var params json.RawMessage
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		params = b
+	}
+
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -121,7 +172,7 @@ func (c *Client) call(ctx context.Context, method string, out any) error {
 	c.mu.Unlock()
 
 	c.wmu.Lock()
-	err := c.enc.Encode(message{JSONRPC: "2.0", ID: id, Method: method})
+	err := c.enc.Encode(message{JSONRPC: "2.0", ID: id, Method: method, Params: params})
 	c.wmu.Unlock()
 	if err != nil {
 		c.forget(id)

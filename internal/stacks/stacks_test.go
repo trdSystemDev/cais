@@ -190,6 +190,31 @@ func TestBancosIsolados(t *testing.T) {
 	}
 }
 
+func TestTLSAutoassinadoParaTesteLocal(t *testing.T) {
+	c := validConfig()
+	c.Domain, c.TLS = "trd.localhost", config.TLSSelfSigned
+	for _, name := range []string{"registry", "woodpecker", "dbgate"} {
+		r, _ := render(t, name, c)
+		text := string(r.Compose)
+		if strings.Contains(text, "AUTO_LETS_ENCRYPT") {
+			t.Errorf("%s pede Let's Encrypt em modo autoassinado", name)
+		}
+		if !strings.Contains(text, `bunkerweb.GENERATE_SELF_SIGNED_SSL: "yes"`) {
+			t.Errorf("%s sem certificado autoassinado", name)
+		}
+	}
+	r, _ := render(t, "registry", c)
+	if !strings.Contains(string(r.Compose), `SELF_SIGNED_SSL_SUBJ: "/CN=registry.trd.localhost/"`) {
+		t.Error("certificado do registry com nome errado")
+	}
+
+	c.TLS = ""
+	r, _ = render(t, "registry", c)
+	if !strings.Contains(string(r.Compose), `bunkerweb.AUTO_LETS_ENCRYPT: "yes"`) || strings.Contains(string(r.Compose), "SELF_SIGNED") {
+		t.Error("padrao tem que ser Let's Encrypt")
+	}
+}
+
 func TestEnabledValidaDependencias(t *testing.T) {
 	cases := map[string]struct {
 		stacks []string

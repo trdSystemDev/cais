@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/trdSystemDev/cais/internal/fsx"
 )
 
 // ErrNotFound indica que o secret ainda nao existe.
@@ -74,27 +76,7 @@ func (s FileStore) Put(name string, value []byte) error {
 	if err := os.Chmod(s.Dir, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(s.Dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // no-op depois do rename
-	if _, err := tmp.Write(value); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o444); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), p)
+	return fsx.WriteAtomic(p, value, 0o444)
 }
 
 func (s FileStore) Delete(name string) error {

@@ -29,6 +29,19 @@ Uso:
   cais check [--socket]              checa o ambiente e imprime o resultado em JSON
   cais version                       mostra a versao
 
+Setup da VPS:
+  cais setup                         mostra o plano: o que falta e o que vai mudar
+  cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
+      --domain --email --tls letsencrypt|selfsigned --stacks proxy,infra,... --http-port --https-port
+      --github-client --github-admin --host-ci --host-db --host-registry
+  cais setup secret <nome>           grava um secret informado (le do stdin)
+  cais setup run                     executa o Setup e mostra o progresso
+
+Registry de imagens:
+  cais registry users                lista quem pode entrar
+  cais registry add <usuario>        cria o acesso e mostra a senha (uma vez so)
+  cais registry remove <usuario>     tira o acesso
+
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET).
 `
 
@@ -48,6 +61,10 @@ func main() {
 		err = runState(args)
 	case "check":
 		err = runCheck(args)
+	case "setup":
+		err = runSetup(args)
+	case "registry":
+		err = runRegistry(args)
 	case "version":
 		fmt.Println("cais", version)
 	case "help":
