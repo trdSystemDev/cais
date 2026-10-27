@@ -87,6 +87,9 @@ type Plan struct {
 	CreateSecrets []string          `json:"create_secrets,omitempty"`
 	Stacks        []StackPlan       `json:"stacks,omitempty"`
 	Steps         []Step            `json:"steps,omitempty"`
+	// CAFile e o certificado da CA local (tls: selfsigned), que quem testa
+	// instala como confiavel. Vazio com Let's Encrypt.
+	CAFile string `json:"ca_file,omitempty"`
 }
 
 // Ready diz se o Setup pode rodar.
@@ -120,6 +123,9 @@ func MakePlan(d Deps) (Plan, error) {
 	}
 	p.Configured = true
 	p.Config = cfg
+	if !cfg.LetsEncrypt() {
+		p.CAFile = filepath.Join(d.SecretsDir, secrets.TLSCACert)
+	}
 
 	enabled, err := stacks.Enabled(cfg)
 	if err != nil {
@@ -253,8 +259,9 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 	}
 
 	for _, sp := range plan.Stacks {
-		// o registry so le o htpasswd ao subir o container
-		recreate := sp.Name == "registry" && created.RegistryChanged
+		// secret montado que mudou (htpasswd, certificado) so e lido de novo
+		// com o container recriado
+		recreate := slices.Contains(created.Recreate, sp.Name)
 		if err := r.do(stackStepPrefix+sp.Name, func() (string, error) {
 			return "", d.ComposeUp(ctx, sp.File, recreate)
 		}); err != nil {

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/secrets"
@@ -19,6 +21,17 @@ type Provided struct {
 // provided sao os secrets que vem de fora, com o que mostrar no Setup.
 var provided = map[string]string{
 	"github_client_secret": "Client secret do OAuth app do GitHub (o mesmo app do woodpecker.github_client)",
+}
+
+// companions sao gerados junto com um secret dos templates, sem aparecer
+// neles: a CA que assina o certificado local e as senhas dos usuarios de
+// servico do registry.
+var companions = map[string][]string{
+	secrets.TLSCert: {secrets.TLSCACert, secrets.TLSCAKey},
+	secrets.RegistryHtpasswd: {
+		secrets.RegistryPasswordSecret(secrets.RegistryCI),
+		secrets.RegistryPasswordSecret(secrets.RegistryVPS),
+	},
 }
 
 // generators dizem como gerar cada secret usado pelos templates. Todo nome
@@ -47,9 +60,9 @@ type SecretsResult struct {
 	Created []string `json:"created,omitempty"`
 	// Missing sao os que o usuario ainda precisa informar.
 	Missing []Provided `json:"missing,omitempty"`
-	// RegistryChanged indica que o htpasswd mudou e o registry precisa
-	// ser recriado pra enxergar o arquivo novo.
-	RegistryChanged bool `json:"registry_changed,omitempty"`
+	// Recreate sao as stacks que precisam ser recriadas pra enxergar um
+	// secret que mudou: o bind mount continua preso no arquivo antigo.
+	Recreate []string `json:"recreate,omitempty"`
 }
 
 // Needed lista os secrets que as stacks ativas usam, sem repetir, na ordem
@@ -92,8 +105,23 @@ func PlanSecrets(s secrets.Store, c config.Config) (create []string, missing []P
 		}
 		if desc, ok := provided[n]; ok {
 			missing = append(missing, Provided{Name: n, Desc: desc})
-		} else {
-			create = append(create, n)
+			continue
+		}
+		create = append(create, n)
+	}
+	// secrets que saem junto com outro e nao aparecem nos templates
+	for n, extras := range companions {
+		if !slices.Contains(names, n) {
+			continue
+		}
+		for _, e := range extras {
+			ok, err := secrets.Exists(s, e)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !ok && !slices.Contains(create, e) {
+				create = append(create, e)
+			}
 		}
 	}
 	return create, missing, nil
@@ -113,7 +141,7 @@ func EnsureSecrets(s secrets.Store, c config.Config) (SecretsResult, error) {
 		return res, err
 	}
 	for _, name := range names {
-		if err := ensureOne(s, name, &res); err != nil {
+		if err := ensureOne(s, name, c, &res); err != nil {
 			return res, err
 		}
 	}
@@ -132,13 +160,30 @@ func EnsureSecrets(s secrets.Store, c config.Config) (SecretsResult, error) {
 	return res, nil
 }
 
-func ensureOne(s secrets.Store, name string, res *SecretsResult) error {
-	if name == secrets.RegistryHtpasswd {
+func ensureOne(s secrets.Store, name string, c config.Config, res *SecretsResult) error {
+	switch name {
+	case secrets.RegistryHtpasswd:
 		changed, err := secrets.EnsureRegistry(s)
 		if err != nil {
 			return err
 		}
-		res.RegistryChanged = changed
+		if changed {
+			res.Recreate = append(res.Recreate, "registry")
+		}
+		return nil
+
+	case secrets.TLSCert, secrets.TLSKey:
+		// os dois saem juntos; o segundo nome nao tem mais nada a fazer
+		if slices.Contains(res.Recreate, "proxy") {
+			return nil
+		}
+		changed, err := secrets.EnsureLocalTLS(s, TLSHosts(c), TLSDomains(c), time.Now())
+		if err != nil {
+			return err
+		}
+		if changed {
+			res.Recreate = append(res.Recreate, "proxy")
+		}
 		return nil
 	}
 
@@ -159,6 +204,40 @@ func ensureOne(s secrets.Store, name string, res *SecretsResult) error {
 	}
 	_, err := secrets.Ensure(s, name, func() ([]byte, error) { return gen(s) })
 	return err
+}
+
+// TLSHosts sao os nomes do certificado da CA local: o dominio, o curinga
+// dele e os nomes das stacks publicadas (que podem estar fora do dominio).
+func TLSHosts(c config.Config) []string {
+	hosts := []string{c.Domain, "*." + c.Domain}
+	add := func(h string) {
+		if !slices.Contains(hosts, h) {
+			hosts = append(hosts, h)
+		}
+	}
+	if c.HasStack("registry") {
+		add(c.RegistryHost())
+	}
+	if c.HasStack("woodpecker") {
+		add(c.CIHost())
+	}
+	if c.HasStack("dbgate") {
+		add(c.DBHost())
+	}
+	return hosts
+}
+
+// TLSDomains sao os dominios que a CA local pode assinar: o dominio base e
+// cada host fora dele. Nada alem disso.
+func TLSDomains(c config.Config) []string {
+	domains := []string{c.Domain}
+	for _, h := range TLSHosts(c) {
+		if h == c.Domain || strings.HasSuffix(h, "."+c.Domain) || slices.Contains(domains, h) {
+			continue
+		}
+		domains = append(domains, h)
+	}
+	return domains
 }
 
 // SetProvided grava um secret informado pelo usuario.

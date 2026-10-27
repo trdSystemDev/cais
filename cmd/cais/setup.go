@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"golang.org/x/term"
 
@@ -118,9 +119,30 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 		}
 	}
 	if p.Ready() {
-		fmt.Fprintln(out, "\nPronto. Antes de rodar, aponte o DNS dos nomes acima pra esta VPS.")
+		if p.CAFile == "" {
+			fmt.Fprintln(out, "\nPronto. Antes de rodar, aponte o DNS dos nomes acima pra esta VPS.")
+		} else {
+			fmt.Fprintln(out, "\nPronto. Certificados da CA local: depois do run, confie nela (instrucoes no fim).")
+		}
 		fmt.Fprintln(out, "Execute: cais setup run")
 	}
+}
+
+// printTrust explica como confiar na CA local, no modo tls: selfsigned.
+func printTrust(out io.Writer, p bootstrap.Plan) {
+	if p.CAFile == "" {
+		return
+	}
+	fmt.Fprintf(out, "\nCertificados assinados pela CA local do cais (%s).\n", p.CAFile)
+	fmt.Fprintln(out, "Ela so assina nomes do dominio do teste. Pra confiar nela nesta maquina:")
+	if p.Config.HasStack("registry") {
+		dir := "/etc/docker/certs.d/" + p.Config.RegistryHost()
+		fmt.Fprintf(out, "\n  # docker push/pull no registry (sem reiniciar o docker)\n")
+		fmt.Fprintf(out, "  sudo mkdir -p %s\n  sudo cp %s %s/ca.crt\n", dir, p.CAFile, dir)
+	}
+	fmt.Fprintf(out, "\n  # navegador, curl e o resto do sistema (opcional)\n")
+	fmt.Fprintf(out, "  sudo trust anchor --store %s\n", p.CAFile)
+	fmt.Fprintf(out, "\n  # pra desfazer: sudo trust anchor --remove %s\n", p.CAFile)
 }
 
 func setupConfig(args []string) error {
@@ -253,23 +275,40 @@ func setupRun(args []string) error {
 	defer c.Close()
 	ctx := context.Background()
 
+	// o Subscribe entrega primeiro o estado atual, que pode ter os passos
+	// de uma execucao anterior: so imprime o que comecou depois de agora
+	prev, err := c.Snapshot(ctx)
+	if err != nil {
+		return err
+	}
 	states, unsubscribe, err := c.Subscribe(ctx)
 	if err != nil {
 		return err
 	}
+	p := &stepPrinter{since: prev.Setup.StartedAt, seen: map[string]bootstrap.Status{}}
 	printed := make(chan struct{})
 	go func() {
 		defer close(printed)
-		printSteps(states)
+		for st := range states {
+			p.print(st.Setup)
+		}
 	}()
 
 	_, runErr := c.RunSetup(ctx)
 	unsubscribe()
 	<-printed
+	// a resposta pode chegar antes da ultima notificacao, e em caso de erro
+	// ela nem traz os passos: o estado final vem do daemon
+	if final, err := c.Snapshot(ctx); err == nil {
+		p.print(final.Setup)
+	}
 	if runErr != nil {
 		return runErr
 	}
 	fmt.Println("\nSetup concluido.")
+	if p, err := c.PlanSetup(ctx); err == nil {
+		printTrust(os.Stdout, p)
+	}
 	return nil
 }
 
@@ -279,21 +318,28 @@ var stepMark = map[bootstrap.Status]string{
 	bootstrap.Failed:  "!!",
 }
 
-// printSteps imprime cada mudanca de status de passo, ate o canal fechar.
-func printSteps(states <-chan core.State) {
-	seen := map[string]bootstrap.Status{}
-	for st := range states {
-		for _, s := range st.Setup.Steps {
-			if s.Status == bootstrap.Pending || seen[s.ID] == s.Status {
-				continue
-			}
-			seen[s.ID] = s.Status
-			line := fmt.Sprintf("[%s] %s", stepMark[s.Status], s.Desc)
-			if s.Detail != "" && s.Status != bootstrap.Failed {
-				line += " -- " + s.Detail
-			}
-			fmt.Println(line)
+// stepPrinter imprime cada mudanca de status dos passos de execucoes que
+// comecaram depois de since.
+type stepPrinter struct {
+	since time.Time
+	seen  map[string]bootstrap.Status
+}
+
+func (p *stepPrinter) print(s core.Setup) {
+	if !s.StartedAt.After(p.since) {
+		return
+	}
+	for _, step := range s.Steps {
+		if step.Status == bootstrap.Pending || p.seen[step.ID] == step.Status {
+			continue
 		}
+		p.seen[step.ID] = step.Status
+		line := fmt.Sprintf("[%s] %s", stepMark[step.Status], step.Desc)
+		// num passo que falhou, o detalhe e o erro, impresso no fim
+		if step.Detail != "" && step.Status != bootstrap.Failed {
+			line += " -- " + step.Detail
+		}
+		fmt.Println(line)
 	}
 }
 

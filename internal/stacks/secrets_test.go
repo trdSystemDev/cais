@@ -7,23 +7,69 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/secrets"
 )
 
 // todo secret que um template usa precisa saber de onde vem
 func TestTodoSecretTemOrigem(t *testing.T) {
-	for _, st := range All {
-		r, err := Render(st.Name, validConfig(), "/")
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, name := range r.Secrets {
-			_, gen := generators[name]
-			_, prov := provided[name]
-			if !gen && !prov && name != secrets.RegistryHtpasswd {
-				t.Errorf("stack %s usa o secret %q, que nao tem gerador nem e informado", st.Name, name)
+	local := validConfig()
+	local.Domain, local.TLS = "trd.localhost", config.TLSSelfSigned
+	special := []string{secrets.RegistryHtpasswd, secrets.TLSCert, secrets.TLSKey}
+	for _, c := range []config.Config{validConfig(), local} {
+		for _, st := range All {
+			r, err := Render(st.Name, c, "/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range r.Secrets {
+				_, gen := generators[name]
+				_, prov := provided[name]
+				if !gen && !prov && !slices.Contains(special, name) {
+					t.Errorf("stack %s usa o secret %q, que nao tem gerador nem e informado", st.Name, name)
+				}
 			}
 		}
+	}
+}
+
+func TestEnsureSecretsGeraCertificadoLocal(t *testing.T) {
+	s := secrets.FileStore{Dir: filepath.Join(t.TempDir(), "secrets")}
+	c := validConfig()
+	c.Domain, c.TLS = "trd.localhost", config.TLSSelfSigned
+	c.Stacks = []string{"proxy", "infra", "registry", "dbgate"}
+	c.Hosts.Registry = "imagens.outro.localhost"
+
+	create, _, err := PlanSecrets(s, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := EnsureSecrets(s, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// o plano anuncia exatamente o que o Setup cria
+	slices.Sort(create)
+	created := slices.Clone(res.Created)
+	slices.Sort(created)
+	if !slices.Equal(create, created) {
+		t.Errorf("plano dizia %v, criou %v", create, created)
+	}
+	for _, n := range []string{secrets.TLSCACert, secrets.TLSCAKey, secrets.TLSCert, secrets.TLSKey} {
+		if !slices.Contains(res.Created, n) {
+			t.Errorf("nao criou %s: %v", n, res.Created)
+		}
+	}
+	if !slices.Contains(res.Recreate, "proxy") {
+		t.Errorf("certificado novo tem que recriar o proxy: %v", res.Recreate)
+	}
+	if got := TLSDomains(c); !slices.Equal(got, []string{"trd.localhost", "imagens.outro.localhost"}) {
+		t.Errorf("dominios da CA %v", got)
+	}
+
+	res, _ = EnsureSecrets(s, c)
+	if slices.Contains(res.Recreate, "proxy") {
+		t.Error("segunda rodada recriaria o proxy sem motivo")
 	}
 }
 
@@ -38,7 +84,7 @@ func TestEnsureSecretsGeraOQueFaltaEPedeOResto(t *testing.T) {
 	if len(res.Missing) != 1 || res.Missing[0].Name != "github_client_secret" {
 		t.Fatalf("Missing = %+v, esperava so o github_client_secret", res.Missing)
 	}
-	if !res.RegistryChanged {
+	if !slices.Equal(res.Recreate, []string{"registry"}) {
 		t.Error("primeira vez tem que criar o htpasswd")
 	}
 	for _, want := range []string{"database_uri", "db_bunkerweb_password", "postgres_password",
@@ -65,7 +111,7 @@ func TestEnsureSecretsGeraOQueFaltaEPedeOResto(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Created) != 0 || res.RegistryChanged {
+	if len(res.Created) != 0 || len(res.Recreate) != 0 {
 		t.Errorf("segunda rodada mexeu: %+v", res)
 	}
 	for n, v := range snapshot {
@@ -93,7 +139,7 @@ func TestEnsureSecretsSoDasStacksAtivas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Missing) != 0 || res.RegistryChanged {
+	if len(res.Missing) != 0 || len(res.Recreate) != 0 {
 		t.Errorf("sem woodpecker/registry nao pede github nem cria htpasswd: %+v", res)
 	}
 	for _, n := range res.Created {

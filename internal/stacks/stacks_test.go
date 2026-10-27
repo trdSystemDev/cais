@@ -199,18 +199,26 @@ func TestTLSAutoassinadoParaTesteLocal(t *testing.T) {
 		if strings.Contains(text, "AUTO_LETS_ENCRYPT") {
 			t.Errorf("%s pede Let's Encrypt em modo autoassinado", name)
 		}
-		if !strings.Contains(text, `bunkerweb.GENERATE_SELF_SIGNED_SSL: "yes"`) {
-			t.Errorf("%s sem certificado autoassinado", name)
+		if !strings.Contains(text, `bunkerweb.CUSTOM_SSL_CERT: "/run/secrets/tls_cert"`) {
+			t.Errorf("%s sem o certificado da CA local", name)
 		}
 	}
-	r, _ := render(t, "registry", c)
-	if !strings.Contains(string(r.Compose), `SELF_SIGNED_SSL_SUBJ: "/CN=registry.trd.localhost/"`) {
-		t.Error("certificado do registry com nome errado")
+	// o scheduler e quem le o certificado
+	r, _ := render(t, "proxy", c)
+	if !slices.Contains(r.Secrets, "tls_cert") || !slices.Contains(r.Secrets, "tls_key") {
+		t.Errorf("proxy nao monta o certificado: %v", r.Secrets)
+	}
+	if !strings.Contains(string(r.Compose), "      - tls_cert\n      - tls_key") {
+		t.Error("bw-scheduler sem os secrets do certificado")
 	}
 
 	c.TLS = ""
+	r, _ = render(t, "proxy", c)
+	if slices.Contains(r.Secrets, "tls_cert") {
+		t.Error("Let's Encrypt nao usa certificado da CA local")
+	}
 	r, _ = render(t, "registry", c)
-	if !strings.Contains(string(r.Compose), `bunkerweb.AUTO_LETS_ENCRYPT: "yes"`) || strings.Contains(string(r.Compose), "SELF_SIGNED") {
+	if !strings.Contains(string(r.Compose), `bunkerweb.AUTO_LETS_ENCRYPT: "yes"`) || strings.Contains(string(r.Compose), "CUSTOM_SSL") {
 		t.Error("padrao tem que ser Let's Encrypt")
 	}
 }

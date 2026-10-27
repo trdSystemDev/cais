@@ -26,8 +26,10 @@ services:
 {{- if .LetsEncrypt}}
       bunkerweb.AUTO_LETS_ENCRYPT: "yes"
 {{- else}}
-      bunkerweb.GENERATE_SELF_SIGNED_SSL: "yes"
-      bunkerweb.SELF_SIGNED_SSL_SUBJ: "/CN={{.CIHost}}/"
+      # certificado da CA local (tls: selfsigned), montado no bw-scheduler
+      bunkerweb.USE_CUSTOM_SSL: "yes"
+      bunkerweb.CUSTOM_SSL_CERT: "/run/secrets/tls_cert"
+      bunkerweb.CUSTOM_SSL_KEY: "/run/secrets/tls_key"
 {{- end}}
     secrets:
       - github_client_secret

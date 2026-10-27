@@ -47,6 +47,12 @@ services:
       EMAIL_LETS_ENCRYPT: "{{.Email}}"
     secrets:
       - DATABASE_URI
+{{- if not .LetsEncrypt}}
+      # tls: selfsigned -- certificado da CA local do cais, usado pelos sites
+      # via USE_CUSTOM_SSL (quem le o arquivo e o scheduler)
+      - tls_cert
+      - tls_key
+{{- end}}
     volumes:
       - bw_storage:/data
     networks:
@@ -144,3 +150,9 @@ secrets:
     file: "{{secret "db_bunkerweb_password"}}"
   DATABASE_URI:
     file: "{{secret "database_uri"}}"
+{{- if not .LetsEncrypt}}
+  tls_cert:
+    file: "{{secret "tls_cert"}}"
+  tls_key:
+    file: "{{secret "tls_key"}}"
+{{- end}}

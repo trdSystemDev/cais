@@ -169,6 +169,15 @@ O `run` sobe as stacks em ordem com `docker compose up -d --wait` (cada uma
 saudavel antes da proxima) e termina com o `docker login` da VPS no registry.
 Antes, o DNS de `ci.`, `db.` e `registry.<dominio>` precisa apontar pra VPS.
 
+Pra testar num PC, sem DNS publico: use um dominio `.localhost` (o
+systemd-resolved e os navegadores ja resolvem `*.localhost` pra 127.0.0.1; `.local`
+e recusado porque e do mDNS) e `--tls selfsigned`. O cais cria uma CA local
+restrita ao dominio do teste (name constraints: nao assina nada fora dele) e um
+certificado com SAN pra todos os nomes; o `setup run` termina mostrando como
+confiar nela (`/etc/docker/certs.d/<registry>/ca.crt` pro docker, `trust anchor`
+pro sistema). Use `CAIS_SOCKET`, `CAIS_CONFIG` e `CAIS_DATA_DIR` numa pasta
+persistente (nao `/tmp`: os volumes sobrevivem ao reboot e os secrets nao).
+
 Acesso ao registry de imagens:
 
 ```sh
