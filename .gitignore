@@ -1,4 +1,5 @@
 dist/
+/cais
 *.exe
 .env
 /secrets/

@@ -9,11 +9,19 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/rpc"
 )
+
+// simScreen e a tela simulada junto com a App que desenha nela. O tview
+// desenha segurando o lock da App, entao ler a tela exige o mesmo lock.
+type simScreen struct {
+	tcell.SimulationScreen
+	app *tview.Application
+}
 
 func okChecker(context.Context) docker.Status {
 	return docker.Status{ClientVersion: "29.0.1", ServerVersion: "29.0.1", ComposeVersion: "2.40.0"}
@@ -29,7 +37,7 @@ func missingChecker(context.Context) docker.Status {
 
 // startSim sobe a App numa tela simulada 100x30 e devolve a tela pra
 // inspecao. A App e parada no fim do teste.
-func startSim(t *testing.T, check func(context.Context) docker.Status) tcell.SimulationScreen {
+func startSim(t *testing.T, check func(context.Context) docker.Status) *simScreen {
 	t.Helper()
 	sim, _ := startSimCore(t, check)
 	return sim
@@ -37,14 +45,14 @@ func startSim(t *testing.T, check func(context.Context) docker.Status) tcell.Sim
 
 // startSimCore e como startSim, mas devolve tambem o core, pra testes que
 // disparam acoes por fora da interface (como o MCP vai fazer).
-func startSimCore(t *testing.T, check func(context.Context) docker.Status) (tcell.SimulationScreen, *core.Core) {
+func startSimCore(t *testing.T, check func(context.Context) docker.Status) (*simScreen, *core.Core) {
 	t.Helper()
 	c := core.New(core.Deps{CheckDocker: check})
 	return startSimAPI(t, c), c
 }
 
 // startSimAPI sobe a App em cima de qualquer core.API (local ou rpc.Client).
-func startSimAPI(t *testing.T, api core.API) tcell.SimulationScreen {
+func startSimAPI(t *testing.T, api core.API) *simScreen {
 	t.Helper()
 	a := New(api)
 	sim := tcell.NewSimulationScreen("UTF-8")
@@ -59,10 +67,13 @@ func startSimAPI(t *testing.T, api core.API) tcell.SimulationScreen {
 			t.Errorf("Run devolveu erro: %v", err)
 		}
 	})
-	return sim
+	return &simScreen{SimulationScreen: sim, app: a.app}
 }
 
-func screenText(sim tcell.SimulationScreen) []string {
+func screenText(sim *simScreen) []string {
+	// GetContents devolve o buffer interno da tela, nao uma copia
+	sim.app.RLock()
+	defer sim.app.RUnlock()
 	cells, w, h := sim.GetContents()
 	rows := make([]string, h)
 	for y := 0; y < h; y++ {
@@ -81,7 +92,7 @@ func screenText(sim tcell.SimulationScreen) []string {
 }
 
 // waitFor espera ate o texto aparecer em alguma linha da tela.
-func waitFor(t *testing.T, sim tcell.SimulationScreen, text string) {
+func waitFor(t *testing.T, sim *simScreen, text string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -97,7 +108,7 @@ func waitFor(t *testing.T, sim tcell.SimulationScreen, text string) {
 
 // click simula um clique (aperta e solta) do botao esquerdo no texto
 // informado, procurando-o na linha y.
-func click(t *testing.T, sim tcell.SimulationScreen, y int, text string) {
+func click(t *testing.T, sim *simScreen, y int, text string) {
 	t.Helper()
 	x := strings.Index(screenText(sim)[y], text)
 	if x < 0 {
