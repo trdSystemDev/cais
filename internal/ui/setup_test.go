@@ -63,7 +63,7 @@ func TestSetupSemConfigPedePraPreencher(t *testing.T) {
 	sim, _ := openSetup(t, c)
 	waitFor(t, sim, "Ainda sem configuracao")
 	// padrao ja vem marcado no form: proxy, bancos, registry, woodpecker
-	waitFor(t, sim, "postgres         X")
+	waitFor(t, sim, "postgres         [x]")
 }
 
 func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {

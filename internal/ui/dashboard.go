@@ -57,16 +57,16 @@ func renderEnvironment(e core.Environment) string {
 	line(&b, "CLI", e.Docker.CLI)
 	if !e.Docker.Installed {
 		// sem o CLI nao da pra checar o resto; nao repete a mesma mensagem
-		b.WriteString("   [gray]-  Daemon   depende do CLI\n")
-		b.WriteString("   [gray]-  Compose  depende do CLI\n")
+		b.WriteString("   " + tagMuted + "-  Daemon   depende do CLI" + tagNormal + "\n")
+		b.WriteString("   " + tagMuted + "-  Compose  depende do CLI" + tagNormal + "\n")
 	} else {
 		line(&b, "Daemon", e.Docker.Daemon)
 		line(&b, "Compose", e.Docker.Compose)
 	}
 
 	b.WriteString("\n [::b]Sistema[::-]\n")
-	fmt.Fprintf(&b, "   [gray]Host     [white]%s\n", tview.Escape(e.Host.Hostname))
-	fmt.Fprintf(&b, "   [gray]Sistema  [white]%s/%s\n", e.Host.OS, e.Host.Arch)
+	fmt.Fprintf(&b, "   %sHost     %s%s\n", tagMuted, tagNormal, tview.Escape(e.Host.Hostname))
+	fmt.Fprintf(&b, "   %sSistema  %s%s/%s\n", tagMuted, tagNormal, e.Host.OS, e.Host.Arch)
 	if !e.Host.Supported() {
 		b.WriteString("   [yellow]! O cais foi feito pra rodar na VPS Linux; aqui so da pra navegar na interface.\n")
 	}
@@ -77,16 +77,16 @@ func renderEnvironment(e core.Environment) string {
 	} else {
 		b.WriteString(" [red::b]Resolva os itens em vermelho[-::-] antes de usar o Setup.\n")
 	}
-	fmt.Fprintf(&b, "\n [gray]Ultima verificacao: %s\n", e.CheckedAt.Local().Format("02/01/2006 15:04:05"))
+	fmt.Fprintf(&b, "\n %sUltima verificacao: %s%s\n", tagMuted, e.CheckedAt.Local().Format("02/01/2006 15:04:05"), tagNormal)
 	return b.String()
 }
 
 func line(b *strings.Builder, label string, c core.Component) {
 	if !c.OK() {
-		fmt.Fprintf(b, "   [red]x[-] [gray]%-8s [red]%s\n", label, tview.Escape(firstLine(c.Error)))
+		fmt.Fprintf(b, "   [red]x[-] %s%-8s%s [red]%s[-]\n", tagMuted, label, tagNormal, tview.Escape(firstLine(c.Error)))
 		return
 	}
-	fmt.Fprintf(b, "   [green]v[-] [gray]%-8s [white]%s\n", label, tview.Escape(c.Version))
+	fmt.Fprintf(b, "   [green]v[-] %s%-8s%s %s\n", tagMuted, label, tagNormal, tview.Escape(c.Version))
 }
 
 // firstLine corta mensagens de erro longas do docker (que as vezes vem

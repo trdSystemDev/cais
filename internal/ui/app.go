@@ -10,13 +10,6 @@ import (
 	"github.com/trdSystemDev/cais/internal/core"
 )
 
-var (
-	styleTab       = tcell.StyleDefault.Foreground(tcell.ColorSilver).Background(tcell.ColorDefault)
-	styleTabFocus  = tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorDarkSlateGray)
-	styleTabActive = tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorNavy).Bold(true)
-	styleQuit      = tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorMaroon)
-)
-
 type tab struct {
 	name   string
 	button *tview.Button
@@ -41,6 +34,7 @@ type App struct {
 
 // New monta a interface. Nada e desenhado ate Run ser chamado.
 func New(c core.API) *App {
+	applyTheme()
 	a := &App{
 		core:  c,
 		app:   tview.NewApplication().EnableMouse(true),
@@ -68,7 +62,7 @@ func New(c core.API) *App {
 
 	footer := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [gray]Clique nas abas e botoes  ·  [white]1-6[gray] troca de aba  ·  [white]Tab[gray] proximo campo  ·  [white]Ctrl+Q[gray] sai")
+		SetText(" " + tagMuted + "Clique nas abas e botoes  ·  " + tagNormal + "1-6" + tagMuted + " troca de aba  ·  " + tagNormal + "Tab" + tagMuted + " proximo campo  ·  " + tagNormal + "Ctrl+Q" + tagMuted + " sai")
 
 	root := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(tabBar, 1, 0, false).
@@ -209,6 +203,6 @@ func placeholder(title string, phase int, desc string) tview.Primitive {
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
 	tv.SetBorder(true).SetTitle(" " + title + " ")
-	tv.SetText("\n\n[::b]" + title + "[::-]\n\n[gray]" + desc + "\n\n[yellow]Em construcao -- chega na fase " + strconv.Itoa(phase))
+	tv.SetText("\n\n[::b]" + title + "[::-]\n\n" + tagMuted + desc + tagNormal + "\n\n[yellow]Em construcao -- chega na fase " + strconv.Itoa(phase))
 	return tv
 }

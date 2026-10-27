@@ -86,6 +86,7 @@ func newSetupPage(app *tview.Application, c core.API) *setupPage {
 	// sem linha em branco entre os campos: o form inteiro cabe em ~20
 	// linhas e os botoes aparecem mesmo num terminal de 30
 	p.form.SetItemPadding(0)
+	styleForm(p.form)
 	p.form.SetBorder(true).SetTitle(" Configuracao ")
 
 	p.panel.SetBorder(true).SetTitle(" Plano ")
@@ -271,7 +272,7 @@ func renderPlan(p bootstrap.Plan) string {
 	if !p.Configured {
 		b.WriteString("\n [yellow]Ainda sem configuracao.[-]\n\n Preencha dominio e e-mail, escolha as stacks e clique em [::b]Salvar[::-].\n")
 		for _, pr := range p.Problems {
-			fmt.Fprintf(&b, "\n [gray]%s\n", tview.Escape(pr))
+			fmt.Fprintf(&b, "\n %s%s%s\n", tagMuted, tview.Escape(pr), tagNormal)
 		}
 		return b.String()
 	}
@@ -280,18 +281,18 @@ func renderPlan(p bootstrap.Plan) string {
 	for _, s := range p.Stacks {
 		color := map[string]string{bootstrap.ChangeNew: "green", bootstrap.ChangeModified: "yellow"}[s.Change]
 		if color == "" {
-			color = "gray"
+			color = "-" // igual: cor do terminal
 		}
-		fmt.Fprintf(&b, "   %-11s [%s]%-9s[-] [gray]%s\n", s.Name, color, s.Change, tview.Escape(s.Desc))
+		fmt.Fprintf(&b, "   %-11s [%s]%-9s[-] %s%s%s\n", s.Name, color, s.Change, tagMuted, tview.Escape(s.Desc), tagNormal)
 	}
 	if len(p.Disable) > 0 {
-		b.WriteString("\n [::b]Desativadas[::-] [gray](derrubadas no Setup; os volumes ficam)[-]\n")
+		b.WriteString("\n [::b]Desativadas[::-] " + tagMuted + "(derrubadas no Setup; os volumes ficam)" + tagNormal + "\n")
 		for _, s := range p.Disable {
-			fmt.Fprintf(&b, "   %-11s [gray]%s\n", s.Name, tview.Escape(s.Desc))
+			fmt.Fprintf(&b, "   %-11s %s%s%s\n", s.Name, tagMuted, tview.Escape(s.Desc), tagNormal)
 		}
 	}
 	if len(p.CreateSecrets) > 0 {
-		fmt.Fprintf(&b, "\n [::b]Secrets a gerar[::-]\n   [gray]%s\n", strings.Join(p.CreateSecrets, ", "))
+		fmt.Fprintf(&b, "\n [::b]Secrets a gerar[::-]\n   %s\n", strings.Join(p.CreateSecrets, ", "))
 	}
 	if len(p.Problems) > 0 {
 		b.WriteString("\n [red::b]Problemas[-::-]\n")
@@ -317,7 +318,7 @@ func renderPlan(p bootstrap.Plan) string {
 }
 
 var stepMark = map[bootstrap.Status]string{
-	bootstrap.Pending: "[gray] .. ",
+	bootstrap.Pending: tagMuted + " .. ",
 	bootstrap.Running: "[yellow] >> ",
 	bootstrap.Done:    "[green] ok ",
 	bootstrap.Failed:  "[red] !! ",
@@ -331,9 +332,9 @@ func renderRun(s core.Setup, running bool, plan bootstrap.Plan) string {
 		return b.String()
 	}
 	for _, st := range s.Steps {
-		fmt.Fprintf(&b, "%s[-]%s", stepMark[st.Status], tview.Escape(st.Desc))
+		fmt.Fprintf(&b, "%s%s%s", stepMark[st.Status], tagNormal, tview.Escape(st.Desc))
 		if st.Detail != "" && st.Status != bootstrap.Failed {
-			fmt.Fprintf(&b, " [gray]-- %s", tview.Escape(st.Detail))
+			fmt.Fprintf(&b, " %s-- %s%s", tagMuted, tview.Escape(st.Detail), tagNormal)
 		}
 		b.WriteString("\n")
 	}
@@ -341,7 +342,7 @@ func renderRun(s core.Setup, running bool, plan bootstrap.Plan) string {
 	case running:
 		b.WriteString("\n [yellow]Executando... pode sair da tela: o Setup continua no daemon.\n")
 	case s.Error != "":
-		fmt.Fprintf(&b, "\n [red::b]Parou:[-::-] [red]%s\n\n [gray]Corrija e execute de novo: nada que ja existe e refeito.\n", tview.Escape(s.Error))
+		fmt.Fprintf(&b, "\n [red::b]Parou:[-::-] [red]%s[-]\n\n %sCorrija e execute de novo: nada que ja existe e refeito.%s\n", tview.Escape(s.Error), tagMuted, tagNormal)
 	default:
 		b.WriteString("\n [green::b]Setup concluido.[-::-]\n")
 		renderAccess(&b, plan)
@@ -353,19 +354,19 @@ func renderRun(s core.Setup, running bool, plan bootstrap.Plan) string {
 // confiar na CA local.
 func renderAccess(b *strings.Builder, p bootstrap.Plan) {
 	if len(p.Databases) > 0 {
-		b.WriteString("\n [::b]Bancos[::-] [gray](so por tunel SSH)[-]\n")
-		fmt.Fprintf(b, "   [white]%s\n", tview.Escape(p.Tunnel))
+		b.WriteString("\n [::b]Bancos[::-] " + tagMuted + "(so por tunel SSH)" + tagNormal + "\n")
+		fmt.Fprintf(b, "   %s\n", tview.Escape(p.Tunnel))
 		for _, d := range p.Databases {
-			fmt.Fprintf(b, "   [gray]%-8s localhost:%-5s usuario %-8s senha: sudo cat %s\n",
+			fmt.Fprintf(b, "   %-8s localhost:%-5s usuario %-8s senha: sudo cat %s\n",
 				d.Name, strconv.Itoa(d.Port), d.User, tview.Escape(d.PasswordFile))
 		}
 	}
 	if p.CAFile != "" {
-		b.WriteString("\n [::b]CA local[::-] [gray](confie nela nesta maquina)[-]\n")
+		b.WriteString("\n [::b]CA local[::-] " + tagMuted + "(confie nela nesta maquina)" + tagNormal + "\n")
 		if p.Config.HasStack("registry") {
 			dir := "/etc/docker/certs.d/" + p.Config.RegistryHost()
-			fmt.Fprintf(b, "   [gray]sudo mkdir -p %s\n   sudo cp %s %s/ca.crt\n", dir, tview.Escape(p.CAFile), dir)
+			fmt.Fprintf(b, "   sudo mkdir -p %s\n   sudo cp %s %s/ca.crt\n", dir, tview.Escape(p.CAFile), dir)
 		}
-		fmt.Fprintf(b, "   [gray]sudo trust anchor --store %s\n", tview.Escape(p.CAFile))
+		fmt.Fprintf(b, "   sudo trust anchor --store %s\n", tview.Escape(p.CAFile))
 	}
 }
