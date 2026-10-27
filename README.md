@@ -63,14 +63,41 @@ Regras:
 | `internal/bootstrap` | assistente da VPS vazia |
 | `internal/stacks` | stacks base + `templates/` embutidos |
 | `internal/docker` | checagem, SDK do Docker e `docker compose` |
-| `internal/compose` | parse e validacao (regras do `deploy.sh`) |
+| `internal/compose` | parse e validacao do compose (recusa escalada pro host) |
 | `internal/secrets` | secrets centrais e por app |
 | `internal/databases` | databases/usuarios Postgres e MySQL |
-| `internal/apps` | apps em `/deploy/apps/<app>` |
+| `internal/apps` | apps em `/var/lib/cais/apps/<app>` |
 | `internal/github` | link do GitHub, deteccao de CI |
 | `internal/woodpecker` | cliente da API do Woodpecker |
-| `internal/config` | `/etc/cais/config.yaml` |
-| `assets/` | `deploy.sh` (forced command), CI de exemplo e unidade systemd |
+| `internal/config` | `/etc/cais/config.yaml` e os caminhos no disco |
+| `assets/` | CI de exemplo e unidade systemd |
+
+## Diretorios na VPS
+
+| Caminho | Conteudo |
+|---|---|
+| `/etc/cais/config.yaml` | configuracao: dominio base, e-mail, stacks ativas |
+| `/var/lib/cais/stacks/<stack>/` | compose das stacks base (proxy, infra, woodpecker, dbgate) |
+| `/var/lib/cais/apps/<app>/` | compose do app e `secrets/` dele |
+| `/var/lib/cais/secrets/` | secrets centrais (senhas das instancias de banco etc.) |
+| `/var/lib/cais/backups/` | backups |
+| `/run/cais/cais.sock` | socket do daemon |
+
+`/etc/cais` e `/var/lib/cais` sao criados pelo systemd (`ConfigurationDirectory`
+e `StateDirectory`); `/var/lib/cais` e `0700`, so o daemon escreve nele. Os
+caminhos ficam em `internal/config/paths.go` e podem ser trocados por
+`CAIS_CONFIG` e `CAIS_DATA_DIR` (ex: pra testar no PC).
+
+Secrets ficam em texto puro em `/var/lib/cais` (pasta root `0700`, arquivos
+`0444`) e chegam ao container por `secrets: file: ./secrets/<nome>`. Nunca em
+`environment:`; o valor nunca aparece no estado, em log ou na TUI; backups saem
+criptografados com [age](https://age-encryption.org) para uma chave publica
+cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
+
+Nao ha script de deploy no host: o CI faz `ssh deploy@vps <app> < docker-compose.yml`
+e o forced command da chave e o proprio `cais deploy` (fase 3), que manda o
+compose pro daemon pelo socket. O daemon valida, grava e roda `pull`/`up -d`,
+e o usuario `deploy` nao tem acesso a nenhum arquivo.
 
 Os arquivos em `internal/stacks/templates/` sao copia dos compose do repo `VPS`
 e ainda serao parametrizados (dominio, e-mail etc.) na fase 2.

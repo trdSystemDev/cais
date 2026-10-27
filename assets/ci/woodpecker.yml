@@ -5,19 +5,20 @@
 # Cadastrar como secrets do repo no Woodpecker (repo > Settings > Secrets):
 #   registry_user       usuario gerado em scripts/registry-init.sh
 #   registry_password   senha gerada em scripts/registry-init.sh
-#   deploy_ssh_key      chave privada (a publica vai pro authorized_keys da VPS,
-#                       ver woodpecker/deploy/authorized_keys.example)
+#   deploy_ssh_key      chave privada; a publica vai pro authorized_keys do
+#                       usuario "deploy" na VPS com o cais como forced command:
+#                       command="/usr/local/bin/cais deploy",restrict ssh-ed25519 AAAA...
 #
 # Nao tem nome de app hardcoded aqui -- usa $CI_REPO_NAME (variavel embutida
 # do Woodpecker, nome do repositorio) em tudo. Por isso o nome do repositorio
-# Git precisa ser IDENTICO ao nome usado no apps-tui pra criar a pasta em
-# /deploy/apps/<nome> na VPS. Se os nomes divergirem, o deploy.sh rejeita
-# com "servico desconhecido" (falha visivel, nao silenciosa).
+# Git precisa ser IDENTICO ao nome do app criado no cais (pasta
+# /var/lib/cais/apps/<nome> na VPS). Se os nomes divergirem, o cais deploy
+# rejeita com "app desconhecido" (falha visivel, nao silenciosa).
 #
 # O docker-compose.yml deste repo precisa referenciar a imagem com a tag
 # "REPLACE_TAG" (ex: "image: registry:5000/minha-app:REPLACE_TAG"), nunca
 # "latest". O step de deploy troca esse texto pelo hash do commit antes de
-# mandar pro deploy.sh -- assim cada deploy fica atrelado a um commit exato,
+# mandar pro cais deploy -- assim cada deploy fica atrelado a um commit exato,
 # nao a uma tag flutuante, e rollback vira so reaplicar um docker-compose.yml
 # antigo (o hash do commit anterior ja esta gravado nele).
 #
@@ -52,12 +53,12 @@ steps:
       - mkdir -p ~/.ssh
       - ssh-keyscan -H "$HOST_IP" >> ~/.ssh/known_hosts
       # troca o placeholder REPLACE_TAG pelo hash do commit atual, deixando
-      # o arquivo com uma tag concreta antes de mandar pro deploy.sh
+      # o arquivo com uma tag concreta antes de mandar pro cais deploy
       - sed -i "s/REPLACE_TAG/${CI_COMMIT_SHA}/" docker-compose.yml
       # o docker-compose.yml deste repo (so estrutura, nenhum secret dentro)
-      # viaja pelo stdin do ssh; o deploy.sh na VPS substitui o existente,
-      # filtra padroes perigosos, e so entao roda pull+up. secrets/ na VPS
-      # nunca e tocado por aqui.
+      # viaja pelo stdin do ssh; o cais deploy na VPS manda pro daemon, que
+      # valida (recusa padroes perigosos), substitui o existente e so entao
+      # roda pull+up. secrets/ na VPS nunca e tocado por aqui.
       - ssh deploy@"$HOST_IP" "$CI_REPO_NAME" < docker-compose.yml
     when:
       - branch: main

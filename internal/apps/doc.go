@@ -1,2 +1,2 @@
-// Package apps provisiona apps em /deploy/apps/<app> e executa deploy, restart, stop e logs.
+// Package apps provisiona apps em /var/lib/cais/apps/<app> (ver config.AppDir) e executa deploy, restart, stop e logs.
 package apps

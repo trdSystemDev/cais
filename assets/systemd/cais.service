@@ -22,6 +22,12 @@ RestartSec=2
 # cria /run/cais (e apaga ao parar) com permissao so pro root
 RuntimeDirectory=cais
 RuntimeDirectoryMode=0755
+# /etc/cais: config.yaml, editavel pelo admin
+ConfigurationDirectory=cais
+ConfigurationDirectoryMode=0755
+# /var/lib/cais: stacks, apps, secrets e backups -- so o daemon mexe
+StateDirectory=cais
+StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
