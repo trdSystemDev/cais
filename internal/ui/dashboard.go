@@ -1,99 +1,69 @@
 package ui
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
-	"github.com/rivo/tview"
+	"charm.land/lipgloss/v2"
 
 	"github.com/trdSystemDev/cais/internal/core"
 )
 
-// dashboard mostra o estado do ambiente. Nao guarda estado proprio: o
-// botao so dispara a acao no core, e render redesenha a partir da foto
-// que o core publica (venha a acao daqui, do MCP ou de onde for).
-type dashboard struct {
-	*tview.Flex
-	status *tview.TextView
-	button *tview.Button
-}
+// viewDashboard mostra o estado do ambiente. Nao guarda estado proprio: o
+// botao so dispara a acao no core, e a tela sai da foto que o core publica
+// (venha a acao daqui, do MCP ou de onde for).
+func (m *model) viewDashboard(h int) string {
+	e := m.state.Environment
+	body := m.th.bold().Render("Ambiente") + "\n" + m.renderEnvironment(e)
 
-func newDashboard(c core.API) *dashboard {
-	d := &dashboard{
-		Flex:   tview.NewFlex().SetDirection(tview.FlexRow),
-		status: tview.NewTextView().SetDynamicColors(true),
+	btn := m.th.pill(false)
+	if e.Checking {
+		btn = m.th.disabledPill()
 	}
-	d.status.SetBorder(true).SetTitle(" Ambiente ")
-
-	d.button = tview.NewButton("Verificar novamente").SetSelectedFunc(func() {
-		go c.CheckEnvironment(context.Background())
-	})
-
-	buttons := tview.NewFlex().
-		AddItem(tview.NewBox(), 1, 0, false).
-		AddItem(d.button, 23, 0, true).
-		AddItem(tview.NewBox(), 0, 1, false)
-
-	d.AddItem(d.status, 0, 1, false).
-		AddItem(tview.NewBox(), 1, 0, false).
-		AddItem(buttons, 1, 0, true).
-		AddItem(tview.NewBox(), 1, 0, false)
-	return d
+	button := m.zones.Mark("check", btn.Render("Verificar novamente"))
+	return m.th.panel(false, m.w-2, h-2).Render(body + "\n\n" + button)
 }
 
-func (d *dashboard) render(s core.State) {
-	d.status.SetText(renderEnvironment(s.Environment))
-	d.button.SetDisabled(s.Environment.Checking)
-}
-
-func renderEnvironment(e core.Environment) string {
+func (m *model) renderEnvironment(e core.Environment) string {
+	t := m.th
+	muted := t.fg(t.muted)
 	if e.Checking || !e.Checked() {
-		return "\n [yellow]Verificando o ambiente..."
+		return "\n" + t.fg(t.warn).Render("Verificando o ambiente...")
 	}
 
 	var b strings.Builder
-	b.WriteString("\n [::b]Docker[::-]\n")
-	line(&b, "CLI", e.Docker.CLI)
+	b.WriteString("\n" + t.bold().Render("Docker") + "\n")
+	b.WriteString(m.component("CLI", e.Docker.CLI))
 	if !e.Docker.Installed {
 		// sem o CLI nao da pra checar o resto; nao repete a mesma mensagem
-		b.WriteString("   " + tagMuted + "-  Daemon   depende do CLI" + tagNormal + "\n")
-		b.WriteString("   " + tagMuted + "-  Compose  depende do CLI" + tagNormal + "\n")
+		b.WriteString(muted.Render("  -  Daemon   depende do CLI") + "\n")
+		b.WriteString(muted.Render("  -  Compose  depende do CLI") + "\n")
 	} else {
-		line(&b, "Daemon", e.Docker.Daemon)
-		line(&b, "Compose", e.Docker.Compose)
+		b.WriteString(m.component("Daemon", e.Docker.Daemon))
+		b.WriteString(m.component("Compose", e.Docker.Compose))
 	}
 
-	b.WriteString("\n [::b]Sistema[::-]\n")
-	fmt.Fprintf(&b, "   %sHost     %s%s\n", tagMuted, tagNormal, tview.Escape(e.Host.Hostname))
-	fmt.Fprintf(&b, "   %sSistema  %s%s/%s\n", tagMuted, tagNormal, e.Host.OS, e.Host.Arch)
+	b.WriteString("\n" + t.bold().Render("Sistema") + "\n")
+	b.WriteString("  " + muted.Render("Host     ") + e.Host.Hostname + "\n")
+	b.WriteString("  " + muted.Render("Sistema  ") + e.Host.OS + "/" + e.Host.Arch + "\n")
 	if !e.Host.Supported() {
-		b.WriteString("   [yellow]! O cais foi feito pra rodar na VPS Linux; aqui so da pra navegar na interface.\n")
+		b.WriteString(t.fg(t.warn).Render("  ! O cais foi feito pra rodar na VPS Linux; aqui so da pra navegar na interface.") + "\n")
 	}
 
 	b.WriteString("\n")
 	if e.Ready() {
-		b.WriteString(" [green::b]Pronto.[-::-] O Docker esta funcionando -- o proximo passo e a aba Setup.\n")
+		b.WriteString(t.fg(t.ok).Bold(true).Render("Pronto.") + " O Docker esta funcionando -- o proximo passo e a aba Setup.\n")
 	} else {
-		b.WriteString(" [red::b]Resolva os itens em vermelho[-::-] antes de usar o Setup.\n")
+		b.WriteString(t.fg(t.danger).Bold(true).Render("Resolva os itens em vermelho") + " antes de usar o Setup.\n")
 	}
-	fmt.Fprintf(&b, "\n %sUltima verificacao: %s%s\n", tagMuted, e.CheckedAt.Local().Format("02/01/2006 15:04:05"), tagNormal)
+	b.WriteString("\n" + muted.Render("Ultima verificacao: "+e.CheckedAt.Local().Format("02/01/2006 15:04:05")))
 	return b.String()
 }
 
-func line(b *strings.Builder, label string, c core.Component) {
+func (m *model) component(label string, c core.Component) string {
+	t := m.th
+	name := t.fg(t.muted).Render(lipgloss.NewStyle().Width(8).Render(label))
 	if !c.OK() {
-		fmt.Fprintf(b, "   [red]x[-] %s%-8s%s [red]%s[-]\n", tagMuted, label, tagNormal, tview.Escape(firstLine(c.Error)))
-		return
+		return "  " + t.fg(t.danger).Render("✗") + " " + name + " " + t.fg(t.danger).Render(firstLine(c.Error)) + "\n"
 	}
-	fmt.Fprintf(b, "   [green]v[-] %s%-8s%s %s\n", tagMuted, label, tagNormal, tview.Escape(c.Version))
-}
-
-// firstLine corta mensagens de erro longas do docker (que as vezes vem
-// com varias linhas de dica) pra caber numa linha da tela.
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
+	return "  " + t.fg(t.ok).Render("✓") + " " + name + " " + c.Version + "\n"
 }

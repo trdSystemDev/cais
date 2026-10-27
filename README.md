@@ -1,6 +1,6 @@
 # cais
 
-Painel TUI (Go + tview, com suporte a mouse) para preparar e administrar uma VPS
+Painel TUI (Go + Bubble Tea/Lip Gloss, com suporte a mouse) para preparar e administrar uma VPS
 que so tem Docker instalado: Traefik, registry, bancos Postgres/MySQL,
 secrets por app e CI com Woodpecker.
 
@@ -50,7 +50,7 @@ Regras:
   recente; leitor lento perde fotos intermediarias, mas nunca trava o core. Uma
   acao disparada pelo MCP atualiza a TUI aberta sem nenhum codigo extra.
 - **Nucleo sem tela.** `internal/core/arch_test.go` falha se qualquer pacote
-  fora de `internal/ui` importar tview/tcell.
+  fora de `internal/ui` importar as libs de tela (Bubble Tea, Lip Gloss).
 
 ## Estrutura
 
@@ -59,7 +59,7 @@ Regras:
 | `cmd/cais` | ponto de entrada: monta o core e a interface |
 | `internal/core` | estado, acoes e inscricoes -- o que as interfaces usam |
 | `internal/rpc` | socket do daemon: servidor, cliente (`core.API`) e protocolo |
-| `internal/ui` | paginas tview clicaveis (so le estado e chama acoes) |
+| `internal/ui` | TUI em Bubble Tea, clicavel (so le estado e chama acoes); cores pelo fundo do terminal |
 | `internal/bootstrap` | assistente da VPS vazia |
 | `internal/stacks` | stacks base + `templates/` embutidos |
 | `internal/docker` | checagem, SDK do Docker e `docker compose` |
@@ -164,7 +164,7 @@ e os builds do CI rodam fora da rede deles.
 
 ## Roadmap
 
-1. Esqueleto: layout tview com abas clicaveis, checagem de Docker/Compose
+1. Esqueleto: TUI com abas clicaveis, checagem de Docker/Compose
 2. Bootstrap: templates das stacks + assistente da VPS vazia
 3. Apps e secrets: logs ao vivo, restart, propagar secret
 4. Bancos

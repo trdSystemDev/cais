@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/trdSystemDev/cais/internal/charmui"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/rpc"
 	"github.com/trdSystemDev/cais/internal/ui"
@@ -56,8 +55,6 @@ func main() {
 	switch cmd {
 	case "tui":
 		err = runTUI(args)
-	case "charm":
-		err = runCharm(args) // prototipo: aba Setup com Bubble Tea
 	case "daemon":
 		err = runDaemon(args)
 	case "state":
@@ -139,18 +136,6 @@ func runTUI(args []string) error {
 	}
 	defer c.Close()
 	return ui.New(c).Run()
-}
-
-func runCharm(args []string) error {
-	fs, socket := newFlags("charm")
-	fs.Parse(args)
-
-	c, err := connect(*socket)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	return charmui.Run(c)
 }
 
 func runState(args []string) error {

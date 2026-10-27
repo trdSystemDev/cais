@@ -1,87 +1,63 @@
 package ui
 
 import (
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
+	"image/color"
+
+	"charm.land/lipgloss/v2"
 )
 
-// Cores da TUI. Regra: o que tem fundo proprio (botoes, abas, item em foco)
-// define fundo E texto em RGB, nunca pela paleta ANSI do terminal -- cada
-// tema remapeia "azul" e "amarelo" e a combinacao pode ficar ilegivel (o
-// padrao do tview, texto amarelo em fundo azul, sumia num tema claro). O
-// resto usa as cores do proprio terminal, que o tema ja deixa legiveis.
-var (
-	rgbText   = tcell.NewRGBColor(0xf2, 0xf4, 0xf8)
-	rgbInk    = tcell.NewRGBColor(0x16, 0x1a, 0x21)
-	rgbSlate  = tcell.NewRGBColor(0x3b, 0x47, 0x5a)
-	rgbAccent = tcell.NewRGBColor(0x7f, 0xd1, 0xae)
-	rgbOff    = tcell.NewRGBColor(0x2b, 0x30, 0x38)
-	rgbOffTxt = tcell.NewRGBColor(0x8b, 0x93, 0xa1)
-	rgbDanger = tcell.NewRGBColor(0xb3, 0x3a, 0x3a)
-	rgbField  = tcell.NewRGBColor(0x2f, 0x37, 0x46)
-	rgbHint   = tcell.NewRGBColor(0x9a, 0xa3, 0xb2)
-
-	// campos: fundo e texto explicitos (o Form troca o estilo inteiro do
-	// campo pelas cores dele a cada desenho, entao atributo como sublinhado
-	// nao sobrevive; so cor)
-	styleField       = tcell.StyleDefault.Foreground(rgbText).Background(rgbField)
-	stylePlaceholder = tcell.StyleDefault.Foreground(rgbHint).Background(rgbField).Italic(true)
-
-	styleButton         = tcell.StyleDefault.Foreground(rgbText).Background(rgbSlate)
-	styleButtonFocus    = tcell.StyleDefault.Foreground(rgbInk).Background(rgbAccent).Bold(true)
-	styleButtonDisabled = tcell.StyleDefault.Foreground(rgbOffTxt).Background(rgbOff)
-
-	styleTab       = tcell.StyleDefault
-	styleTabFocus  = styleButton
-	styleTabActive = styleButtonFocus
-	styleQuit      = tcell.StyleDefault.Foreground(rgbText).Background(rgbDanger)
-)
-
-// Tags de texto: secundario e atenuado sobre a cor do terminal ([gray] e
-// uma cor da paleta e some em alguns temas); normal volta tudo ao padrao.
-const (
-	tagMuted  = "[-::d]"
-	tagNormal = "[-::-]"
-)
-
-// applyTheme troca os padroes globais do tview, que vem da paleta (fundo
-// preto, borda e titulo brancos: somem num tema claro), pelas cores do
-// proprio terminal. Elementos com fundo proprio usam os pares RGB acima.
-func applyTheme() {
-	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDefault
-	tview.Styles.BorderColor = tcell.ColorDefault
-	tview.Styles.TitleColor = tcell.ColorDefault
-	tview.Styles.GraphicsColor = tcell.ColorDefault
-	tview.Styles.PrimaryTextColor = tcell.ColorDefault
-	tview.Styles.SecondaryTextColor = tcell.ColorDefault
-	tview.Styles.TertiaryTextColor = tcell.ColorDefault
-	tview.Styles.ContrastBackgroundColor = rgbField
-	tview.Styles.MoreContrastBackgroundColor = rgbSlate
-	tview.Styles.InverseTextColor = rgbInk
-	tview.Styles.ContrastSecondaryTextColor = rgbHint
+// theme sao as cores da TUI, escolhidas pelo fundo do terminal (claro ou
+// escuro): o Bubble Tea pergunta a cor do fundo ao terminal na partida.
+// Todo texto colorido tem par certo pro fundo -- nada depende da paleta ANSI
+// do tema, que pode remapear "azul" e "amarelo" pra cores ilegiveis.
+type theme struct {
+	text, muted, accent, accentInk color.Color
+	fieldBg, fieldFg, border       color.Color
+	ok, warn, danger               color.Color
 }
 
-// styleForm aplica o tema num formulario e nos itens dele. O Form so passa
-// cores aos itens a cada desenho, entao os atributos (sublinhado, foco)
-// ficam em cada item.
-func styleForm(f *tview.Form) {
-	f.SetLabelColor(tcell.ColorDefault)
-	f.SetFieldStyle(styleField)
-	f.SetButtonStyle(styleButton)
-	f.SetButtonActivatedStyle(styleButtonFocus)
-	f.SetButtonDisabledStyle(styleButtonDisabled)
-	for i := range f.GetFormItemCount() {
-		switch it := f.GetFormItem(i).(type) {
-		case *tview.InputField:
-			it.SetPlaceholderStyle(stylePlaceholder)
-		case *tview.Checkbox:
-			// as strings aceitam tags de estilo: "[x]" sem escape some
-			it.SetCheckedString(tview.Escape("[x]"))
-			it.SetUncheckedString(tview.Escape("[ ]"))
-			it.SetActivatedStyle(styleButtonFocus)
-		case *tview.DropDown:
-			it.SetFocusedStyle(styleButtonFocus)
-			it.SetListStyles(styleButton, styleButtonFocus)
-		}
+func newTheme(isDark bool) theme {
+	ld := lipgloss.LightDark(isDark)
+	c := lipgloss.Color
+	return theme{
+		text:      ld(c("#1b1f27"), c("#e6e9ef")),
+		muted:     ld(c("#5b6472"), c("#9aa3b2")),
+		accent:    ld(c("#13795b"), c("#7fd1ae")),
+		accentInk: ld(c("#ffffff"), c("#10241c")),
+		fieldBg:   ld(c("#eceff4"), c("#2b3240")),
+		fieldFg:   ld(c("#1b1f27"), c("#f2f4f8")),
+		border:    ld(c("#c3c9d2"), c("#3b4556")),
+		ok:        ld(c("#13795b"), c("#7fd1ae")),
+		warn:      ld(c("#9a6700"), c("#f0c674")),
+		danger:    ld(c("#b42318"), c("#ff8a80")),
 	}
+}
+
+func (t theme) fg(c color.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
+func (t theme) bold() lipgloss.Style            { return lipgloss.NewStyle().Foreground(t.text).Bold(true) }
+
+func (t theme) panel(focused bool, w, h int) lipgloss.Style {
+	b := t.border
+	if focused {
+		b = t.accent
+	}
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(b).
+		Padding(0, 1).Width(w).Height(h)
+}
+
+// pill e o estilo de aba e botao: fundo e texto sempre em par.
+func (t theme) pill(active bool) lipgloss.Style {
+	s := lipgloss.NewStyle().Padding(0, 2)
+	if active {
+		return s.Background(t.accent).Foreground(t.accentInk).Bold(true)
+	}
+	return s.Background(t.fieldBg).Foreground(t.fieldFg)
+}
+
+func (t theme) dangerPill() lipgloss.Style {
+	return lipgloss.NewStyle().Padding(0, 2).Background(t.danger).Foreground(t.accentInk).Bold(true)
+}
+
+func (t theme) disabledPill() lipgloss.Style {
+	return lipgloss.NewStyle().Padding(0, 2).Background(t.fieldBg).Foreground(t.muted).Faint(true)
 }

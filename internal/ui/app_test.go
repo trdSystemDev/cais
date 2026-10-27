@@ -8,20 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/rpc"
 )
-
-// simScreen e a tela simulada junto com a App que desenha nela. O tview
-// desenha segurando o lock da App, entao ler a tela exige o mesmo lock.
-type simScreen struct {
-	tcell.SimulationScreen
-	app *tview.Application
-}
 
 func okChecker(context.Context) docker.Status {
 	return docker.Status{ClientVersion: "29.0.1", ServerVersion: "29.0.1", ComposeVersion: "2.40.0"}
@@ -35,159 +28,163 @@ func missingChecker(context.Context) docker.Status {
 	}
 }
 
-// startSim sobe a App numa tela simulada 100x30 e devolve a tela pra
-// inspecao. A App e parada no fim do teste.
-func startSim(t *testing.T, check func(context.Context) docker.Status) *simScreen {
+// testCore e um core com caminhos temporarios e docker falso: o Setup roda
+// de verdade (secrets, compose no disco), so os comandos do docker nao.
+func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Core, *atomic.Int32) {
 	t.Helper()
-	sim, _ := startSimCore(t, check)
-	return sim
-}
-
-// startSimCore e como startSim, mas devolve tambem o core, pra testes que
-// disparam acoes por fora da interface (como o MCP vai fazer).
-func startSimCore(t *testing.T, check func(context.Context) docker.Status) (*simScreen, *core.Core) {
-	t.Helper()
-	c := core.New(core.Deps{CheckDocker: check})
-	return startSimAPI(t, c), c
-}
-
-// startSimAPI sobe a App em cima de qualquer core.API (local ou rpc.Client).
-func startSimAPI(t *testing.T, api core.API) *simScreen {
-	t.Helper()
-	sim, _ := startSimApp(t, api, 100, 30)
-	return sim
-}
-
-// startSimApp e como startSimAPI, com o tamanho da tela escolhido e a App
-// devolvida (pra testes que mexem nos campos de uma pagina).
-func startSimApp(t *testing.T, api core.API, w, h int) (*simScreen, *App) {
-	t.Helper()
-	a := New(api)
-	sim := tcell.NewSimulationScreen("UTF-8")
-	a.app.SetScreen(sim)
-	sim.SetSize(w, h)
-
-	done := make(chan error, 1)
-	go func() { done <- a.Run() }()
-	t.Cleanup(func() {
-		a.app.Stop()
-		if err := <-done; err != nil {
-			t.Errorf("Run devolveu erro: %v", err)
-		}
+	root := t.TempDir()
+	var ups atomic.Int32
+	c := core.New(core.Deps{
+		CheckDocker: check,
+		ConfigPath:  filepath.Join(root, "config.yaml"),
+		SecretsDir:  filepath.Join(root, "secrets"),
+		StackDir:    func(n string) string { return filepath.Join(root, "stacks", n) },
+		ComposeUp: func(context.Context, string, bool) error {
+			ups.Add(1)
+			return nil
+		},
+		ComposeDown: func(context.Context, string) error { return nil },
+		Login:       func(context.Context, string, string, []byte) error { return nil },
 	})
-	return &simScreen{SimulationScreen: sim, app: a.app}, a
+	return c, &ups
 }
 
-func screenText(sim *simScreen) []string {
-	// GetContents devolve o buffer interno da tela, nao uma copia
-	sim.app.RLock()
-	defer sim.app.RUnlock()
-	cells, w, h := sim.GetContents()
-	rows := make([]string, h)
-	for y := 0; y < h; y++ {
-		var b strings.Builder
-		for x := 0; x < w; x++ {
-			c := cells[y*w+x]
-			if len(c.Runes) > 0 {
-				b.WriteString(string(c.Runes))
-			} else {
-				b.WriteByte(' ')
-			}
-		}
-		rows[y] = b.String()
-	}
-	return rows
-}
-
-// waitFor espera ate o texto aparecer em alguma linha da tela.
-func waitFor(t *testing.T, sim *simScreen, text string) {
+// open monta a TUI sobre uma core.API, como o Run faz, numa tela de 130x34.
+// O teste faz o papel do Bubble Tea: entrega as fotos do core e executa os
+// comandos.
+func open(t *testing.T, api core.API) *model {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, row := range screenText(sim) {
-			if strings.Contains(row, text) {
+	states, unsub, err := api.Subscribe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(unsub)
+	m := newModel(api, states)
+	t.Cleanup(m.zones.Close)
+	m.Update(tea.WindowSizeMsg{Width: 130, Height: 34})
+	// o Subscribe entrega a foto atual na hora; o programa real a recebe
+	// logo no Init
+	m.Update(stateMsg(<-states))
+	run(t, m, m.checkCmd())
+	run(t, m, m.setup.load())
+	return m
+}
+
+// run executa um comando e entrega a mensagem ao modelo, seguindo os
+// comandos que ela gerar (menos a espera de estado, que o teste conduz).
+func run(t *testing.T, m *model, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	var last tea.Msg
+	for cmd != nil {
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				last = run(t, m, c)
+			}
+			return last
+		}
+		if msg == nil {
+			return last
+		}
+		last = msg
+		_, cmd = m.Update(msg)
+		if _, ok := msg.(stateMsg); ok {
+			return last
+		}
+	}
+	return last
+}
+
+func screen(m *model) string { return ansi.Strip(m.View().Content) }
+
+// waitFor entrega as fotos do core ate o texto aparecer na tela.
+func waitFor(t *testing.T, m *model, text string) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for !strings.Contains(screen(m), text) {
+		select {
+		case s, ok := <-m.states:
+			if !ok {
+				m.Update(closedMsg{})
+				if !strings.Contains(screen(m), text) {
+					t.Fatalf("conexao fechou e %q nao apareceu:\n%s", text, screen(m))
+				}
 				return
 			}
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("texto %q nao apareceu na tela:\n%s", text, strings.Join(screenText(sim), "\n"))
-}
-
-// click simula um clique (aperta e solta) do botao esquerdo no texto
-// informado, procurando-o na linha y.
-// clickText clica na primeira linha da tela que tem o texto.
-func clickText(t *testing.T, sim *simScreen, text string) {
-	t.Helper()
-	for y, row := range screenText(sim) {
-		if strings.Contains(row, text) {
-			click(t, sim, y, text)
-			return
+			m.Update(stateMsg(s))
+		case <-deadline:
+			t.Fatalf("texto %q nao apareceu na tela:\n%s", text, screen(m))
 		}
 	}
-	t.Fatalf("texto %q nao esta na tela", text)
 }
 
-func click(t *testing.T, sim *simScreen, y int, text string) {
+// click clica no meio da zona, com as coordenadas reais da tela. O
+// bubblezone registra as zonas numa goroutine depois do View.
+func click(t *testing.T, m *model, id string) tea.Msg {
 	t.Helper()
-	x := strings.Index(screenText(sim)[y], text)
-	if x < 0 {
-		t.Fatalf("texto %q nao encontrado na linha %d", text, y)
+	m.View()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if z := m.zones.Get(id); z != nil && !z.IsZero() {
+			_, cmd := m.Update(tea.MouseReleaseMsg{X: (z.StartX + z.EndX) / 2, Y: z.StartY, Button: tea.MouseLeft})
+			return run(t, m, cmd)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("zona %q nao esta na tela:\n%s", id, screen(m))
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	sim.InjectMouse(x, y, tcell.Button1, tcell.ModNone)
-	sim.InjectMouse(x, y, tcell.ButtonNone, tcell.ModNone)
+}
+
+func press(t *testing.T, m *model, text string) tea.Msg {
+	t.Helper()
+	_, cmd := m.Update(tea.KeyPressMsg{Code: rune(text[0]), Text: text})
+	return run(t, m, cmd)
 }
 
 func TestDashboardMostraDockerOK(t *testing.T) {
-	sim := startSim(t, okChecker)
-	waitFor(t, sim, "Pronto.")
-	waitFor(t, sim, "29.0.1")
-	waitFor(t, sim, "2.40.0")
+	c, _ := testCore(t, okChecker)
+	m := open(t, c)
+	waitFor(t, m, "Pronto.")
+	waitFor(t, m, "29.0.1")
+	waitFor(t, m, "2.40.0")
 }
 
 func TestDashboardMostraDockerAusente(t *testing.T) {
-	sim := startSim(t, missingChecker)
-	waitFor(t, sim, "docker nao encontrado")
-	waitFor(t, sim, "Daemon   depende do CLI")
-	waitFor(t, sim, "Resolva os itens em vermelho")
+	c, _ := testCore(t, missingChecker)
+	m := open(t, c)
+	waitFor(t, m, "docker nao encontrado")
+	waitFor(t, m, "Daemon   depende do CLI")
+	waitFor(t, m, "Resolva os itens em vermelho")
 }
 
 // a tela tem que refletir uma acao disparada fora dela -- e o caso do MCP
 // publicando um app enquanto alguem esta com a TUI aberta
 func TestUIReageAAcaoExternaNoCore(t *testing.T) {
 	var installed atomic.Bool
-	sim, c := startSimCore(t, func(ctx context.Context) docker.Status {
+	c, _ := testCore(t, func(ctx context.Context) docker.Status {
 		if installed.Load() {
 			return okChecker(ctx)
 		}
 		return missingChecker(ctx)
 	})
-	waitFor(t, sim, "docker nao encontrado")
+	m := open(t, c)
+	waitFor(t, m, "docker nao encontrado")
 
 	installed.Store(true)
 	c.CheckEnvironment(context.Background()) // ninguem clicou em nada
-	waitFor(t, sim, "Pronto.")
+	waitFor(t, m, "Pronto.")
 }
 
 func TestBotaoVerificarDisparaAcao(t *testing.T) {
 	var calls atomic.Int32
-	sim := startSim(t, func(ctx context.Context) docker.Status {
+	c, _ := testCore(t, func(ctx context.Context) docker.Status {
 		calls.Add(1)
 		return okChecker(ctx)
 	})
-	waitFor(t, sim, "Pronto.")
-
-	rows := screenText(sim)
-	for y, row := range rows {
-		if strings.Contains(row, "Verificar novamente") {
-			click(t, sim, y, "Verificar novamente")
-			break
-		}
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for calls.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
+	m := open(t, c)
+	waitFor(t, m, "Pronto.")
+	click(t, m, "check")
 	if n := calls.Load(); n < 2 {
 		t.Fatalf("esperava a checagem inicial + a do clique, houve %d", n)
 	}
@@ -202,12 +199,12 @@ func TestTUIViaDaemonReageAOutroCliente(t *testing.T) {
 		t.Fatal(err)
 	}
 	var installed atomic.Bool
-	daemonCore := core.New(core.Deps{CheckDocker: func(ctx context.Context) docker.Status {
+	daemonCore, _ := testCore(t, func(ctx context.Context) docker.Status {
 		if installed.Load() {
 			return okChecker(ctx)
 		}
 		return missingChecker(ctx)
-	}})
+	})
 	ctx, stopDaemon := context.WithCancel(context.Background())
 	served := make(chan error, 1)
 	go func() { served <- rpc.Serve(ctx, ln, daemonCore) }()
@@ -218,8 +215,8 @@ func TestTUIViaDaemonReageAOutroCliente(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tuiClient.Close()
-	sim := startSimAPI(t, tuiClient)
-	waitFor(t, sim, "docker nao encontrado")
+	m := open(t, tuiClient)
+	waitFor(t, m, "docker nao encontrado")
 
 	mcp, err := rpc.Dial(context.Background(), path)
 	if err != nil {
@@ -230,30 +227,62 @@ func TestTUIViaDaemonReageAOutroCliente(t *testing.T) {
 	if _, err := mcp.CheckEnvironment(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, sim, "Pronto.")
+	waitFor(t, m, "Pronto.")
 
 	// daemon cai com a TUI aberta: ela tem que avisar em vez de mostrar
 	// dados velhos como se estivessem certos
 	stopDaemon()
-	waitFor(t, sim, "A conexao com o daemon do cais")
-	waitFor(t, sim, "Veja: systemctl status cais")
+	waitFor(t, m, "A conexao com o daemon do cais caiu.")
+	waitFor(t, m, "Veja: systemctl status cais")
+	if _, ok := click(t, m, "quit").(tea.QuitMsg); !ok {
+		t.Fatal("Sair do aviso nao saiu")
+	}
 }
 
 func TestCliqueTrocaDeAba(t *testing.T) {
-	sim := startSim(t, okChecker)
-	waitFor(t, sim, "Pronto.")
+	c, _ := testCore(t, okChecker)
+	m := open(t, c)
+	waitFor(t, m, "Pronto.")
 
-	click(t, sim, 0, "Apps")
-	waitFor(t, sim, "chega na fase 3")
+	click(t, m, "tab:Apps")
+	waitFor(t, m, "chega na fase 3")
 
-	click(t, sim, 0, "Setup")
-	waitFor(t, sim, " Configuracao ")
+	click(t, m, "tab:Setup")
+	waitFor(t, m, "Configuracao")
 }
 
 func TestAtalhoNumericoTrocaDeAba(t *testing.T) {
-	sim := startSim(t, okChecker)
-	waitFor(t, sim, "Pronto.")
+	c, _ := testCore(t, okChecker)
+	m := open(t, c)
+	waitFor(t, m, "Pronto.")
 
-	sim.InjectKey(tcell.KeyRune, '4', tcell.ModNone)
-	waitFor(t, sim, "Databases e usuarios")
+	press(t, m, "4")
+	waitFor(t, m, "Databases e usuarios")
+}
+
+// num campo de texto, numero e digitacao, nao troca de aba
+func TestNumeroNoCampoNaoTrocaDeAba(t *testing.T) {
+	c, _ := testCore(t, okChecker)
+	m := open(t, c)
+	press(t, m, "6")
+	click(t, m, "domain")
+	press(t, m, "4")
+	if m.tab != tabSetup {
+		t.Fatalf("trocou pra aba %d digitando no campo", m.tab)
+	}
+	if v := m.setup.get("domain").input.Value(); !strings.HasSuffix(v, "4") {
+		t.Fatalf("campo = %q, o 4 tinha que entrar nele", v)
+	}
+}
+
+func TestSairPeloBotaoEPeloAtalho(t *testing.T) {
+	c, _ := testCore(t, okChecker)
+	m := open(t, c)
+	if _, ok := click(t, m, "quit").(tea.QuitMsg); !ok {
+		t.Fatal("clique em Sair nao saiu")
+	}
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Mod: tea.ModCtrl})
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("ctrl+q nao saiu")
+	}
 }

@@ -3,10 +3,14 @@ package ui
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"image/color"
 	"strings"
+	"time"
 
-	"github.com/rivo/tview"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
@@ -14,359 +18,515 @@ import (
 	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
-// setupPage e a aba Setup: formulario do config.yaml a esquerda e, a
-// direita, o plano (o que o Setup faria) ou o andamento da execucao. Como o
-// resto da TUI, so chama acoes do core; o progresso chega pelo estado, entao
-// um Setup disparado pelo CLI tambem aparece aqui.
-type setupPage struct {
-	*tview.Flex
-	app  *tview.Application
-	core core.API
+const formWidth = 50
 
-	form     *tview.Form
-	domain   *tview.InputField
-	email    *tview.InputField
-	tls      *tview.DropDown
-	stacks   map[string]*tview.Checkbox
-	ghClient *tview.InputField
-	ghAdmin  *tview.InputField
-	ghSecret *tview.InputField
-	hostCI   *tview.InputField
-	hostReg  *tview.InputField
-
-	panel  *tview.TextView // plano ou progresso
-	status *tview.TextView // resultado da ultima acao
-
-	// so tocados na goroutine da UI
-	cfg      config.Config // ultima config lida, base do que o form nao mostra
-	plan     bootstrap.Plan
-	setup    core.Setup // ultima foto do Setup no estado
-	showRun  bool       // painel mostra a execucao em vez do plano
-	runStart bool       // o clique em Executar ainda nao virou Running no estado
-	saveErr  string     // por que o ultimo Salvar falhou (cabe varias linhas)
+// item e cada coisa focavel do formulario, na ordem do Tab.
+type item struct {
+	id    string
+	label string
+	kind  int
+	input *textinput.Model
 }
 
-var tlsOptions = []string{config.TLSLetsEncrypt, config.TLSSelfSigned}
+const (
+	kindInput = iota
+	kindSelect
+	kindCheck
+	kindButton
+)
 
-func newSetupPage(app *tview.Application, c core.API) *setupPage {
-	p := &setupPage{
-		Flex:   tview.NewFlex(),
-		app:    app,
-		core:   c,
-		form:   tview.NewForm(),
-		stacks: map[string]*tview.Checkbox{},
-		panel:  tview.NewTextView().SetDynamicColors(true).SetWordWrap(true),
-		status: tview.NewTextView().SetDynamicColors(true),
-	}
+// setupPage e a aba Setup: formulario do config.yaml a esquerda e, a
+// direita, o plano (o que o Setup faria) ou o andamento da execucao. So
+// chama acoes do core; o progresso chega pelo estado, entao um Setup
+// disparado pelo CLI tambem aparece aqui.
+type setupPage struct {
+	api   core.API
+	zones *zone.Manager
+	th    theme
 
-	input := func(label, placeholder string, width int) *tview.InputField {
-		f := tview.NewInputField().SetLabel(label).SetPlaceholder(placeholder).SetFieldWidth(width)
-		p.form.AddFormItem(f)
-		return f
+	items []*item
+	focus int
+	tls   int // 0 Let's Encrypt, 1 CA local
+	on    map[string]bool
+
+	cfg     config.Config // ultima lida: base do que o form nao mostra
+	plan    bootstrap.Plan
+	setup   core.Setup // ultima foto do Setup no estado
+	status  string
+	statusC string // ok, warn, danger
+	saveErr string // por que o ultimo Salvar falhou (varias linhas)
+	showRun bool   // painel mostra a execucao em vez do plano
+	running bool   // o clique em Executar ainda nao voltou
+
+	// inicio da ultima execucao ja vista: uma execucao nova troca o painel
+	// pro andamento. Nao da pra depender de ver Running, porque o core so
+	// entrega a foto mais recente e um Setup rapido pode passar inteiro
+	// entre duas leituras.
+	lastStart time.Time
+	gotState  bool
+}
+
+// Respostas das chamadas ao core (feitas fora do Update).
+type (
+	loadedMsg struct {
+		info core.ConfigInfo
+		plan bootstrap.Plan
+		err  error
 	}
-	p.domain = input("Dominio", "exemplo.com.br", 30)
-	p.email = input("E-mail", "voce@exemplo.com.br", 30)
-	p.tls = tview.NewDropDown().SetLabel("Certificados").
-		SetOptions([]string{"Let's Encrypt", "CA local (teste)"}, nil).SetCurrentOption(0)
-	p.form.AddFormItem(p.tls)
+	planMsg struct {
+		plan bootstrap.Plan
+		err  error
+	}
+	savedMsg struct {
+		cfg config.Config
+		err error
+	}
+	runDoneMsg struct{ err error }
+)
+
+func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
+	p := &setupPage{api: api, zones: zones, on: map[string]bool{}}
+	input := func(id, label, placeholder string) {
+		ti := textinput.New()
+		ti.Prompt = ""
+		ti.Placeholder = placeholder
+		ti.SetWidth(28)
+		p.items = append(p.items, &item{id: id, label: label, kind: kindInput, input: &ti})
+	}
+	input("domain", "Dominio", "exemplo.com.br")
+	input("email", "E-mail", "voce@exemplo.com.br")
+	p.items = append(p.items, &item{id: "tls", label: "Certificados", kind: kindSelect})
 	for _, st := range stacks.All {
-		cb := tview.NewCheckbox().SetLabel(st.Name)
-		p.stacks[st.Name] = cb
-		p.form.AddFormItem(cb)
+		p.items = append(p.items, &item{id: "stack:" + st.Name, label: st.Name, kind: kindCheck})
 	}
-	p.ghClient = input("GitHub client ID", "so com woodpecker", 30)
-	p.ghAdmin = input("GitHub admin", "seu usuario", 30)
-	p.ghSecret = input("GitHub secret", "so pra gravar ou trocar", 30)
-	p.ghSecret.SetMaskCharacter('*')
-	p.hostCI = input("Host do CI", "padrao ci.<dominio>", 30)
-	p.hostReg = input("Host do registry", "padrao registry.<dominio>", 30)
-
-	p.form.AddButton("Salvar", p.save)
-	p.form.AddButton("Executar setup", p.run)
-	// sem linha em branco entre os campos: o form inteiro cabe em ~20
-	// linhas e os botoes aparecem mesmo num terminal de 30
-	p.form.SetItemPadding(0)
-	styleForm(p.form)
-	p.form.SetBorder(true).SetTitle(" Configuracao ")
-
-	p.panel.SetBorder(true).SetTitle(" Plano ")
-
-	left := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(p.form, 0, 1, true).
-		AddItem(p.status, 2, 0, false)
-	p.AddItem(left, 54, 0, true).
-		AddItem(p.panel, 0, 1, false)
+	input("ghClient", "GitHub client ID", "so com woodpecker")
+	input("ghAdmin", "GitHub admin", "seu usuario")
+	input("ghSecret", "GitHub secret", "so pra gravar ou trocar")
+	p.get("ghSecret").input.EchoMode = textinput.EchoPassword
+	input("hostCI", "Host do CI", "padrao ci.<dominio>")
+	input("hostReg", "Host do registry", "padrao registry.<dominio>")
+	p.items = append(p.items,
+		&item{id: "save", label: "Salvar", kind: kindButton},
+		&item{id: "run", label: "Executar setup", kind: kindButton})
+	p.setTheme(th)
+	p.setFocus(0)
 	return p
 }
 
-// load le a config e o plano do core e preenche a tela. Roda fora da
-// goroutine da UI (as chamadas podem ir pelo socket).
-func (p *setupPage) load() {
-	go func() {
-		ctx := context.Background()
-		info, err := p.core.LoadConfig(ctx)
-		if err != nil {
-			p.app.QueueUpdateDraw(func() { p.setStatus("red", "Erro lendo a config: "+err.Error()) })
-			return
+func (p *setupPage) get(id string) *item {
+	for _, it := range p.items {
+		if it.id == id {
+			return it
 		}
-		plan, err := p.core.PlanSetup(ctx)
-		p.app.QueueUpdateDraw(func() {
-			p.fill(info.Config)
-			if err != nil {
-				p.setStatus("red", "Erro montando o plano: "+err.Error())
-				return
-			}
-			p.plan = plan
-			p.redraw()
-		})
-	}()
+	}
+	return nil
 }
 
-// refreshPlan remonta so o plano, sem mexer no que esta digitado.
-func (p *setupPage) refreshPlan() {
-	go func() {
-		plan, err := p.core.PlanSetup(context.Background())
-		p.app.QueueUpdateDraw(func() {
-			if err != nil {
-				p.setStatus("red", "Erro montando o plano: "+err.Error())
-				return
-			}
-			p.plan = plan
-			p.redraw()
-		})
-	}()
+func (p *setupPage) setTheme(th theme) {
+	p.th = th
+	for _, it := range p.items {
+		if it.input == nil {
+			continue
+		}
+		s := textinput.DefaultStyles(true)
+		for _, st := range []*textinput.StyleState{&s.Focused, &s.Blurred} {
+			st.Text = lipgloss.NewStyle().Foreground(th.fieldFg).Background(th.fieldBg)
+			st.Placeholder = lipgloss.NewStyle().Foreground(th.muted).Background(th.fieldBg).Italic(true)
+		}
+		s.Cursor.Color = th.accent
+		it.input.SetStyles(s)
+	}
+}
+
+// typing diz se o foco esta num campo de texto (numeros nao trocam de aba).
+func (p *setupPage) typing() bool { return p.items[p.focus].kind == kindInput }
+
+func (p *setupPage) load() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		info, err := p.api.LoadConfig(ctx)
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+		plan, err := p.api.PlanSetup(ctx)
+		return loadedMsg{info: info, plan: plan, err: err}
+	}
+}
+
+func (p *setupPage) planCmd() tea.Cmd {
+	return func() tea.Msg {
+		plan, err := p.api.PlanSetup(context.Background())
+		return planMsg{plan, err}
+	}
+}
+
+func (p *setupPage) onState(s core.State) {
+	p.setup = s.Setup
+	start := s.Setup.StartedAt
+	// a primeira foto pode trazer uma execucao antiga: so marca como vista
+	if p.gotState && start.After(p.lastStart) {
+		p.showRun = true // Setup disparado daqui, do CLI ou do MCP
+	}
+	if s.Setup.Running && !p.gotState {
+		p.showRun = true // abriu a TUI com um Setup em andamento
+	}
+	p.lastStart, p.gotState = start, true
+}
+
+func (p *setupPage) update(msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case loadedMsg:
+		if msg.err != nil {
+			p.setStatus("danger", "Erro lendo a config: "+msg.err.Error())
+			return nil
+		}
+		p.fill(msg.info.Config)
+		p.plan = msg.plan
+	case planMsg:
+		if msg.err != nil {
+			p.setStatus("danger", "Erro montando o plano: "+msg.err.Error())
+			return nil
+		}
+		p.plan = msg.plan
+	case savedMsg:
+		p.showRun = false
+		if msg.err != nil {
+			// a validacao junta varios erros, um por linha: vao pro painel
+			p.saveErr = msg.err.Error()
+			p.setStatus("danger", "Nao salvou: veja o motivo ao lado.")
+			return nil
+		}
+		p.saveErr = ""
+		p.cfg = msg.cfg
+		p.get("ghSecret").input.SetValue("")
+		p.setStatus("ok", "Config salva.")
+		return p.planCmd()
+	case runDoneMsg:
+		p.running = false
+		if msg.err != nil {
+			p.setStatus("danger", "Setup parou: "+firstLine(msg.err.Error()))
+		} else {
+			p.setStatus("ok", "Setup concluido.")
+		}
+		// a CA e os bancos aparecem no fim; o plano novo traz as instrucoes
+		return p.planCmd()
+	}
+	return nil
 }
 
 func (p *setupPage) fill(c config.Config) {
 	p.cfg = c
-	p.domain.SetText(c.Domain)
-	p.email.SetText(c.Email)
-	if c.LetsEncrypt() {
-		p.tls.SetCurrentOption(0)
-	} else {
-		p.tls.SetCurrentOption(1)
+	p.get("domain").input.SetValue(c.Domain)
+	p.get("email").input.SetValue(c.Email)
+	p.tls = 0
+	if !c.LetsEncrypt() {
+		p.tls = 1
 	}
-	for name, cb := range p.stacks {
-		cb.SetChecked(c.HasStack(name))
+	for _, st := range stacks.All {
+		p.on[st.Name] = c.HasStack(st.Name)
 	}
-	p.ghClient.SetText(c.Woodpecker.GitHubClient)
-	p.ghAdmin.SetText(c.Woodpecker.Admin)
-	p.hostCI.SetText(c.Hosts.CI)
-	p.hostReg.SetText(c.Hosts.Registry)
+	p.get("ghClient").input.SetValue(c.Woodpecker.GitHubClient)
+	p.get("ghAdmin").input.SetValue(c.Woodpecker.Admin)
+	p.get("hostCI").input.SetValue(c.Hosts.CI)
+	p.get("hostReg").input.SetValue(c.Hosts.Registry)
 }
 
-// formConfig monta a config a partir do formulario, mantendo o que ele nao
-// mostra (portas do proxy) como estava.
+// formConfig monta a config do formulario, mantendo o que ele nao mostra
+// (portas do proxy) como estava.
 func (p *setupPage) formConfig() config.Config {
 	c := p.cfg
-	c.Domain = strings.TrimSpace(p.domain.GetText())
-	c.Email = strings.TrimSpace(p.email.GetText())
-	opt, _ := p.tls.GetCurrentOption()
+	val := func(id string) string { return strings.TrimSpace(p.get(id).input.Value()) }
+	c.Domain, c.Email = val("domain"), val("email")
 	c.TLS = ""
-	if opt > 0 {
-		c.TLS = tlsOptions[opt]
+	if p.tls == 1 {
+		c.TLS = config.TLSSelfSigned
 	}
 	c.Stacks = nil
 	for _, st := range stacks.All {
-		if p.stacks[st.Name].IsChecked() {
+		if p.on[st.Name] {
 			c.Stacks = append(c.Stacks, st.Name)
 		}
 	}
-	c.Woodpecker.GitHubClient = strings.TrimSpace(p.ghClient.GetText())
-	c.Woodpecker.Admin = strings.TrimSpace(p.ghAdmin.GetText())
-	c.Hosts.CI = strings.TrimSpace(p.hostCI.GetText())
-	c.Hosts.Registry = strings.TrimSpace(p.hostReg.GetText())
+	c.Woodpecker.GitHubClient, c.Woodpecker.Admin = val("ghClient"), val("ghAdmin")
+	c.Hosts.CI, c.Hosts.Registry = val("hostCI"), val("hostReg")
 	return c
 }
 
-func (p *setupPage) save() {
+func (p *setupPage) save() tea.Cmd {
 	c := p.formConfig()
-	secret := p.ghSecret.GetText()
-	p.setStatus("yellow", "Salvando...")
-	go func() {
+	secret := p.get("ghSecret").input.Value()
+	p.setStatus("warn", "Salvando...")
+	return func() tea.Msg {
 		ctx := context.Background()
-		err := p.core.SaveConfig(ctx, c)
+		err := p.api.SaveConfig(ctx, c)
 		if err == nil && secret != "" {
-			err = p.core.SetSecret(ctx, "github_client_secret", secret)
+			err = p.api.SetSecret(ctx, "github_client_secret", secret)
 		}
-		p.app.QueueUpdateDraw(func() {
-			p.showRun = false
-			if err != nil {
-				// a validacao junta varios erros, um por linha: vao pro painel
-				p.saveErr = err.Error()
-				p.setStatus("red", "Nao salvou: veja o motivo ao lado.")
-				p.redraw()
-				return
-			}
-			p.saveErr = ""
-			p.cfg = c
-			p.ghSecret.SetText("")
-			p.setStatus("green", "Config salva.")
-		})
-		p.refreshPlan()
-	}()
-}
-
-func (p *setupPage) run() {
-	if p.setup.Running {
-		return
+		return savedMsg{c, err}
 	}
-	p.showRun = true
-	p.runStart = true
-	p.setStatus("yellow", "Executando o Setup...")
-	p.redraw()
-	go func() {
-		_, err := p.core.RunSetup(context.Background())
-		p.app.QueueUpdateDraw(func() {
-			p.runStart = false
-			if err != nil {
-				p.setStatus("red", "Setup parou: "+firstLine(err.Error()))
-			} else {
-				p.setStatus("green", "Setup concluido.")
-			}
-		})
-		// a CA e os bancos aparecem no fim; o plano novo traz as instrucoes
-		p.refreshPlan()
-	}()
 }
 
-// render recebe cada foto do core. Um Setup rodando (daqui, do CLI ou do
-// MCP) troca o painel pro andamento.
-func (p *setupPage) render(s core.State) {
-	p.setup = s.Setup
-	if s.Setup.Running {
-		p.showRun = true
+func (p *setupPage) canRun() bool { return !p.running && !p.setup.Running && p.plan.Ready() }
+
+func (p *setupPage) run() tea.Cmd {
+	if !p.canRun() {
+		return nil
 	}
-	p.redraw()
+	p.showRun, p.running = true, true
+	p.setStatus("warn", "Executando o Setup...")
+	return func() tea.Msg {
+		_, err := p.api.RunSetup(context.Background())
+		return runDoneMsg{err}
+	}
 }
 
-func (p *setupPage) redraw() {
-	running := p.setup.Running || p.runStart
+func (p *setupPage) setStatus(kind, msg string) { p.statusC, p.status = kind, msg }
+
+func (p *setupPage) setFocus(i int) tea.Cmd {
+	n := len(p.items)
+	p.focus = ((i % n) + n) % n
+	var cmd tea.Cmd
+	for j, it := range p.items {
+		if it.input == nil {
+			continue
+		}
+		if j == p.focus {
+			cmd = it.input.Focus()
+		} else {
+			it.input.Blur()
+		}
+	}
+	return cmd
+}
+
+// activate e o Enter, espaco ou clique num item que nao e campo de texto.
+func (p *setupPage) activate(it *item) tea.Cmd {
+	switch {
+	case it.kind == kindSelect:
+		p.tls = 1 - p.tls
+	case it.kind == kindCheck:
+		name := strings.TrimPrefix(it.id, "stack:")
+		p.on[name] = !p.on[name]
+	case it.id == "save":
+		return p.save()
+	case it.id == "run":
+		return p.run()
+	}
+	return nil
+}
+
+func (p *setupPage) click(msg tea.MouseMsg) tea.Cmd {
+	for i, it := range p.items {
+		if p.zones.Get(it.id).InBounds(msg) {
+			cmd := p.setFocus(i)
+			if it.kind != kindInput {
+				return tea.Batch(cmd, p.activate(it))
+			}
+			return cmd
+		}
+	}
+	return nil
+}
+
+func (p *setupPage) key(msg tea.KeyPressMsg) tea.Cmd {
+	k := msg.String()
+	it := p.items[p.focus]
+	switch k {
+	case "ctrl+s":
+		return p.save()
+	case "ctrl+r":
+		return p.run()
+	case "tab", "down":
+		return p.setFocus(p.focus + 1)
+	case "shift+tab", "up":
+		return p.setFocus(p.focus - 1)
+	case "enter", "space":
+		if it.kind != kindInput {
+			return p.activate(it)
+		}
+		if k == "enter" {
+			return p.setFocus(p.focus + 1)
+		}
+	case "left", "right":
+		if it.kind == kindSelect {
+			return p.activate(it)
+		}
+	}
+	if it.kind == kindInput {
+		ti, cmd := it.input.Update(msg)
+		*it.input = ti
+		return cmd
+	}
+	return nil
+}
+
+func (p *setupPage) view(w, h int) string {
+	t := p.th
+	status := ""
+	if p.status != "" {
+		c := map[string]color.Color{"ok": t.ok, "warn": t.warn, "danger": t.danger}[p.statusC]
+		status = lipgloss.NewStyle().Bold(true).Foreground(c).Width(formWidth).Render(p.status)
+	}
+	left := t.panel(true, formWidth+4, h-2).Render(t.bold().Render("Configuracao") + "\n\n" + p.viewForm() + "\n\n" + status)
+
+	rightW := max(w-lipgloss.Width(left)-1, 20)
+	title, content := "Plano", p.viewPlan(rightW-4)
 	if p.showRun {
-		p.panel.SetTitle(" Execucao ")
-		p.panel.SetText(renderRun(p.setup, running, p.plan))
-	} else {
-		p.panel.SetTitle(" Plano ")
-		text := renderPlan(p.plan)
-		if p.saveErr != "" {
-			var b strings.Builder
-			b.WriteString("\n [red::b]Nao salvou[-::-]\n")
-			for _, l := range strings.Split(p.saveErr, "\n") {
-				fmt.Fprintf(&b, "   [red]%s\n", tview.Escape(l))
+		title, content = "Execucao", p.viewRun(rightW-4)
+	}
+	right := t.panel(false, rightW, h-2).Render(t.bold().Render(title) + "\n" + content)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+}
+
+func (p *setupPage) viewForm() string {
+	t := p.th
+	field := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(30)
+	var rows, buttons []string
+	for i, it := range p.items {
+		focused := i == p.focus
+		marker, label := "  ", t.fg(t.text).Width(18).Render(it.label)
+		if focused {
+			marker = t.fg(t.accent).Bold(true).Render("› ")
+			label = t.fg(t.accent).Bold(true).Width(18).Render(it.label)
+		}
+
+		var value string
+		switch it.kind {
+		case kindInput:
+			value = field.Render(it.input.View())
+		case kindSelect:
+			value = field.Render("‹ " + []string{"Let's Encrypt", "CA local (teste)"}[p.tls] + " ›")
+		case kindCheck:
+			value = t.fg(t.muted).Render("[ ]")
+			if p.on[strings.TrimPrefix(it.id, "stack:")] {
+				value = t.fg(t.accent).Bold(true).Render("[x]")
 			}
-			text = b.String() + text
+		case kindButton:
+			st := t.pill(focused)
+			if it.id == "run" && !p.canRun() {
+				st = t.disabledPill()
+			}
+			buttons = append(buttons, p.zones.Mark(it.id, st.Render(it.label)))
+			continue
 		}
-		p.panel.SetText(text)
+		rows = append(rows, p.zones.Mark(it.id, marker+label+value))
 	}
-	if b := p.form.GetButton(p.form.GetButtonIndex("Executar setup")); b != nil {
-		b.SetDisabled(running || !p.plan.Ready())
-	}
+	return strings.Join(rows, "\n") + "\n\n  " + strings.Join(buttons, "  ")
 }
 
-func (p *setupPage) setStatus(color, msg string) {
-	p.status.SetText(fmt.Sprintf(" [%s]%s", color, tview.Escape(msg)))
-}
-
-func renderPlan(p bootstrap.Plan) string {
+func (p *setupPage) viewPlan(w int) string {
+	t, pl := p.th, p.plan
+	muted := t.fg(t.muted)
+	wrap := lipgloss.NewStyle().Width(w)
 	var b strings.Builder
-	if !p.Configured {
-		b.WriteString("\n [yellow]Ainda sem configuracao.[-]\n\n Preencha dominio e e-mail, escolha as stacks e clique em [::b]Salvar[::-].\n")
-		for _, pr := range p.Problems {
-			fmt.Fprintf(&b, "\n %s%s%s\n", tagMuted, tview.Escape(pr), tagNormal)
+
+	if p.saveErr != "" {
+		b.WriteString("\n" + t.fg(t.danger).Bold(true).Render("Nao salvou") + "\n")
+		for _, l := range strings.Split(p.saveErr, "\n") {
+			b.WriteString(wrap.Foreground(t.danger).Render("  "+l) + "\n")
 		}
+	}
+	if !pl.Configured {
+		b.WriteString("\n" + t.fg(t.warn).Bold(true).Render("Ainda sem configuracao.") + "\n\n")
+		b.WriteString(wrap.Render("Preencha dominio e e-mail, escolha as stacks e salve (ctrl+s).") + "\n")
 		return b.String()
 	}
 
-	b.WriteString("\n [::b]Stacks[::-]\n")
-	for _, s := range p.Stacks {
-		color := map[string]string{bootstrap.ChangeNew: "green", bootstrap.ChangeModified: "yellow"}[s.Change]
-		if color == "" {
-			color = "-" // igual: cor do terminal
+	b.WriteString("\n" + t.bold().Render("Stacks") + "\n")
+	for _, s := range pl.Stacks {
+		c := map[string]color.Color{bootstrap.ChangeNew: t.ok, bootstrap.ChangeModified: t.warn}[s.Change]
+		if c == nil {
+			c = t.muted
 		}
-		fmt.Fprintf(&b, "   %-11s [%s]%-9s[-] %s%s%s\n", s.Name, color, s.Change, tagMuted, tview.Escape(s.Desc), tagNormal)
+		b.WriteString(fmt.Sprintf("  %-11s %s %s\n", s.Name, t.fg(c).Render(fmt.Sprintf("%-9s", s.Change)), muted.Render(s.Desc)))
 	}
-	if len(p.Disable) > 0 {
-		b.WriteString("\n [::b]Desativadas[::-] " + tagMuted + "(derrubadas no Setup; os volumes ficam)" + tagNormal + "\n")
-		for _, s := range p.Disable {
-			fmt.Fprintf(&b, "   %-11s %s%s%s\n", s.Name, tagMuted, tview.Escape(s.Desc), tagNormal)
-		}
-	}
-	if len(p.CreateSecrets) > 0 {
-		fmt.Fprintf(&b, "\n [::b]Secrets a gerar[::-]\n   %s\n", strings.Join(p.CreateSecrets, ", "))
-	}
-	if len(p.Problems) > 0 {
-		b.WriteString("\n [red::b]Problemas[-::-]\n")
-		for _, pr := range p.Problems {
-			fmt.Fprintf(&b, "   [red]%s\n", tview.Escape(pr))
+	if len(pl.Disable) > 0 {
+		b.WriteString("\n" + t.bold().Render("Desativadas") + " " + muted.Render("(derrubadas no Setup; os volumes ficam)") + "\n")
+		for _, s := range pl.Disable {
+			b.WriteString(fmt.Sprintf("  %-11s %s\n", s.Name, muted.Render(s.Desc)))
 		}
 	}
-	if len(p.Missing) > 0 {
-		b.WriteString("\n [red::b]Falta informar[-::-]\n")
-		for _, m := range p.Missing {
-			fmt.Fprintf(&b, "   [red]%s[-]: %s\n", m.Name, tview.Escape(m.Desc))
+	if len(pl.CreateSecrets) > 0 {
+		b.WriteString("\n" + t.bold().Render("Secrets a gerar") + "\n" + wrap.Render("  "+strings.Join(pl.CreateSecrets, ", ")) + "\n")
+	}
+	for _, pr := range pl.Problems {
+		b.WriteString("\n" + wrap.Foreground(t.danger).Render(pr) + "\n")
+	}
+	if len(pl.Missing) > 0 {
+		b.WriteString("\n" + t.fg(t.danger).Bold(true).Render("Falta informar") + "\n")
+		for _, x := range pl.Missing {
+			b.WriteString(wrap.Render("  "+t.fg(t.danger).Render(x.Name)+": "+x.Desc) + "\n")
 		}
 	}
-	if p.Ready() {
-		b.WriteString("\n [green::b]Pronto pra executar.[-::-]")
-		if p.CAFile == "" {
-			b.WriteString(" Antes, aponte o DNS dos nomes pra esta VPS.")
+	if pl.Ready() {
+		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render("Pronto pra executar") + muted.Render(" (ctrl+r)"))
+		if pl.CAFile == "" {
+			b.WriteString(muted.Render(" -- antes, aponte o DNS dos nomes pra esta VPS"))
 		}
 		b.WriteString("\n")
 	}
-	renderAccess(&b, p)
+	b.WriteString(p.viewAccess(w))
 	return b.String()
 }
 
-var stepMark = map[bootstrap.Status]string{
-	bootstrap.Pending: tagMuted + " .. ",
-	bootstrap.Running: "[yellow] >> ",
-	bootstrap.Done:    "[green] ok ",
-	bootstrap.Failed:  "[red] !! ",
-}
-
-func renderRun(s core.Setup, running bool, plan bootstrap.Plan) string {
+func (p *setupPage) viewRun(w int) string {
+	t, s := p.th, p.setup
 	var b strings.Builder
 	b.WriteString("\n")
 	if len(s.Steps) == 0 {
-		b.WriteString(" [yellow]Comecando...\n")
-		return b.String()
+		return b.String() + t.fg(t.warn).Render("Comecando...")
 	}
 	for _, st := range s.Steps {
-		fmt.Fprintf(&b, "%s%s%s", stepMark[st.Status], tagNormal, tview.Escape(st.Desc))
-		if st.Detail != "" && st.Status != bootstrap.Failed {
-			fmt.Fprintf(&b, " %s-- %s%s", tagMuted, tview.Escape(st.Detail), tagNormal)
+		mark := map[bootstrap.Status]string{
+			bootstrap.Done:    t.fg(t.ok).Render("✓"),
+			bootstrap.Running: t.fg(t.warn).Render("◐"),
+			bootstrap.Failed:  t.fg(t.danger).Render("✗"),
+		}[st.Status]
+		if mark == "" {
+			mark = t.fg(t.muted).Render("·")
 		}
-		b.WriteString("\n")
+		line := mark + " " + st.Desc
+		if st.Detail != "" && st.Status != bootstrap.Failed {
+			line += t.fg(t.muted).Render(" — " + st.Detail)
+		}
+		b.WriteString(lipgloss.NewStyle().Width(w).Render(line) + "\n")
 	}
 	switch {
-	case running:
-		b.WriteString("\n [yellow]Executando... pode sair da tela: o Setup continua no daemon.\n")
+	case s.Running || p.running:
+		b.WriteString("\n" + t.fg(t.warn).Render("Executando... pode sair: o Setup continua no daemon.") + "\n")
 	case s.Error != "":
-		fmt.Fprintf(&b, "\n [red::b]Parou:[-::-] [red]%s[-]\n\n %sCorrija e execute de novo: nada que ja existe e refeito.%s\n", tview.Escape(s.Error), tagMuted, tagNormal)
+		b.WriteString("\n" + lipgloss.NewStyle().Width(w).Foreground(t.danger).Render("Parou: "+s.Error) + "\n")
+		b.WriteString("\n" + t.fg(t.muted).Render("Corrija e execute de novo: nada que ja existe e refeito.") + "\n")
 	default:
-		b.WriteString("\n [green::b]Setup concluido.[-::-]\n")
-		renderAccess(&b, plan)
+		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render("Setup concluido.") + "\n")
+		b.WriteString(p.viewAccess(w))
 	}
 	return b.String()
 }
 
-// renderAccess mostra como chegar nos bancos e, no modo de teste, como
-// confiar na CA local.
-func renderAccess(b *strings.Builder, p bootstrap.Plan) {
-	if len(p.Databases) > 0 {
-		b.WriteString("\n [::b]Bancos[::-] " + tagMuted + "(so por tunel SSH)" + tagNormal + "\n")
-		fmt.Fprintf(b, "   %s\n", tview.Escape(p.Tunnel))
-		for _, d := range p.Databases {
-			fmt.Fprintf(b, "   %-8s localhost:%-5s usuario %-8s senha: sudo cat %s\n",
-				d.Name, strconv.Itoa(d.Port), d.User, tview.Escape(d.PasswordFile))
+// viewAccess mostra como chegar nos bancos e, no modo de teste, como
+// confiar na CA local. Comandos na cor normal: sao pra copiar.
+func (p *setupPage) viewAccess(w int) string {
+	t, pl := p.th, p.plan
+	muted := t.fg(t.muted)
+	wrap := lipgloss.NewStyle().Width(w)
+	var b strings.Builder
+	if len(pl.Databases) > 0 {
+		b.WriteString("\n" + t.bold().Render("Bancos") + " " + muted.Render("(so por tunel SSH)") + "\n")
+		b.WriteString(wrap.Foreground(t.accent).Render("  "+pl.Tunnel) + "\n")
+		for _, d := range pl.Databases {
+			b.WriteString(wrap.Render(fmt.Sprintf("  %-8s localhost:%-5d usuario %-8s %s", d.Name, d.Port, d.User,
+				muted.Render("senha: sudo cat "+d.PasswordFile))) + "\n")
 		}
 	}
-	if p.CAFile != "" {
-		b.WriteString("\n [::b]CA local[::-] " + tagMuted + "(confie nela nesta maquina)" + tagNormal + "\n")
-		if p.Config.HasStack("registry") {
-			dir := "/etc/docker/certs.d/" + p.Config.RegistryHost()
-			fmt.Fprintf(b, "   sudo mkdir -p %s\n   sudo cp %s %s/ca.crt\n", dir, tview.Escape(p.CAFile), dir)
+	if pl.CAFile != "" {
+		b.WriteString("\n" + t.bold().Render("CA local") + " " + muted.Render("(confie nela nesta maquina)") + "\n")
+		if pl.Config.HasStack("registry") {
+			dir := "/etc/docker/certs.d/" + pl.Config.RegistryHost()
+			b.WriteString(wrap.Render("  sudo mkdir -p "+dir) + "\n")
+			b.WriteString(wrap.Render("  sudo cp "+pl.CAFile+" "+dir+"/ca.crt") + "\n")
 		}
-		fmt.Fprintf(b, "   sudo trust anchor --store %s\n", tview.Escape(p.CAFile))
+		b.WriteString(wrap.Render("  sudo trust anchor --store "+pl.CAFile) + "\n")
 	}
+	return b.String()
 }

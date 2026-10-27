@@ -2,82 +2,58 @@ package ui
 
 import (
 	"context"
-	"path/filepath"
-	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/trdSystemDev/cais/internal/core"
 )
 
-// setupCore e um core com caminhos temporarios e docker falso: o Setup roda
-// de verdade (secrets, compose no disco), so os comandos do docker nao.
-func setupCore(t *testing.T) (*core.Core, *atomic.Int32) {
+// openSetup abre a TUI ja na aba Setup.
+func openSetup(t *testing.T) (*model, func() int32) {
 	t.Helper()
-	root := t.TempDir()
-	var ups atomic.Int32
-	c := core.New(core.Deps{
-		CheckDocker: okChecker,
-		ConfigPath:  filepath.Join(root, "config.yaml"),
-		SecretsDir:  filepath.Join(root, "secrets"),
-		StackDir:    func(n string) string { return filepath.Join(root, "stacks", n) },
-		ComposeUp: func(context.Context, string, bool) error {
-			ups.Add(1)
-			return nil
-		},
-		ComposeDown: func(context.Context, string) error { return nil },
-		Login:       func(context.Context, string, string, []byte) error { return nil },
-	})
-	return c, &ups
+	c, ups := testCore(t, okChecker)
+	m := open(t, c)
+	click(t, m, "tab:Setup")
+	waitFor(t, m, "Ainda sem configuracao")
+	return m, ups.Load
 }
 
-// openSetup sobe a TUI e abre a aba Setup.
-func openSetup(t *testing.T, c core.API) (*simScreen, *App) {
+// fill preenche dominio e e-mail e deixa so as stacks pedidas marcadas,
+// clicando nas caixas como o usuario faria.
+func fill(t *testing.T, m *model, domain string, stacks ...string) {
 	t.Helper()
-	sim, a := startSimApp(t, c, 130, 34)
-	waitFor(t, sim, "Pronto.") // dashboard carregou
-	click(t, sim, 0, "Setup")
-	return sim, a
-}
-
-// fillForm preenche o formulario como o usuario faria, na goroutine da UI.
-func fillForm(a *App, domain string, stacks ...string) {
-	a.app.QueueUpdateDraw(func() {
-		p := a.setup
-		p.domain.SetText(domain)
-		p.email.SetText("admin@exemplo.com.br")
-		p.tls.SetCurrentOption(1) // CA local: dispensa DNS
-		for name, cb := range p.stacks {
-			cb.SetChecked(false)
-			for _, s := range stacks {
-				if s == name {
-					cb.SetChecked(true)
-				}
-			}
+	m.setup.get("domain").input.SetValue(domain)
+	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
+	if m.setup.tls == 0 {
+		click(t, m, "tls") // CA local: dispensa DNS
+	}
+	want := map[string]bool{}
+	for _, s := range stacks {
+		want[s] = true
+	}
+	for name, on := range m.setup.on {
+		if on != want[name] {
+			click(t, m, "stack:"+name)
 		}
-	})
+	}
 }
 
-func TestSetupSemConfigPedePraPreencher(t *testing.T) {
-	c, _ := setupCore(t)
-	sim, _ := openSetup(t, c)
-	waitFor(t, sim, "Ainda sem configuracao")
-	// padrao ja vem marcado no form: proxy, bancos, registry, woodpecker
-	waitFor(t, sim, "postgres         [x]")
+func TestSetupSemConfigVemComPadrao(t *testing.T) {
+	m, _ := openSetup(t)
+	// padrao: proxy, bancos, registry e woodpecker marcados
+	for _, s := range []string{"proxy", "postgres", "mysql", "registry", "woodpecker"} {
+		if !m.setup.on[s] {
+			t.Errorf("%s desmarcado no padrao", s)
+		}
+	}
 }
 
 func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {
-	c, _ := setupCore(t)
-	sim, a := openSetup(t, c)
-	waitFor(t, sim, "Ainda sem configuracao")
+	m, _ := openSetup(t)
+	fill(t, m, "trd.localhost", "proxy", "postgres", "registry")
+	click(t, m, "save")
+	waitFor(t, m, "Config salva.")
+	waitFor(t, m, "Pronto pra executar")
+	waitFor(t, m, "ssh -N -L 5432:127.0.0.1:5432")
 
-	fillForm(a, "trd.localhost", "proxy", "postgres", "registry")
-	clickText(t, sim, "Salvar     Executar") // o botao, nao o "Salvar" do texto do plano
-	waitFor(t, sim, "Config salva.")
-	waitFor(t, sim, "Pronto pra executar.")
-	waitFor(t, sim, "ssh -N -L 5432:127.0.0.1:5432")
-
-	info, err := c.LoadConfig(context.Background())
+	info, err := m.api.LoadConfig(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,58 +66,47 @@ func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {
 }
 
 func TestSetupMostraErroDeValidacao(t *testing.T) {
-	c, _ := setupCore(t)
-	sim, a := openSetup(t, c)
-	waitFor(t, sim, "Ainda sem configuracao")
-
-	fillForm(a, "trd.local", "proxy", "postgres")
-	clickText(t, sim, "Salvar     Executar") // o botao, nao o "Salvar" do texto do plano
-	waitFor(t, sim, "reservado pro mDNS")
-
-	if info, _ := c.LoadConfig(context.Background()); info.Exists {
+	m, _ := openSetup(t)
+	fill(t, m, "trd.local", "proxy", "postgres")
+	click(t, m, "save")
+	waitFor(t, m, "reservado pro mDNS")
+	if info, _ := m.api.LoadConfig(context.Background()); info.Exists {
 		t.Fatal("gravou config invalida")
 	}
 }
 
 func TestSetupExecutaPeloBotao(t *testing.T) {
-	c, ups := setupCore(t)
-	sim, a := openSetup(t, c)
-	waitFor(t, sim, "Ainda sem configuracao")
+	m, ups := openSetup(t)
+	fill(t, m, "trd.localhost", "proxy", "postgres", "registry")
+	click(t, m, "save")
+	waitFor(t, m, "Pronto pra executar")
 
-	fillForm(a, "trd.localhost", "proxy", "postgres", "registry")
-	clickText(t, sim, "Salvar     Executar") // o botao, nao o "Salvar" do texto do plano
-	waitFor(t, sim, "Pronto pra executar.")
-
-	clickText(t, sim, "Executar setup")
-	waitFor(t, sim, "Setup concluido.")
-	waitFor(t, sim, "ok Login da VPS em registry.trd.localhost")
-	if n := ups.Load(); n != 3 {
+	click(t, m, "run")
+	waitFor(t, m, "Setup concluido.")
+	waitFor(t, m, "✓ Login da VPS em registry.trd.localhost")
+	if n := ups(); n != 3 {
 		t.Errorf("%d compose up, esperava 3", n)
+	}
+}
+
+func TestSetupSoExecutaComPlanoPronto(t *testing.T) {
+	m, ups := openSetup(t)
+	click(t, m, "run") // sem config
+	if ups() != 0 || m.setup.showRun {
+		t.Fatal("executou sem plano pronto")
 	}
 }
 
 // um Setup disparado fora da TUI (CLI, MCP) aparece na aba aberta
 func TestSetupDisparadoPorForaApareceNaAba(t *testing.T) {
-	c, _ := setupCore(t)
-	sim, a := openSetup(t, c)
-	waitFor(t, sim, "Ainda sem configuracao")
-	fillForm(a, "trd.localhost", "proxy", "postgres")
-	clickText(t, sim, "Salvar     Executar") // o botao, nao o "Salvar" do texto do plano
-	waitFor(t, sim, "Pronto pra executar.")
+	m, _ := openSetup(t)
+	fill(t, m, "trd.localhost", "proxy", "postgres")
+	click(t, m, "save")
+	waitFor(t, m, "Pronto pra executar")
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := c.RunSetup(context.Background())
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Setup nao terminou")
+	if _, err := m.api.RunSetup(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	waitFor(t, sim, " Execucao ")
-	waitFor(t, sim, "ok Subir postgres")
+	waitFor(t, m, "Execucao")
+	waitFor(t, m, "✓ Subir postgres")
 }

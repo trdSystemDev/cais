@@ -15,12 +15,9 @@ import (
 // passar a depender da TUI, o MCP herdaria esse acoplamento.
 func TestNucleoNaoDependeDeInterface(t *testing.T) {
 	forbidden := []string{
-		"github.com/rivo/tview",
-		"github.com/gdamore/tcell",
 		"charm.land/",
 		"github.com/lrstanley/bubblezone",
 		"github.com/trdSystemDev/cais/internal/ui",
-		"github.com/trdSystemDev/cais/internal/charmui",
 	}
 
 	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {
@@ -28,7 +25,7 @@ func TestNucleoNaoDependeDeInterface(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == "ui" || d.Name() == "charmui" || d.Name() == "templates" {
+			if d.Name() == "ui" || d.Name() == "templates" {
 				return filepath.SkipDir
 			}
 			return nil
