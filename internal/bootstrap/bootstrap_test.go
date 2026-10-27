@@ -141,7 +141,7 @@ func TestRunSobeTudoEmOrdem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(f.ups, []string{"proxy", "infra", "registry", "woodpecker", "dbgate"}) {
+	if !slices.Equal(f.ups, []string{"proxy", "postgres", "mysql", "registry", "woodpecker"}) {
 		t.Errorf("ordem de subida %v", f.ups)
 	}
 	if !slices.Equal(f.recreate, []string{"registry"}) {
@@ -160,7 +160,7 @@ func TestRunSobeTudoEmOrdem(t *testing.T) {
 		t.Errorf("%d relatorios pra %d passos", len(reports), len(steps))
 	}
 
-	compose, err := os.ReadFile(d.ComposeFile("infra"))
+	compose, err := os.ReadFile(d.ComposeFile("postgres"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,10 +208,10 @@ func TestRunDeNovoNaoMudaNada(t *testing.T) {
 	}
 
 	// mudar a config so regrava a stack afetada
-	writeConfig(t, d, func(c *config.Config) { c.Hosts.DB = "bancos.exemplo.com.br" })
+	writeConfig(t, d, func(c *config.Config) { c.Hosts.CI = "build.exemplo.com.br" })
 	steps, _ = Run(context.Background(), d, nil)
-	if steps[2].Detail != "dbgate" {
-		t.Errorf("regravou %q, esperava so dbgate", steps[2].Detail)
+	if steps[2].Detail != "woodpecker" {
+		t.Errorf("regravou %q, esperava so woodpecker", steps[2].Detail)
 	}
 }
 
@@ -225,7 +225,7 @@ func TestRunParaNoPrimeiroErro(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unhealthy") {
 		t.Fatalf("erro %v", err)
 	}
-	if !slices.Equal(f.ups, []string{"proxy", "infra", "registry"}) {
+	if !slices.Equal(f.ups, []string{"proxy", "postgres", "mysql", "registry"}) {
 		t.Errorf("continuou depois do erro: %v", f.ups)
 	}
 	status := map[string]Status{}
@@ -255,7 +255,7 @@ func TestRunLoginDesisteComDica(t *testing.T) {
 func TestRunSemRegistryNaoFazLogin(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
-	writeConfig(t, d, func(c *config.Config) { c.Stacks = []string{"proxy", "infra", "dbgate"} })
+	writeConfig(t, d, func(c *config.Config) { c.Stacks = []string{"proxy", "postgres"} })
 
 	steps, err := Run(context.Background(), d, nil)
 	if err != nil {

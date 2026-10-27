@@ -1,0 +1,44 @@
+# gerado pelo cais a partir de /etc/cais/config.yaml -- nao edite aqui,
+# o proximo Setup sobrescreve
+name: postgres
+
+# Postgres compartilhado. Nunca na proxy_network nem aberto na internet: a
+# porta e publicada so no loopback da VPS, pra administracao por tunel SSH
+# (ssh -L 5432:127.0.0.1:5432 ...). Os apps que usam Postgres entram na
+# postgres_network; quem nao usa nem enxerga o banco.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - postgres_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  postgres_network:
+    name: postgres_network
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: postgres_data
+
+secrets:
+  postgres_password:
+    file: "{{secret "postgres_password"}}"

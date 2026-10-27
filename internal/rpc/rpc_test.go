@@ -311,7 +311,7 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	cfg := info.Config
 	cfg.Domain = "exemplo.com.br"
 	cfg.Email = "admin@exemplo.com.br"
-	cfg.Stacks = []string{"proxy", "infra", "registry"}
+	cfg.Stacks = []string{"proxy", "postgres", "registry"}
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}

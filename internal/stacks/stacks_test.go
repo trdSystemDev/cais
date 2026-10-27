@@ -151,10 +151,10 @@ func TestHostsSaemDaConfig(t *testing.T) {
 		t.Errorf("github do woodpecker errado: %v", env)
 	}
 
-	c.Hosts.DB = "bancos.outro.com"
-	r, _ := render(t, "dbgate", c)
-	if !strings.Contains(string(r.Compose), "traefik.http.routers.dbgate.rule: \"Host(`bancos.outro.com`)\"") {
-		t.Error("dbgate nao usou hosts.db")
+	c.Hosts.CI = "build.outro.com"
+	r, _ := render(t, "woodpecker", c)
+	if !strings.Contains(string(r.Compose), "traefik.http.routers.woodpecker.rule: \"Host(`build.outro.com`)\"") {
+		t.Error("woodpecker nao usou hosts.ci")
 	}
 }
 
@@ -195,46 +195,52 @@ func TestRegistryPublicadoPeloProxy(t *testing.T) {
 	}
 }
 
-func TestDBGateLiberadoSoParaAllowFrom(t *testing.T) {
-	c := validConfig()
-	_, cf := render(t, "dbgate", c)
-	if _, ok := labelsOf(t, cf, "dbgate")["traefik.http.routers.dbgate.middlewares"]; ok {
-		t.Error("sem allow_from o DBGate nao tem restricao de IP")
-	}
-
-	c.DBGate.AllowFrom = []string{"203.0.113.7", "10.8.0.0/24"}
-	_, cf = render(t, "dbgate", c)
-	labels := labelsOf(t, cf, "dbgate")
-	if labels["traefik.http.middlewares.dbgate-allow.ipallowlist.sourcerange"] != "203.0.113.7,10.8.0.0/24" {
-		t.Errorf("sourcerange = %q", labels["traefik.http.middlewares.dbgate-allow.ipallowlist.sourcerange"])
-	}
-	if labels["traefik.http.routers.dbgate.middlewares"] != "dbgate-allow" {
-		t.Error("router do DBGate sem o ipallowlist")
-	}
-}
-
 func TestBancosIsolados(t *testing.T) {
 	c := validConfig()
-	_, infra := render(t, "infra", c)
-	for name, svc := range infra.Services {
-		if slices.Contains(svc.Networks, "proxy_network") {
-			t.Errorf("infra/%s na proxy_network", name)
+	nets := map[string]bool{}
+	for _, db := range []string{"postgres", "mysql"} {
+		_, cf := render(t, db, c)
+		if len(cf.Services) != 1 {
+			t.Errorf("stack %s com %d servicos, esperava so o banco", db, len(cf.Services))
 		}
-		if len(svc.Ports) != 0 {
-			t.Errorf("infra/%s publica porta no host: %v", name, svc.Ports)
+		for name, svc := range cf.Services {
+			// cada banco na propria rede: app de Postgres nao enxerga o MySQL
+			if !slices.Equal(svc.Networks, []string{db + "_network"}) {
+				t.Errorf("%s/%s nas redes %v, esperava so %s_network", db, name, svc.Networks, db)
+			}
+			nets[svc.Networks[0]] = true
+			// so no loopback, pro tunel SSH; nunca em todas as interfaces
+			if len(svc.Ports) != 1 || !strings.HasPrefix(svc.Ports[0], "127.0.0.1:") {
+				t.Errorf("%s/%s tem que publicar so no 127.0.0.1: %v", db, name, svc.Ports)
+			}
 		}
 	}
-	if _, ok := infra.Services["registry"]; ok {
-		t.Error("registry ainda na stack infra")
+	if len(nets) != 2 {
+		t.Errorf("bancos dividindo rede: %v", nets)
 	}
 
 	r, wp := render(t, "woodpecker", c)
-	if strings.Contains(string(r.Compose), "infra_network") {
-		t.Error("woodpecker pendura os builds na infra_network")
+	for n := range nets {
+		if strings.Contains(string(r.Compose), n) {
+			t.Errorf("woodpecker pendura os builds na %s", n)
+		}
 	}
 	env := wp.Services["woodpecker-server"].Environment
 	if env["WOODPECKER_ENVIRONMENT"] != "CAIS_REGISTRY:registry.exemplo.com.br" {
 		t.Errorf("WOODPECKER_ENVIRONMENT = %q", env["WOODPECKER_ENVIRONMENT"])
+	}
+}
+
+// escolher um banco so gera os secrets dele
+func TestSoOBancoEscolhido(t *testing.T) {
+	c := validConfig()
+	c.Stacks = []string{"proxy", "mysql"}
+	names, err := Needed(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(names, "postgres_password") || !slices.Contains(names, "mysql_root_password") {
+		t.Errorf("so mysql ativo, secrets %v", names)
 	}
 }
 
@@ -273,7 +279,6 @@ func TestEnabledValidaDependencias(t *testing.T) {
 	}{
 		"desconhecida":            {[]string{"proxy", "redis"}, nil, `"redis"`},
 		"repetida":                {[]string{"proxy", "proxy"}, nil, "repetida"},
-		"dbgate sem infra":        {[]string{"proxy", "dbgate"}, nil, `precisa da stack "infra"`},
 		"woodpecker sem proxy":    {[]string{"registry", "woodpecker"}, nil, `precisa da stack "proxy"`},
 		"woodpecker sem registry": {[]string{"proxy", "woodpecker"}, nil, `precisa da stack "registry"`},
 		"registry sem proxy":      {[]string{"registry"}, nil, `precisa da stack "proxy"`},
@@ -297,7 +302,7 @@ func TestEnabledValidaDependencias(t *testing.T) {
 
 func TestEnabledDevolveNaOrdemDeSubida(t *testing.T) {
 	c := validConfig()
-	c.Stacks = []string{"dbgate", "registry", "infra", "proxy"}
+	c.Stacks = []string{"woodpecker", "mysql", "registry", "postgres", "proxy"}
 	got, err := Enabled(c)
 	if err != nil {
 		t.Fatal(err)
@@ -306,7 +311,7 @@ func TestEnabledDevolveNaOrdemDeSubida(t *testing.T) {
 	for _, s := range got {
 		names = append(names, s.Name)
 	}
-	if strings.Join(names, ",") != "proxy,infra,registry,dbgate" {
+	if strings.Join(names, ",") != "proxy,postgres,mysql,registry,woodpecker" {
 		t.Fatalf("ordem %v", names)
 	}
 }
@@ -345,7 +350,6 @@ func TestDockerComposeAceita(t *testing.T) {
 	// com content inline)
 	local := validConfig()
 	local.Domain, local.TLS = "trd.localhost", config.TLSSelfSigned
-	local.DBGate.AllowFrom = []string{"10.8.0.0/24"}
 	modes := map[string]config.Config{"letsencrypt": validConfig(), "selfsigned": local}
 
 	for mode, c := range modes {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,7 +22,7 @@ var ErrNotFound = errors.New("config.yaml nao encontrado (rode o Setup)")
 // decide; secrets nunca entram aqui (ficam em SecretsDir).
 type Config struct {
 	// Domain e o dominio base da VPS. Os subdominios das stacks saem dele
-	// (ci.<domain>, db.<domain>, registry.<domain>) se Hosts nao disser outra coisa.
+	// (ci.<domain>, registry.<domain>) se Hosts nao disser outra coisa.
 	Domain string `yaml:"domain" json:"domain"`
 	// Email recebe os avisos do Let's Encrypt.
 	Email string `yaml:"email" json:"email"`
@@ -31,20 +30,12 @@ type Config struct {
 	// precisa de DNS publico) ou TLSSelfSigned (teste local, ex: dominio
 	// .localhost, que nao tem como ter certificado publico).
 	TLS string `yaml:"tls,omitempty" json:"tls,omitempty"`
-	// Stacks sao as stacks base ativas (proxy, infra, registry, woodpecker, dbgate).
+	// Stacks sao as stacks base ativas (proxy, postgres, mysql, registry,
+	// woodpecker). Os bancos sao independentes: ative so o que for usar.
 	Stacks     []string   `yaml:"stacks" json:"stacks"`
 	Proxy      Proxy      `yaml:"proxy" json:"proxy"`
 	Hosts      Hosts      `yaml:"hosts,omitempty" json:"hosts"`
 	Woodpecker Woodpecker `yaml:"woodpecker,omitempty" json:"woodpecker"`
-	DBGate     DBGate     `yaml:"dbgate,omitempty" json:"dbgate"`
-}
-
-// DBGate e o acesso ao painel dos bancos.
-type DBGate struct {
-	// AllowFrom restringe o painel a esses IPs/redes (ex: 203.0.113.7 ou
-	// 10.8.0.0/24, a VPN). Vazio libera pra qualquer IP, protegido so pelo
-	// login.
-	AllowFrom []string `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
 }
 
 // Proxy sao as portas do host publicadas pelo Traefik. Fora de 80/443 so
@@ -57,7 +48,6 @@ type Proxy struct {
 // Hosts troca o nome publico de uma stack. Vazio usa o padrao.
 type Hosts struct {
 	CI string `yaml:"ci,omitempty" json:"ci,omitempty"`
-	DB string `yaml:"db,omitempty" json:"db,omitempty"`
 	// Registry e o nome do registry de imagens, usado no push do CI e no
 	// pull da VPS (e de qualquer outra maquina com o login).
 	Registry string `yaml:"registry,omitempty" json:"registry,omitempty"`
@@ -84,7 +74,7 @@ func (c Config) LetsEncrypt() bool { return c.TLS == "" || c.TLS == TLSLetsEncry
 // Default devolve a configuracao inicial do Setup, sem dominio e e-mail.
 func Default() Config {
 	return Config{
-		Stacks: []string{"proxy", "infra", "registry", "woodpecker", "dbgate"},
+		Stacks: []string{"proxy", "postgres", "mysql", "registry", "woodpecker"},
 		Proxy:  Proxy{HTTPPort: 80, HTTPSPort: 443},
 	}
 }
@@ -95,14 +85,6 @@ func (c Config) CIHost() string {
 		return c.Hosts.CI
 	}
 	return "ci." + c.Domain
-}
-
-// DBHost e o nome publico do DBGate.
-func (c Config) DBHost() string {
-	if c.Hosts.DB != "" {
-		return c.Hosts.DB
-	}
-	return "db." + c.Domain
 }
 
 // RegistryHost e o nome publico do registry de imagens.
@@ -145,11 +127,6 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("hosts.ci: %w", err))
 		}
 	}
-	if c.Hosts.DB != "" {
-		if err := validHost(c.Hosts.DB); err != nil {
-			errs = append(errs, fmt.Errorf("hosts.db: %w", err))
-		}
-	}
 	if c.Hosts.Registry != "" {
 		if err := validHost(c.Hosts.Registry); err != nil {
 			errs = append(errs, fmt.Errorf("hosts.registry: %w", err))
@@ -166,11 +143,6 @@ func (c Config) Validate() error {
 	}
 	if c.Proxy.HTTPPort == c.Proxy.HTTPSPort {
 		errs = append(errs, errors.New("proxy: http_port e https_port nao podem ser iguais"))
-	}
-	for _, a := range c.DBGate.AllowFrom {
-		if !validIPOrCIDR(a) {
-			errs = append(errs, fmt.Errorf("dbgate.allow_from: %q nao e um IP nem uma rede CIDR", a))
-		}
 	}
 	if v := c.Woodpecker.GitHubClient; v != "" && !githubClient.MatchString(v) {
 		errs = append(errs, fmt.Errorf("woodpecker.github_client: client id invalido %q", v))
@@ -219,14 +191,6 @@ func validEmail(e string) error {
 }
 
 func validPort(p int) bool { return p > 0 && p <= 65535 }
-
-func validIPOrCIDR(s string) bool {
-	if _, err := netip.ParsePrefix(s); err == nil {
-		return true
-	}
-	_, err := netip.ParseAddr(s)
-	return err == nil
-}
 
 // Load le e valida o config.yaml. Campos ausentes recebem o padrao de
 // Default; campos desconhecidos sao erro, pra um erro de digitacao nao

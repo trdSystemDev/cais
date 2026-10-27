@@ -87,9 +87,9 @@ func TestRunSetupPublicaProgressoERecusaSegundaAcao(t *testing.T) {
 func TestSaveConfigValidaStacks(t *testing.T) {
 	c := newSetupCore(t, nil)
 	info, _ := c.LoadConfig(context.Background())
-	info.Config.Stacks = []string{"dbgate"}
+	info.Config.Stacks = []string{"woodpecker"}
 	if err := c.SaveConfig(context.Background(), info.Config); err == nil {
-		t.Fatal("salvou dbgate sem proxy/infra")
+		t.Fatal("salvou woodpecker sem proxy/registry")
 	}
 	if err := c.SetSecret(context.Background(), "postgres_password", "x"); err == nil {
 		t.Fatal("deixou sobrescrever secret gerado")

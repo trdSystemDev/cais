@@ -37,7 +37,7 @@ func TestEnsureSecretsGeraCertificadoLocal(t *testing.T) {
 	s := secrets.FileStore{Dir: filepath.Join(t.TempDir(), "secrets")}
 	c := validConfig()
 	c.Domain, c.TLS = "trd.localhost", config.TLSSelfSigned
-	c.Stacks = []string{"proxy", "infra", "registry", "dbgate"}
+	c.Stacks = []string{"proxy", "postgres", "registry"}
 	c.Hosts.Registry = "imagens.outro.localhost"
 
 	create, _, err := PlanSecrets(s, c)
@@ -126,7 +126,7 @@ func TestEnsureSecretsGeraOQueFaltaEPedeOResto(t *testing.T) {
 func TestEnsureSecretsSoDasStacksAtivas(t *testing.T) {
 	s := secrets.FileStore{Dir: filepath.Join(t.TempDir(), "secrets")}
 	c := validConfig()
-	c.Stacks = []string{"proxy", "infra"}
+	c.Stacks = []string{"proxy", "postgres"}
 
 	res, err := EnsureSecrets(s, c)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestEnsureSecretsSoDasStacksAtivas(t *testing.T) {
 		t.Errorf("sem woodpecker/registry nao pede github nem cria htpasswd: %+v", res)
 	}
 	for _, n := range res.Created {
-		if strings.HasPrefix(n, "registry_") || n == "agent_secret" || strings.HasPrefix(n, "dbgate_") {
+		if strings.HasPrefix(n, "registry_") || n == "agent_secret" {
 			t.Errorf("criou secret de stack inativa: %s", n)
 		}
 	}

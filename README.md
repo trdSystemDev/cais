@@ -77,7 +77,7 @@ Regras:
 | Caminho | Conteudo |
 |---|---|
 | `/etc/cais/config.yaml` | configuracao: dominio base, e-mail, stacks ativas |
-| `/var/lib/cais/stacks/<stack>/` | compose das stacks base (proxy, infra, woodpecker, dbgate) |
+| `/var/lib/cais/stacks/<stack>/` | compose das stacks base (proxy, postgres, mysql, registry, woodpecker) |
 | `/var/lib/cais/apps/<app>/` | compose do app e `secrets/` dele |
 | `/var/lib/cais/secrets/` | secrets centrais (senhas das instancias de banco etc.) |
 | `/var/lib/cais/backups/` | backups |
@@ -95,8 +95,7 @@ criptografados com [age](https://age-encryption.org) para uma chave publica
 cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
 
 O cais gera sozinho todos os secrets das stacks (senhas dos bancos, agent
-secret do Woodpecker, login do DBGate) e
-nunca troca um que ja existe; so o client secret do GitHub e informado. O
+secret do Woodpecker) e nunca troca um que ja existe; so o client secret do GitHub e informado. O
 registry tem um usuario por quem acessa: `ci` (push do Woodpecker) e `vps`
 (pull do daemon) com senha guardada, e um por pessoa so com o hash (a senha e
 mostrada uma vez). Todo usuario pode push/pull, entao revogar e por pessoa; o
@@ -112,9 +111,9 @@ e o usuario `deploy` nao tem acesso a nenhum arquivo.
 `/etc/cais/config.yaml` guarda so o que um humano decide (secrets nunca):
 
 ```yaml
-domain: exemplo.com.br          # ci., db. e registry.<domain> saem daqui
+domain: exemplo.com.br          # ci. e registry.<domain> saem daqui
 email: admin@exemplo.com.br     # avisos do Let's Encrypt
-stacks: [proxy, infra, registry, woodpecker, dbgate]
+stacks: [proxy, postgres, mysql, registry, woodpecker]   # bancos: so os que usar
 proxy:
   http_port: 80                 # outra porta so numa migracao
   https_port: 443
@@ -124,8 +123,6 @@ hosts:                          # opcional: troca o nome padrao
 woodpecker:
   github_client: Ov23li...      # Client ID do OAuth app do GitHub
   admin: seu-usuario-github
-dbgate:
-  allow_from: [203.0.113.7, 10.8.0.0/24]   # opcional: so esses IPs abrem o DBGate
 ```
 
 Campo desconhecido e erro (pega erro de digitacao). Os compose das stacks sao
@@ -135,14 +132,28 @@ com labels `traefik.*` na `proxy_network`. O Traefik so publica o que tem
 `traefik.enable=true` e le o docker por um socket-proxy somente leitura.
 
 Sem WAF no proxy, de proposito: pra apps proprios ele gera mais falso positivo
-que protecao (num painel de banco, toda consulta parece SQL injection). A
-protecao vem de TLS, login forte, bancos fora da rede publica e, no DBGate, de
-`dbgate.allow_from` (so os IPs/redes listados abrem o painel). WAF e DDoS, se
-precisar, ficam melhor na borda (ex: Cloudflare).
+que protecao. A protecao vem de TLS, login forte e bancos fora da rede publica.
+WAF e DDoS, se precisar, ficam melhor na borda (ex: Cloudflare).
+
+Postgres e MySQL sao stacks separadas: ative so o que for usar (ex:
+`--stacks proxy,postgres,registry,woodpecker`), e so os secrets dele sao
+gerados. Cada banco fica na propria rede (`postgres_network`, `mysql_network`),
+entao um app so enxerga o banco que usa.
+
+Os bancos nao tem painel web: so escutam no loopback da VPS (`127.0.0.1:5432` e
+`:3306`), e a administracao e por tunel SSH, com o cliente que preferir no seu
+computador. Nenhuma porta nova fica aberta na internet:
+
+```sh
+ssh -N -L 5432:127.0.0.1:5432 -L 3306:127.0.0.1:3306 voce@vps
+# e conecte em localhost:5432 (postgres) e localhost:3306 (root)
+```
+
+O `cais setup` mostra esse comando e onde ler as senhas.
 
 O registry de imagens e publico em `https://registry.<domain>` (TLS do Let's
 Encrypt + login), numa stack propria: CI e VPS fazem push/pull pelo mesmo nome,
-sem `insecure-registries`. Os bancos (`infra`) nunca entram na `proxy_network`,
+sem `insecure-registries`. Os bancos nunca entram na `proxy_network`,
 e os builds do CI rodam fora da rede deles.
 
 ## Roadmap
@@ -176,7 +187,7 @@ cais setup run                           # gera secrets, grava os compose, sobe 
 
 O `run` sobe as stacks em ordem com `docker compose up -d --wait` (cada uma
 saudavel antes da proxima) e termina com o `docker login` da VPS no registry.
-Antes, o DNS de `ci.`, `db.` e `registry.<dominio>` precisa apontar pra VPS.
+Antes, o DNS de `ci.` e `registry.<dominio>` precisa apontar pra VPS.
 
 Pra testar num PC, sem DNS publico: use um dominio `.localhost` (o
 systemd-resolved e os navegadores ja resolvem `*.localhost` pra 127.0.0.1; `.local`

@@ -90,6 +90,8 @@ type Plan struct {
 	// CAFile e o certificado da CA local (tls: selfsigned), que quem testa
 	// instala como confiavel. Vazio com Let's Encrypt.
 	CAFile string `json:"ca_file,omitempty"`
+	// SecretsDir e onde ficam as senhas (pra dizer onde ler a dos bancos).
+	SecretsDir string `json:"secrets_dir"`
 }
 
 // Ready diz se o Setup pode rodar.
@@ -123,6 +125,7 @@ func MakePlan(d Deps) (Plan, error) {
 	}
 	p.Configured = true
 	p.Config = cfg
+	p.SecretsDir = d.SecretsDir
 	if !cfg.LetsEncrypt() {
 		p.CAFile = filepath.Join(d.SecretsDir, secrets.TLSCACert)
 	}

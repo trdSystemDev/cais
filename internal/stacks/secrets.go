@@ -39,10 +39,7 @@ var companions = map[string][]string{
 var generators = map[string]func(secrets.Store) ([]byte, error){
 	"postgres_password":   func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 	"mysql_root_password": func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
-	"mysql_password":      func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 	"agent_secret":        func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
-	"dbgate_login":        func(secrets.Store) ([]byte, error) { return []byte("admin"), nil },
-	"dbgate_password":     func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 }
 
 // SecretsResult e o que EnsureSecrets fez.
@@ -211,9 +208,6 @@ func TLSHosts(c config.Config) []string {
 	}
 	if c.HasStack("woodpecker") {
 		add(c.CIHost())
-	}
-	if c.HasStack("dbgate") {
-		add(c.DBHost())
 	}
 	return hosts
 }

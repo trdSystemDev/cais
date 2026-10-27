@@ -47,7 +47,7 @@ func DataDir() string {
 	return filepath.Join(os.TempDir(), "cais", "data")
 }
 
-// StackDir e a pasta de uma stack base (proxy, infra, woodpecker, dbgate).
+// StackDir e a pasta de uma stack base (proxy, postgres, mysql, registry, woodpecker).
 func StackDir(name string) string { return filepath.Join(DataDir(), "stacks", name) }
 
 // AppDir e a pasta de um app.

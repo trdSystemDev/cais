@@ -48,7 +48,7 @@ func New(c core.API) *App {
 	a.addTab("Apps", placeholder("Apps", 3, "Criar app pelo link do GitHub, deploy, logs ao vivo, restart."))
 	a.addTab("Secrets", placeholder("Secrets", 3, "Secrets centrais e por app: gerar, copiar, propagar."))
 	a.addTab("Bancos", placeholder("Bancos", 4, "Databases e usuarios no Postgres/MySQL, instancias dedicadas."))
-	a.addTab("Infra", placeholder("Infra", 2, "Status das stacks base: Traefik, registry, Woodpecker, DBGate."))
+	a.addTab("Infra", placeholder("Infra", 2, "Status das stacks base: Traefik, bancos, registry, Woodpecker."))
 	a.addTab("Setup", placeholder("Setup", 2, "Assistente que prepara uma VPS vazia com tudo acima."))
 
 	tabBar := tview.NewFlex()

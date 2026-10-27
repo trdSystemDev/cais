@@ -28,10 +28,10 @@ type Stack struct {
 // All lista as stacks na ordem de subida: cada uma so depende das anteriores.
 var All = []Stack{
 	{Name: "proxy", Desc: "Traefik: reverse proxy e TLS, sites por label"},
-	{Name: "infra", Desc: "Postgres e MySQL compartilhados"},
+	{Name: "postgres", Desc: "Postgres compartilhado, so no loopback (tunel SSH)"},
+	{Name: "mysql", Desc: "MySQL compartilhado, so no loopback (tunel SSH)"},
 	{Name: "registry", Desc: "Registry de imagens publico, com TLS e login", Requires: []string{"proxy"}},
 	{Name: "woodpecker", Desc: "CI ligado ao GitHub", Requires: []string{"proxy", "registry"}},
-	{Name: "dbgate", Desc: "Interface web dos bancos", Requires: []string{"proxy", "infra"}},
 }
 
 // Get procura uma stack pelo nome.
@@ -108,10 +108,7 @@ type vars struct {
 	HTTPPort     int
 	HTTPSPort    int
 	CIHost       string
-	DBHost       string
 	RegistryHost string
-	// DBAllowFrom e o sourcerange do ipallowlist do Traefik (vazio = livre)
-	DBAllowFrom  string
 	GitHubClient string
 	Admin        string
 }
@@ -119,9 +116,7 @@ type vars struct {
 var secretName = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 // Render gera o docker-compose.yml de uma stack. Os secrets viram caminhos
-// absolutos em secretsDir: as stacks compartilham secrets centrais (a senha
-// do Postgres e da infra e do dbgate) e o compose fica valido de qualquer
-// pasta.
+// absolutos em secretsDir, entao o compose fica valido de qualquer pasta.
 func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 	if _, ok := Get(name); !ok {
 		return Rendered{}, fmt.Errorf("stack desconhecida %q", name)
@@ -161,9 +156,7 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 		HTTPPort:     c.Proxy.HTTPPort,
 		HTTPSPort:    c.Proxy.HTTPSPort,
 		CIHost:       c.CIHost(),
-		DBHost:       c.DBHost(),
 		RegistryHost: c.RegistryHost(),
-		DBAllowFrom:  strings.Join(c.DBGate.AllowFrom, ","),
 		GitHubClient: c.Woodpecker.GitHubClient,
 		Admin:        c.Woodpecker.Admin,
 	})

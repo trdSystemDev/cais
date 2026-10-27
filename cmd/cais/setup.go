@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -91,13 +92,6 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 	if cfg.HasStack("woodpecker") {
 		fmt.Fprintf(w, "  ci\thttps://%s (admin: %s)\n", cfg.CIHost(), cfg.Woodpecker.Admin)
 	}
-	if cfg.HasStack("dbgate") {
-		access := "qualquer IP, so com login"
-		if len(cfg.DBGate.AllowFrom) > 0 {
-			access = "so de " + strings.Join(cfg.DBGate.AllowFrom, ", ")
-		}
-		fmt.Fprintf(w, "  bancos\thttps://%s (%s)\n", cfg.DBHost(), access)
-	}
 	w.Flush()
 
 	if len(p.Stacks) > 0 {
@@ -132,6 +126,37 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 	}
 }
 
+// printDBAccess explica como chegar nos bancos: so por tunel SSH, que eles
+// so escutam no loopback da VPS.
+func printDBAccess(out io.Writer, p bootstrap.Plan) {
+	type db struct{ stack, name, port, user, secret string }
+	var dbs []db
+	for _, d := range []db{
+		{"postgres", "Postgres", "5432", "postgres", "postgres_password"},
+		{"mysql", "MySQL", "3306", "root", "mysql_root_password"},
+	} {
+		if p.Config.HasStack(d.stack) {
+			dbs = append(dbs, d)
+		}
+	}
+	if len(dbs) == 0 {
+		return
+	}
+
+	tunnel := "ssh -N"
+	for _, d := range dbs {
+		tunnel += fmt.Sprintf(" -L %s:127.0.0.1:%s", d.port, d.port)
+	}
+	fmt.Fprintln(out, "\nBancos: so pelo loopback da VPS, via tunel SSH. No seu computador:")
+	fmt.Fprintf(out, "\n  %s <usuario>@<vps>\n", tunnel)
+	fmt.Fprintln(out, "\n  e no seu cliente (DBeaver, TablePlus, psql...):")
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	for _, d := range dbs {
+		fmt.Fprintf(w, "    %s\tlocalhost:%s\tusuario %s\tsenha: sudo cat %s\n", d.name, d.port, d.user, filepath.Join(p.SecretsDir, d.secret))
+	}
+	w.Flush()
+}
+
 // printTrust explica como confiar na CA local, no modo tls: selfsigned.
 func printTrust(out io.Writer, p bootstrap.Plan) {
 	if p.CAFile == "" {
@@ -160,9 +185,7 @@ func setupConfig(args []string) error {
 	ghClient := fs.String("github-client", "", "Client ID do OAuth app do GitHub")
 	ghAdmin := fs.String("github-admin", "", "usuario do GitHub que administra o Woodpecker")
 	hostCI := fs.String("host-ci", "", "nome do Woodpecker (padrao ci.<dominio>)")
-	hostDB := fs.String("host-db", "", "nome do DBGate (padrao db.<dominio>)")
 	hostReg := fs.String("host-registry", "", "nome do registry (padrao registry.<dominio>)")
-	dbAllow := fs.String("dbgate-allow", "", "IPs/redes que podem abrir o DBGate, separados por virgula (vazio libera)")
 	fs.Parse(args)
 
 	c, err := connect(*socket)
@@ -198,12 +221,8 @@ func setupConfig(args []string) error {
 			cfg.Woodpecker.Admin = *ghAdmin
 		case "host-ci":
 			cfg.Hosts.CI = *hostCI
-		case "host-db":
-			cfg.Hosts.DB = *hostDB
 		case "host-registry":
 			cfg.Hosts.Registry = *hostReg
-		case "dbgate-allow":
-			cfg.DBGate.AllowFrom = splitList(*dbAllow)
 		}
 	})
 	if err := c.SaveConfig(ctx, cfg); err != nil {
@@ -314,6 +333,7 @@ func setupRun(args []string) error {
 	}
 	fmt.Println("\nSetup concluido.")
 	if p, err := c.PlanSetup(ctx); err == nil {
+		printDBAccess(os.Stdout, p)
 		printTrust(os.Stdout, p)
 	}
 	return nil

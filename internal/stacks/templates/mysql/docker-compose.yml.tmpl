@@ -1,0 +1,42 @@
+# gerado pelo cais a partir de /etc/cais/config.yaml -- nao edite aqui,
+# o proximo Setup sobrescreve
+name: mysql
+
+# MySQL compartilhado. Nunca na proxy_network nem aberto na internet: a
+# porta e publicada so no loopback da VPS, pra administracao por tunel SSH
+# (ssh -L 3306:127.0.0.1:3306 ...). Os apps que usam MySQL entram na
+# mysql_network; quem nao usa nem enxerga o banco.
+
+services:
+  mysql:
+    image: mysql:9.7
+    container_name: mysql
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    secrets:
+      - mysql_root_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - mysql_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  mysql_network:
+    name: mysql_network
+    driver: bridge
+
+volumes:
+  mysql_data:
+    name: mysql_data
+
+secrets:
+  mysql_root_password:
+    file: "{{secret "mysql_root_password"}}"
