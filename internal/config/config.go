@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,9 +36,18 @@ type Config struct {
 	Proxy      Proxy      `yaml:"proxy" json:"proxy"`
 	Hosts      Hosts      `yaml:"hosts,omitempty" json:"hosts"`
 	Woodpecker Woodpecker `yaml:"woodpecker,omitempty" json:"woodpecker"`
+	DBGate     DBGate     `yaml:"dbgate,omitempty" json:"dbgate"`
 }
 
-// Proxy sao as portas do host publicadas pelo BunkerWeb. Fora de 80/443 so
+// DBGate e o acesso ao painel dos bancos.
+type DBGate struct {
+	// AllowFrom restringe o painel a esses IPs/redes (ex: 203.0.113.7 ou
+	// 10.8.0.0/24, a VPN). Vazio libera pra qualquer IP, protegido so pelo
+	// login.
+	AllowFrom []string `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
+}
+
+// Proxy sao as portas do host publicadas pelo Traefik. Fora de 80/443 so
 // faz sentido numa migracao, com outro proxy ainda segurando essas portas.
 type Proxy struct {
 	HTTPPort  int `yaml:"http_port" json:"http_port"`
@@ -157,6 +167,11 @@ func (c Config) Validate() error {
 	if c.Proxy.HTTPPort == c.Proxy.HTTPSPort {
 		errs = append(errs, errors.New("proxy: http_port e https_port nao podem ser iguais"))
 	}
+	for _, a := range c.DBGate.AllowFrom {
+		if !validIPOrCIDR(a) {
+			errs = append(errs, fmt.Errorf("dbgate.allow_from: %q nao e um IP nem uma rede CIDR", a))
+		}
+	}
 	if v := c.Woodpecker.GitHubClient; v != "" && !githubClient.MatchString(v) {
 		errs = append(errs, fmt.Errorf("woodpecker.github_client: client id invalido %q", v))
 	}
@@ -204,6 +219,14 @@ func validEmail(e string) error {
 }
 
 func validPort(p int) bool { return p > 0 && p <= 65535 }
+
+func validIPOrCIDR(s string) bool {
+	if _, err := netip.ParsePrefix(s); err == nil {
+		return true
+	}
+	_, err := netip.ParseAddr(s)
+	return err == nil
+}
 
 // Load le e valida o config.yaml. Campos ausentes recebem o padrao de
 // Default; campos desconhecidos sao erro, pra um erro de digitacao nao

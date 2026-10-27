@@ -2,10 +2,14 @@
 # o proximo Setup sobrescreve
 name: registry
 
-# Registry de imagens publicado pelo BunkerWeb em https://{{.RegistryHost}},
-# com TLS do Let's Encrypt e login (htpasswd). O CI faz push e a VPS faz
-# pull pelo mesmo nome, sem insecure-registries no dockerd. Fica numa stack
-# propria pra so ele entrar na proxy_network, nunca os bancos da infra.
+# Registry de imagens publicado pelo Traefik em https://{{.RegistryHost}},
+# com TLS e login (htpasswd). O Traefik nao limita o tamanho do corpo e
+# repassa o upload em stream; o timeout de leitura do entrypoint e o unico
+# ajuste que o push de camadas grandes precisa (na stack proxy).
+#
+# O CI faz push e a VPS faz pull pelo mesmo nome, sem insecure-registries no
+# dockerd. Fica numa stack propria pra so ele entrar na proxy_network, nunca
+# os bancos da infra.
 
 services:
   registry:
@@ -25,35 +29,10 @@ services:
       - source: registry_htpasswd
         target: /auth/htpasswd
     labels:
-      bunkerweb.SERVER_NAME: "{{.RegistryHost}}"
-{{- if .LetsEncrypt}}
-      bunkerweb.AUTO_LETS_ENCRYPT: "yes"
-{{- else}}
-      # certificado da CA local (tls: selfsigned), montado no bw-scheduler
-      bunkerweb.USE_CUSTOM_SSL: "yes"
-      bunkerweb.CUSTOM_SSL_CERT: "/run/secrets/tls_cert"
-      bunkerweb.CUSTOM_SSL_KEY: "/run/secrets/tls_key"
-{{- end}}
-      bunkerweb.USE_REVERSE_PROXY: "yes"
-      bunkerweb.REVERSE_PROXY_URL: "/"
-      bunkerweb.REVERSE_PROXY_HOST: "http://registry:5000"
-      # o protocolo do registry usa PUT/PATCH/DELETE no push
-      bunkerweb.ALLOWED_METHODS: "GET|HEAD|POST|PUT|PATCH|DELETE"
-      # camadas de imagem passam facil de 1 GB; 0 = sem limite
-      bunkerweb.MAX_CLIENT_SIZE: "0"
-      # repassa o upload/download em stream em vez de guardar em disco no proxy
-      bunkerweb.REVERSE_PROXY_REQUEST_BUFFERING: "no"
-      bunkerweb.REVERSE_PROXY_BUFFERING: "no"
-      bunkerweb.REVERSE_PROXY_READ_TIMEOUT: "900s"
-      bunkerweb.REVERSE_PROXY_SEND_TIMEOUT: "900s"
-      # todo push comeca com 401 (desafio de login) e um HEAD 404 por camada
-      # que ainda nao existe: o bad behavior baniria o IP do proprio CI
-      bunkerweb.USE_BAD_BEHAVIOR: "no"
-      # um push faz dezenas de requests por segundo (o padrao e 2r/s)
-      bunkerweb.USE_LIMIT_REQ: "no"
-      bunkerweb.USE_LIMIT_CONN: "no"
-      # corpo binario (camadas) so gera falso positivo no CRS
-      bunkerweb.USE_MODSECURITY: "no"
+      traefik.enable: "true"
+      traefik.http.routers.registry.rule: "Host(`{{.RegistryHost}}`)"
+      traefik.http.routers.registry.entrypoints: websecure
+      traefik.http.services.registry.loadbalancer.server.port: "5000"
     volumes:
       - registry_data:/var/lib/registry
     networks:

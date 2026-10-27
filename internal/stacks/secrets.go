@@ -37,15 +37,6 @@ var companions = map[string][]string{
 // generators dizem como gerar cada secret usado pelos templates. Todo nome
 // que um template referencia precisa estar aqui ou em provided (testado).
 var generators = map[string]func(secrets.Store) ([]byte, error){
-	"db_bunkerweb_password": func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
-	// formato do BunkerWeb; a senha e A-Z2-7, entao entra na URI sem escape
-	"database_uri": func(s secrets.Store) ([]byte, error) {
-		pw, err := secrets.Ensure(s, "db_bunkerweb_password", secrets.GenPassword)
-		if err != nil {
-			return nil, err
-		}
-		return []byte("mariadb+pymysql://bunkerweb:" + string(pw) + "@bw-db:3306/bunkerweb"), nil
-	},
 	"postgres_password":   func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 	"mysql_root_password": func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 	"mysql_password":      func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },

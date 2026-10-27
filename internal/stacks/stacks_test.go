@@ -25,12 +25,27 @@ func validConfig() config.Config {
 	return c
 }
 
+// command aceita as duas formas do compose: lista ou texto.
+type command []string
+
+func (c *command) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		*c = strings.Fields(n.Value)
+		return nil
+	}
+	var list []string
+	err := n.Decode(&list)
+	*c = list
+	return err
+}
+
 // compose e o pedaco do docker-compose.yml que os testes conferem.
 type compose struct {
 	Name     string `yaml:"name"`
 	Services map[string]struct {
 		Ports       []string          `yaml:"ports"`
 		Environment map[string]string `yaml:"environment"`
+		Command     command           `yaml:"command"`
 		Labels      yaml.Node         `yaml:"labels"`
 		Networks    []string          `yaml:"networks"`
 	} `yaml:"services"`
@@ -95,20 +110,31 @@ func TestProxyNasceVazioComPortasEEmail(t *testing.T) {
 	c.Proxy = config.Proxy{HTTPPort: 8080, HTTPSPort: 8443}
 	_, cf := render(t, "proxy", c)
 
-	bw := cf.Services["bunkerweb"]
-	want := []string{"8080:8080", "8443:8443", "8443:8443/udp"}
-	if !slices.Equal(bw.Ports, want) {
-		t.Errorf("portas %v, esperava %v", bw.Ports, want)
+	tr := cf.Services["traefik"]
+	want := []string{"8080:80", "8443:443", "8443:443/udp"}
+	if !slices.Equal(tr.Ports, want) {
+		t.Errorf("portas %v, esperava %v", tr.Ports, want)
 	}
-	sched := cf.Services["bw-scheduler"].Environment
-	if sched["EMAIL_LETS_ENCRYPT"] != "admin@exemplo.com.br" {
-		t.Errorf("EMAIL_LETS_ENCRYPT = %q", sched["EMAIL_LETS_ENCRYPT"])
+	for _, flag := range []string{
+		// sem isso o Traefik publica todo container do host
+		"--providers.docker.exposedbydefault=false",
+		// o docker.sock so chega pelo socket-proxy somente leitura
+		"--providers.docker.endpoint=tcp://traefik-docker-proxy:2375",
+		"--entrypoints.web.http.redirections.entrypoint.to=websecure",
+		// o padrao de 60s corta o push de camada grande no registry
+		"--entrypoints.websecure.transport.respondingtimeouts.readtimeout=30m",
+		"--certificatesresolvers.le.acme.email=admin@exemplo.com.br",
+		"--entrypoints.websecure.http.tls.certresolver=le",
+	} {
+		if !slices.Contains(tr.Command, flag) {
+			t.Errorf("traefik sem %s", flag)
+		}
 	}
-	if sched["SERVER_NAME"] != "" {
-		t.Errorf("proxy tem que nascer sem sites, SERVER_NAME = %q", sched["SERVER_NAME"])
-	}
-	for k := range sched {
-		if strings.Contains(k, "_REVERSE_PROXY_") {
+	// nenhum site declarado no proxy: so os headers padrao
+	var labels map[string]string
+	tr.Labels.Decode(&labels)
+	for k := range labels {
+		if strings.Contains(k, ".routers.") {
 			t.Errorf("site declarado no proxy: %s", k)
 		}
 	}
@@ -127,9 +153,20 @@ func TestHostsSaemDaConfig(t *testing.T) {
 
 	c.Hosts.DB = "bancos.outro.com"
 	r, _ := render(t, "dbgate", c)
-	if !strings.Contains(string(r.Compose), `bunkerweb.SERVER_NAME: "bancos.outro.com"`) {
+	if !strings.Contains(string(r.Compose), "traefik.http.routers.dbgate.rule: \"Host(`bancos.outro.com`)\"") {
 		t.Error("dbgate nao usou hosts.db")
 	}
+}
+
+// labels de um servico publicado, ja decodificados
+func labelsOf(t *testing.T, cf compose, service string) map[string]string {
+	t.Helper()
+	var labels map[string]string
+	node := cf.Services[service].Labels // valor do mapa nao e enderecavel
+	if err := node.Decode(&labels); err != nil {
+		t.Fatal(err)
+	}
+	return labels
 }
 
 func TestRegistryPublicadoPeloProxy(t *testing.T) {
@@ -144,18 +181,12 @@ func TestRegistryPublicadoPeloProxy(t *testing.T) {
 	if !slices.Equal(reg.Networks, []string{"proxy_network"}) {
 		t.Errorf("redes do registry %v, esperava so proxy_network", reg.Networks)
 	}
-	var labels map[string]string
-	if err := reg.Labels.Decode(&labels); err != nil {
-		t.Fatal(err)
-	}
+	labels := labelsOf(t, cf, "registry")
 	want := map[string]string{
-		"bunkerweb.SERVER_NAME":       "registry.trds.com.br",
-		"bunkerweb.AUTO_LETS_ENCRYPT": "yes",
-		"bunkerweb.MAX_CLIENT_SIZE":   "0",
-		// sem isso o push quebra: metodos, 401/404 do protocolo e rajada de requests
-		"bunkerweb.ALLOWED_METHODS":  "GET|HEAD|POST|PUT|PATCH|DELETE",
-		"bunkerweb.USE_BAD_BEHAVIOR": "no",
-		"bunkerweb.USE_LIMIT_REQ":    "no",
+		"traefik.enable":                                          "true",
+		"traefik.http.routers.registry.rule":                      "Host(`registry.trds.com.br`)",
+		"traefik.http.routers.registry.entrypoints":               "websecure",
+		"traefik.http.services.registry.loadbalancer.server.port": "5000",
 	}
 	for k, v := range want {
 		if labels[k] != v {
@@ -164,7 +195,24 @@ func TestRegistryPublicadoPeloProxy(t *testing.T) {
 	}
 }
 
-// os bancos nunca ficam alcancaveis pela rede publica nem pelos builds do CI
+func TestDBGateLiberadoSoParaAllowFrom(t *testing.T) {
+	c := validConfig()
+	_, cf := render(t, "dbgate", c)
+	if _, ok := labelsOf(t, cf, "dbgate")["traefik.http.routers.dbgate.middlewares"]; ok {
+		t.Error("sem allow_from o DBGate nao tem restricao de IP")
+	}
+
+	c.DBGate.AllowFrom = []string{"203.0.113.7", "10.8.0.0/24"}
+	_, cf = render(t, "dbgate", c)
+	labels := labelsOf(t, cf, "dbgate")
+	if labels["traefik.http.middlewares.dbgate-allow.ipallowlist.sourcerange"] != "203.0.113.7,10.8.0.0/24" {
+		t.Errorf("sourcerange = %q", labels["traefik.http.middlewares.dbgate-allow.ipallowlist.sourcerange"])
+	}
+	if labels["traefik.http.routers.dbgate.middlewares"] != "dbgate-allow" {
+		t.Error("router do DBGate sem o ipallowlist")
+	}
+}
+
 func TestBancosIsolados(t *testing.T) {
 	c := validConfig()
 	_, infra := render(t, "infra", c)
@@ -193,33 +241,27 @@ func TestBancosIsolados(t *testing.T) {
 func TestTLSAutoassinadoParaTesteLocal(t *testing.T) {
 	c := validConfig()
 	c.Domain, c.TLS = "trd.localhost", config.TLSSelfSigned
-	for _, name := range []string{"registry", "woodpecker", "dbgate"} {
-		r, _ := render(t, name, c)
-		text := string(r.Compose)
-		if strings.Contains(text, "AUTO_LETS_ENCRYPT") {
-			t.Errorf("%s pede Let's Encrypt em modo autoassinado", name)
-		}
-		if !strings.Contains(text, `bunkerweb.CUSTOM_SSL_CERT: "/run/secrets/tls_cert"`) {
-			t.Errorf("%s sem o certificado da CA local", name)
-		}
-	}
-	// o scheduler e quem le o certificado
-	r, _ := render(t, "proxy", c)
+	r, cf := render(t, "proxy", c)
+	text := string(r.Compose)
+
 	if !slices.Contains(r.Secrets, "tls_cert") || !slices.Contains(r.Secrets, "tls_key") {
-		t.Errorf("proxy nao monta o certificado: %v", r.Secrets)
+		t.Errorf("proxy nao monta o certificado da CA local: %v", r.Secrets)
 	}
-	if !strings.Contains(string(r.Compose), "      - tls_cert\n      - tls_key") {
-		t.Error("bw-scheduler sem os secrets do certificado")
+	cmd := cf.Services["traefik"].Command
+	if slices.ContainsFunc(cmd, func(f string) bool { return strings.Contains(f, "certresolver") || strings.Contains(f, "acme") }) {
+		t.Error("modo autoassinado pede Let's Encrypt")
+	}
+	if !slices.Contains(cmd, "--providers.file.directory=/etc/traefik/dynamic") {
+		t.Error("traefik sem o arquivo com o certificado padrao")
+	}
+	if !strings.Contains(text, "certFile: /run/secrets/tls_cert") {
+		t.Error("certificado padrao nao aponta pro secret")
 	}
 
 	c.TLS = ""
 	r, _ = render(t, "proxy", c)
-	if slices.Contains(r.Secrets, "tls_cert") {
+	if slices.Contains(r.Secrets, "tls_cert") || strings.Contains(string(r.Compose), "providers.file") {
 		t.Error("Let's Encrypt nao usa certificado da CA local")
-	}
-	r, _ = render(t, "registry", c)
-	if !strings.Contains(string(r.Compose), `bunkerweb.AUTO_LETS_ENCRYPT: "yes"`) || strings.Contains(string(r.Compose), "CUSTOM_SSL") {
-		t.Error("padrao tem que ser Let's Encrypt")
 	}
 }
 
@@ -299,24 +341,33 @@ func TestDockerComposeAceita(t *testing.T) {
 	secrets := filepath.Join(dir, "secrets")
 	os.Mkdir(secrets, 0o700)
 
-	for _, s := range All {
-		t.Run(s.Name, func(t *testing.T) {
-			r, err := Render(s.Name, validConfig(), secrets)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, sec := range r.Secrets {
-				os.WriteFile(filepath.Join(secrets, sec), []byte("x"), 0o444)
-			}
-			file := filepath.Join(dir, s.Name+".yml")
-			os.WriteFile(file, r.Compose, 0o644)
+	// os dois modos de TLS geram compose diferentes (o local usa configs
+	// com content inline)
+	local := validConfig()
+	local.Domain, local.TLS = "trd.localhost", config.TLSSelfSigned
+	local.DBGate.AllowFrom = []string{"10.8.0.0/24"}
+	modes := map[string]config.Config{"letsencrypt": validConfig(), "selfsigned": local}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			out, err := exec.CommandContext(ctx, "docker", "compose", "-f", file, "config", "--quiet").CombinedOutput()
-			if err != nil {
-				t.Fatalf("docker compose recusou: %v\n%s", err, out)
-			}
-		})
+	for mode, c := range modes {
+		for _, s := range All {
+			t.Run(mode+"/"+s.Name, func(t *testing.T) {
+				r, err := Render(s.Name, c, secrets)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, sec := range r.Secrets {
+					os.WriteFile(filepath.Join(secrets, sec), []byte("x"), 0o444)
+				}
+				file := filepath.Join(dir, mode+"-"+s.Name+".yml")
+				os.WriteFile(file, r.Compose, 0o644)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				out, err := exec.CommandContext(ctx, "docker", "compose", "-f", file, "config", "--quiet").CombinedOutput()
+				if err != nil {
+					t.Fatalf("docker compose recusou: %v\n%s", err, out)
+				}
+			})
+		}
 	}
 }

@@ -92,7 +92,11 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 		fmt.Fprintf(w, "  ci\thttps://%s (admin: %s)\n", cfg.CIHost(), cfg.Woodpecker.Admin)
 	}
 	if cfg.HasStack("dbgate") {
-		fmt.Fprintf(w, "  bancos\thttps://%s\n", cfg.DBHost())
+		access := "qualquer IP, so com login"
+		if len(cfg.DBGate.AllowFrom) > 0 {
+			access = "so de " + strings.Join(cfg.DBGate.AllowFrom, ", ")
+		}
+		fmt.Fprintf(w, "  bancos\thttps://%s (%s)\n", cfg.DBHost(), access)
 	}
 	w.Flush()
 
@@ -158,6 +162,7 @@ func setupConfig(args []string) error {
 	hostCI := fs.String("host-ci", "", "nome do Woodpecker (padrao ci.<dominio>)")
 	hostDB := fs.String("host-db", "", "nome do DBGate (padrao db.<dominio>)")
 	hostReg := fs.String("host-registry", "", "nome do registry (padrao registry.<dominio>)")
+	dbAllow := fs.String("dbgate-allow", "", "IPs/redes que podem abrir o DBGate, separados por virgula (vazio libera)")
 	fs.Parse(args)
 
 	c, err := connect(*socket)
@@ -197,6 +202,8 @@ func setupConfig(args []string) error {
 			cfg.Hosts.DB = *hostDB
 		case "host-registry":
 			cfg.Hosts.Registry = *hostReg
+		case "dbgate-allow":
+			cfg.DBGate.AllowFrom = splitList(*dbAllow)
 		}
 	})
 	if err := c.SaveConfig(ctx, cfg); err != nil {

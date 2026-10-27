@@ -33,7 +33,7 @@ Setup da VPS:
   cais setup                         mostra o plano: o que falta e o que vai mudar
   cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
       --domain --email --tls letsencrypt|selfsigned --stacks proxy,infra,... --http-port --https-port
-      --github-client --github-admin --host-ci --host-db --host-registry
+      --github-client --github-admin --host-ci --host-db --host-registry --dbgate-allow
   cais setup secret <nome>           grava um secret informado (le do stdin)
   cais setup run                     executa o Setup e mostra o progresso
 

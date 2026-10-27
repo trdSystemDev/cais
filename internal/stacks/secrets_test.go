@@ -87,18 +87,11 @@ func TestEnsureSecretsGeraOQueFaltaEPedeOResto(t *testing.T) {
 	if !slices.Equal(res.Recreate, []string{"registry"}) {
 		t.Error("primeira vez tem que criar o htpasswd")
 	}
-	for _, want := range []string{"database_uri", "db_bunkerweb_password", "postgres_password",
+	for _, want := range []string{"postgres_password",
 		"agent_secret", "registry_htpasswd", "registry_ci_password", "registry_vps_password"} {
 		if !slices.Contains(res.Created, want) {
 			t.Errorf("Created nao tem %s: %v", want, res.Created)
 		}
-	}
-
-	// a URI usa a mesma senha que o banco do BunkerWeb
-	pw, _ := s.Get("db_bunkerweb_password")
-	uri, _ := s.Get("database_uri")
-	if string(uri) != "mariadb+pymysql://bunkerweb:"+string(pw)+"@bw-db:3306/bunkerweb" {
-		t.Errorf("database_uri = %q", uri)
 	}
 
 	// rodar de novo nao troca nada

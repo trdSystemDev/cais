@@ -1,7 +1,7 @@
 # cais
 
 Painel TUI (Go + tview, com suporte a mouse) para preparar e administrar uma VPS
-que so tem Docker instalado: BunkerWeb, registry, bancos Postgres/MySQL,
+que so tem Docker instalado: Traefik, registry, bancos Postgres/MySQL,
 secrets por app e CI com Woodpecker.
 
 Roda direto no host, pela sessao SSH: nao abre porta e nao tem login proprio.
@@ -94,8 +94,8 @@ Secrets ficam em texto puro em `/var/lib/cais` (pasta root `0700`, arquivos
 criptografados com [age](https://age-encryption.org) para uma chave publica
 cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
 
-O cais gera sozinho todos os secrets das stacks (senhas dos bancos,
-`database_uri` do BunkerWeb, agent secret do Woodpecker, login do DBGate) e
+O cais gera sozinho todos os secrets das stacks (senhas dos bancos, agent
+secret do Woodpecker, login do DBGate) e
 nunca troca um que ja existe; so o client secret do GitHub e informado. O
 registry tem um usuario por quem acessa: `ci` (push do Woodpecker) e `vps`
 (pull do daemon) com senha guardada, e um por pessoa so com o hash (a senha e
@@ -124,12 +124,21 @@ hosts:                          # opcional: troca o nome padrao
 woodpecker:
   github_client: Ov23li...      # Client ID do OAuth app do GitHub
   admin: seu-usuario-github
+dbgate:
+  allow_from: [203.0.113.7, 10.8.0.0/24]   # opcional: so esses IPs abrem o DBGate
 ```
 
 Campo desconhecido e erro (pega erro de digitacao). Os compose das stacks sao
 gerados de `internal/stacks/templates/*/docker-compose.yml.tmpl` com esses
-valores; o proxy nasce sem nenhum site, e cada servico se publica com labels
-`bunkerweb.*` na `proxy_network` (autoconf).
+valores; o proxy (Traefik) nasce sem nenhum site, e cada servico se publica
+com labels `traefik.*` na `proxy_network`. O Traefik so publica o que tem
+`traefik.enable=true` e le o docker por um socket-proxy somente leitura.
+
+Sem WAF no proxy, de proposito: pra apps proprios ele gera mais falso positivo
+que protecao (num painel de banco, toda consulta parece SQL injection). A
+protecao vem de TLS, login forte, bancos fora da rede publica e, no DBGate, de
+`dbgate.allow_from` (so os IPs/redes listados abrem o painel). WAF e DDoS, se
+precisar, ficam melhor na borda (ex: Cloudflare).
 
 O registry de imagens e publico em `https://registry.<domain>` (TLS do Let's
 Encrypt + login), numa stack propria: CI e VPS fazem push/pull pelo mesmo nome,

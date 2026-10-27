@@ -19,18 +19,10 @@ services:
       WOODPECKER_ENVIRONMENT: "CAIS_REGISTRY:{{.RegistryHost}}"
       WOODPECKER_AGENT_SECRET_FILE: /run/secrets/agent_secret
     labels:
-      bunkerweb.SERVER_NAME: "{{.CIHost}}"
-      bunkerweb.USE_REVERSE_PROXY: "yes"
-      bunkerweb.REVERSE_PROXY_URL: "/"
-      bunkerweb.REVERSE_PROXY_HOST: "http://woodpecker-server:8000"
-{{- if .LetsEncrypt}}
-      bunkerweb.AUTO_LETS_ENCRYPT: "yes"
-{{- else}}
-      # certificado da CA local (tls: selfsigned), montado no bw-scheduler
-      bunkerweb.USE_CUSTOM_SSL: "yes"
-      bunkerweb.CUSTOM_SSL_CERT: "/run/secrets/tls_cert"
-      bunkerweb.CUSTOM_SSL_KEY: "/run/secrets/tls_key"
-{{- end}}
+      traefik.enable: "true"
+      traefik.http.routers.woodpecker.rule: "Host(`{{.CIHost}}`)"
+      traefik.http.routers.woodpecker.entrypoints: websecure
+      traefik.http.services.woodpecker.loadbalancer.server.port: "8000"
     secrets:
       - github_client_secret
       - agent_secret

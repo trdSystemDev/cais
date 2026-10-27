@@ -2,93 +2,84 @@
 # o proximo Setup sobrescreve
 name: proxy
 
-# O proxy nasce vazio: nenhum site e declarado aqui. Cada servico que quer
-# ser publicado entra na proxy_network e se anuncia por labels
-# (bunkerweb.SERVER_NAME, bunkerweb.REVERSE_PROXY_HOST...), e o bw-autoconf
-# configura o BunkerWeb sozinho ao ver o container subir.
+# Traefik como reverse proxy. O proxy nasce vazio: cada servico que quer ser
+# publicado entra na proxy_network e se anuncia por labels (traefik.enable,
+# traefik.http.routers.<nome>.rule...); o Traefik le os labels pelo docker e
+# configura sozinho ao ver o container subir.
 
 services:
-  bunkerweb:
-    image: bunkerity/bunkerweb:1.6.13
-    container_name: proxy-bunkerweb
+  traefik:
+    image: traefik:v3.7.16
+    container_name: proxy-traefik
     restart: unless-stopped
+    command:
+      # so publica container com traefik.enable=true (o padrao publica todos)
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.endpoint=tcp://traefik-docker-proxy:2375
+      - --providers.docker.network=proxy_network
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls=true
+      - --entrypoints.websecure.http3=true
+      - --entrypoints.websecure.http.middlewares=cais-headers@docker
+      # o padrao de 60s corta o push de uma camada grande no registry
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=30m
+{{- if .LetsEncrypt}}
+      - --entrypoints.websecure.http.tls.certresolver=le
+      - --certificatesresolvers.le.acme.email={{.Email}}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+{{- else}}
+      # tls: selfsigned -- certificado da CA local do cais como padrao
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=false
+{{- end}}
+      - --ping=true
+      - --accesslog=true
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
     ports:
-      - "{{.HTTPPort}}:8080"
-      - "{{.HTTPSPort}}:8443"
-      - "{{.HTTPSPort}}:8443/udp"
+      - "{{.HTTPPort}}:80"
+      - "{{.HTTPSPort}}:443"
+      - "{{.HTTPSPort}}:443/udp"
     labels:
-      # sem essa label o bw-autoconf nunca acha essa instancia via Docker
-      # e fica em loop "waiting for the database to be ready"
-      - "bunkerweb.INSTANCE=yes"
-    environment:
-      AUTOCONF_MODE: "yes"
-      API_WHITELIST_IP: "127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+      # headers aplicados em todo site (middleware do entrypoint websecure).
+      # HSTS sem includeSubDomains: nao forca HTTPS em nome que o cais nao
+      # controla
+      traefik.enable: "true"
+      traefik.http.middlewares.cais-headers.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.cais-headers.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.cais-headers.headers.referrerPolicy: "strict-origin-when-cross-origin"
+{{- if .LetsEncrypt}}
+    volumes:
+      - traefik_acme:/letsencrypt
+{{- else}}
+    configs:
+      - source: traefik_tls
+        target: /etc/traefik/dynamic/tls.yml
     secrets:
-      - DATABASE_URI
-    networks:
-      - bw-universe
-      - proxy_network
-    depends_on:
-      - bw-db
-
-  bw-scheduler:
-    image: bunkerity/bunkerweb-scheduler:1.6.13
-    container_name: proxy-bw-scheduler
-    restart: unless-stopped
-    environment:
-      # vazio de proposito: em AUTOCONF_MODE quem informa as instancias e o
-      # autoconf (via label bunkerweb.INSTANCE, gravado no banco), nao essa var
-      BUNKERWEB_INSTANCES: ""
-      AUTOCONF_MODE: "yes"
-      MULTISITE: "yes"
-      API_WHITELIST_IP: "127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
-      # sites vem todos das labels; nenhum declarado aqui
-      SERVER_NAME: ""
-      EMAIL_LETS_ENCRYPT: "{{.Email}}"
-    secrets:
-      - DATABASE_URI
-{{- if not .LetsEncrypt}}
-      # tls: selfsigned -- certificado da CA local do cais, usado pelos sites
-      # via USE_CUSTOM_SSL (quem le o arquivo e o scheduler)
       - tls_cert
       - tls_key
 {{- end}}
-    volumes:
-      - bw_storage:/data
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
-      - bw-universe
-      # bw-universe e "internal" (sem rota pra internet) -- o scheduler
-      # precisa sair pra fora pra falar com a API do Let's Encrypt
-      # (certbot-new/renew) e os jobs de blacklist/mmdb/telemetria.
-      # proxy_network nao e internal, entao serve de saida.
       - proxy_network
+      - traefik-docker-proxy-network
     depends_on:
-      - bw-db
+      - traefik-docker-proxy
 
-  bw-autoconf:
-    image: bunkerity/bunkerweb-autoconf:1.6.13
-    container_name: proxy-bw-autoconf
-    restart: unless-stopped
-    environment:
-      # padrao do SDK Docker (mesmo usado no docker CLI): aponta pro socket-proxy
-      # em vez do docker.sock real, que fica isolado dentro do bw-docker-proxy
-      DOCKER_HOST: tcp://bw-docker-proxy:2375
-      AUTOCONF_MODE: "yes"
-    secrets:
-      - DATABASE_URI
-    networks:
-      - bw-universe
-      - bw-docker-proxy-network
-    depends_on:
-      - bw-db
-      - bw-docker-proxy
-
-  # unico lugar que toca o docker.sock de verdade. bw-autoconf so precisa
+  # unico lugar que toca o docker.sock de verdade. O Traefik so precisa
   # OBSERVAR containers/labels (nunca criar/executar nada), entao fica so
   # leitura -- POST: 0 bloqueia qualquer escrita independente das outras flags.
-  bw-docker-proxy:
+  traefik-docker-proxy:
     image: tecnativa/docker-socket-proxy:v0.5.0
-    container_name: proxy-bw-docker-proxy
+    container_name: proxy-docker-proxy
     restart: unless-stopped
     environment:
       CONTAINERS: 1
@@ -106,51 +97,34 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
-      - bw-docker-proxy-network
-
-  bw-db:
-    image: mariadb:11
-    container_name: proxy-bw-db
-    restart: unless-stopped
-    environment:
-      # nunca usamos root depois do primeiro boot, entao nem gerenciamos essa
-      # senha -- fica aleatoria, so no log do primeiro start
-      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
-      MYSQL_DATABASE: bunkerweb
-      MYSQL_USER: bunkerweb
-      MYSQL_PASSWORD_FILE: /run/secrets/db_bunkerweb_password
-    secrets:
-      - db_bunkerweb_password
-    volumes:
-      - bw_db_data:/var/lib/mysql
-    networks:
-      - bw-universe
+      - traefik-docker-proxy-network
 
 networks:
   proxy_network:
     name: proxy_network
     driver: bridge
-  bw-universe:
-    name: bw-universe
+  traefik-docker-proxy-network:
+    name: traefik-docker-proxy-network
     driver: bridge
     internal: true
-  bw-docker-proxy-network:
-    name: bw-docker-proxy-network
-    driver: bridge
-    internal: true
+{{- if .LetsEncrypt}}
 
 volumes:
-  bw_storage:
-    name: bw_storage
-  bw_db_data:
-    name: bw_db_data
+  traefik_acme:
+    name: traefik_acme
+{{- else}}
+
+configs:
+  traefik_tls:
+    content: |
+      tls:
+        stores:
+          default:
+            defaultCertificate:
+              certFile: /run/secrets/tls_cert
+              keyFile: /run/secrets/tls_key
 
 secrets:
-  db_bunkerweb_password:
-    file: "{{secret "db_bunkerweb_password"}}"
-  DATABASE_URI:
-    file: "{{secret "database_uri"}}"
-{{- if not .LetsEncrypt}}
   tls_cert:
     file: "{{secret "tls_cert"}}"
   tls_key:

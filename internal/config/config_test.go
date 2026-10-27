@@ -99,6 +99,8 @@ func TestValidateRecusa(t *testing.T) {
 		"host registry invalido": func(c *Config) { c.Hosts.Registry = "registry" },
 		"dominio .local":         func(c *Config) { c.Domain = "trd.local" },
 		"tls desconhecido":       func(c *Config) { c.TLS = "acme" },
+		"allow_from invalido":    func(c *Config) { c.DBGate.AllowFrom = []string{"10.0.0.0/33"} },
+		"allow_from com nome":    func(c *Config) { c.DBGate.AllowFrom = []string{"vpn.exemplo.com"} },
 		"porta zero":             func(c *Config) { c.Proxy.HTTPPort = 0 },
 		"porta alta":             func(c *Config) { c.Proxy.HTTPSPort = 70000 },
 		"portas iguais":          func(c *Config) { c.Proxy.HTTPSPort = c.Proxy.HTTPPort },
@@ -116,6 +118,11 @@ func TestValidateRecusa(t *testing.T) {
 	}
 	if err := validConfig().Validate(); err != nil {
 		t.Fatalf("recusou config valida: %v", err)
+	}
+	withAllow := validConfig()
+	withAllow.DBGate.AllowFrom = []string{"203.0.113.7", "10.8.0.0/24", "2001:db8::/32"}
+	if err := withAllow.Validate(); err != nil {
+		t.Fatalf("recusou allow_from valido: %v", err)
 	}
 	local := validConfig()
 	local.Domain, local.TLS = "trd.localhost", TLSSelfSigned
