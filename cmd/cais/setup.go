@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -136,30 +135,15 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 // printDBAccess explica como chegar nos bancos: so por tunel SSH, que eles
 // so escutam no loopback da VPS.
 func printDBAccess(out io.Writer, p bootstrap.Plan) {
-	type db struct{ stack, name, port, user, secret string }
-	var dbs []db
-	for _, d := range []db{
-		{"postgres", "Postgres", "5432", "postgres", "postgres_password"},
-		{"mysql", "MySQL", "3306", "root", "mysql_root_password"},
-	} {
-		if p.Config.HasStack(d.stack) {
-			dbs = append(dbs, d)
-		}
-	}
-	if len(dbs) == 0 {
+	if len(p.Databases) == 0 {
 		return
 	}
-
-	tunnel := "ssh -N"
-	for _, d := range dbs {
-		tunnel += fmt.Sprintf(" -L %s:127.0.0.1:%s", d.port, d.port)
-	}
 	fmt.Fprintln(out, "\nBancos: so pelo loopback da VPS, via tunel SSH. No seu computador:")
-	fmt.Fprintf(out, "\n  %s <usuario>@<vps>\n", tunnel)
+	fmt.Fprintf(out, "\n  %s\n", p.Tunnel)
 	fmt.Fprintln(out, "\n  e no seu cliente (DBeaver, TablePlus, psql...):")
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	for _, d := range dbs {
-		fmt.Fprintf(w, "    %s\tlocalhost:%s\tusuario %s\tsenha: sudo cat %s\n", d.name, d.port, d.user, filepath.Join(p.SecretsDir, d.secret))
+	for _, d := range p.Databases {
+		fmt.Fprintf(w, "    %s\tlocalhost:%d\tusuario %s\tsenha: sudo cat %s\n", d.Name, d.Port, d.User, d.PasswordFile)
 	}
 	w.Flush()
 }

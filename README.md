@@ -180,8 +180,10 @@ cais state         # estado atual em JSON
 cais check         # checa o ambiente e imprime o resultado
 ```
 
-Setup de uma VPS nova (pode rodar de novo a qualquer momento: nada que existe
-e regenerado e stacks sem mudanca nao sao recriadas):
+Setup de uma VPS nova, pela aba **Setup** da TUI (formulario a esquerda; plano
+e andamento ao vivo a direita) ou pelo CLI. Pode rodar de novo a qualquer
+momento: nada que existe e regenerado e stacks sem mudanca nao sao recriadas.
+Um Setup disparado pelo CLI aparece ao vivo na TUI aberta, e vice-versa.
 
 ```sh
 cais setup config --domain exemplo.com.br --email voce@exemplo.com.br \

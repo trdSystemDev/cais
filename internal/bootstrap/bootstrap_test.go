@@ -146,6 +146,24 @@ func TestPlanPedeSecretInformadoENaoGrava(t *testing.T) {
 	}
 }
 
+func TestPlanDizComoChegarNosBancos(t *testing.T) {
+	d := newDeps(t, &fakeDocker{})
+	writeConfig(t, d, func(c *config.Config) { c.Stacks = []string{"proxy", "mysql"} })
+	p, err := MakePlan(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Databases) != 1 || p.Databases[0].Name != "MySQL" || p.Databases[0].Port != 3306 || p.Databases[0].User != "root" {
+		t.Fatalf("Databases = %+v", p.Databases)
+	}
+	if p.Databases[0].PasswordFile != filepath.Join(d.SecretsDir, "mysql_root_password") {
+		t.Errorf("PasswordFile = %s", p.Databases[0].PasswordFile)
+	}
+	if p.Tunnel != "ssh -N -L 3306:127.0.0.1:3306 <usuario>@<vps>" {
+		t.Errorf("Tunnel = %q", p.Tunnel)
+	}
+}
+
 func TestRunSobeTudoEmOrdem(t *testing.T) {
 	f := &fakeDocker{loginErr: 1} // certificado ainda saindo no primeiro login
 	d := newDeps(t, f)

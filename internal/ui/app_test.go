@@ -54,10 +54,18 @@ func startSimCore(t *testing.T, check func(context.Context) docker.Status) (*sim
 // startSimAPI sobe a App em cima de qualquer core.API (local ou rpc.Client).
 func startSimAPI(t *testing.T, api core.API) *simScreen {
 	t.Helper()
+	sim, _ := startSimApp(t, api, 100, 30)
+	return sim
+}
+
+// startSimApp e como startSimAPI, com o tamanho da tela escolhido e a App
+// devolvida (pra testes que mexem nos campos de uma pagina).
+func startSimApp(t *testing.T, api core.API, w, h int) (*simScreen, *App) {
+	t.Helper()
 	a := New(api)
 	sim := tcell.NewSimulationScreen("UTF-8")
 	a.app.SetScreen(sim)
-	sim.SetSize(100, 30)
+	sim.SetSize(w, h)
 
 	done := make(chan error, 1)
 	go func() { done <- a.Run() }()
@@ -67,7 +75,7 @@ func startSimAPI(t *testing.T, api core.API) *simScreen {
 			t.Errorf("Run devolveu erro: %v", err)
 		}
 	})
-	return &simScreen{SimulationScreen: sim, app: a.app}
+	return &simScreen{SimulationScreen: sim, app: a.app}, a
 }
 
 func screenText(sim *simScreen) []string {
@@ -108,6 +116,18 @@ func waitFor(t *testing.T, sim *simScreen, text string) {
 
 // click simula um clique (aperta e solta) do botao esquerdo no texto
 // informado, procurando-o na linha y.
+// clickText clica na primeira linha da tela que tem o texto.
+func clickText(t *testing.T, sim *simScreen, text string) {
+	t.Helper()
+	for y, row := range screenText(sim) {
+		if strings.Contains(row, text) {
+			click(t, sim, y, text)
+			return
+		}
+	}
+	t.Fatalf("texto %q nao esta na tela", text)
+}
+
 func click(t *testing.T, sim *simScreen, y int, text string) {
 	t.Helper()
 	x := strings.Index(screenText(sim)[y], text)
@@ -227,7 +247,7 @@ func TestCliqueTrocaDeAba(t *testing.T) {
 	waitFor(t, sim, "chega na fase 3")
 
 	click(t, sim, 0, "Setup")
-	waitFor(t, sim, "Assistente que prepara uma VPS vazia")
+	waitFor(t, sim, " Configuracao ")
 }
 
 func TestAtalhoNumericoTrocaDeAba(t *testing.T) {

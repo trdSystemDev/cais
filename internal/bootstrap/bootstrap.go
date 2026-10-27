@@ -123,8 +123,30 @@ type Plan struct {
 	// CAFile e o certificado da CA local (tls: selfsigned), que quem testa
 	// instala como confiavel. Vazio com Let's Encrypt.
 	CAFile string `json:"ca_file,omitempty"`
-	// SecretsDir e onde ficam as senhas (pra dizer onde ler a dos bancos).
-	SecretsDir string `json:"secrets_dir"`
+	// Databases e como chegar em cada banco ativo (so pelo loopback da
+	// VPS), e Tunnel o comando de tunel SSH que abre todos de uma vez.
+	Databases []DBAccess `json:"databases,omitempty"`
+	Tunnel    string     `json:"tunnel,omitempty"`
+}
+
+// DBAccess e como administrar um banco: por tunel SSH ate o loopback da
+// VPS, com o superusuario. A senha nunca vai no plano, so onde le-la.
+type DBAccess struct {
+	Name         string `json:"name"`
+	Port         int    `json:"port"`
+	User         string `json:"user"`
+	PasswordFile string `json:"password_file"`
+}
+
+// databases sao os bancos que o cais sobe, na ordem das stacks.
+var databases = []struct {
+	stack, name string
+	port        int
+	user        string
+	secret      string
+}{
+	{"postgres", "Postgres", 5432, "postgres", "postgres_password"},
+	{"mysql", "MySQL", 3306, "root", "mysql_root_password"},
 }
 
 // Ready diz se o Setup pode rodar.
@@ -158,7 +180,20 @@ func MakePlan(d Deps) (Plan, error) {
 	}
 	p.Configured = true
 	p.Config = cfg
-	p.SecretsDir = d.SecretsDir
+	tunnel := "ssh -N"
+	for _, db := range databases {
+		if !cfg.HasStack(db.stack) {
+			continue
+		}
+		p.Databases = append(p.Databases, DBAccess{
+			Name: db.name, Port: db.port, User: db.user,
+			PasswordFile: filepath.Join(d.SecretsDir, db.secret),
+		})
+		tunnel += fmt.Sprintf(" -L %d:127.0.0.1:%d", db.port, db.port)
+	}
+	if len(p.Databases) > 0 {
+		p.Tunnel = tunnel + " <usuario>@<vps>"
+	}
 	if !cfg.LetsEncrypt() {
 		p.CAFile = filepath.Join(d.SecretsDir, secrets.TLSCACert)
 	}

@@ -33,6 +33,10 @@ type App struct {
 	tabs   []*tab
 	active int
 	dash   *dashboard
+	setup  *setupPage
+	// running indica que Run ja comecou: antes disso nao ha a quem pedir
+	// o plano (selectTab roda no New)
+	running bool
 }
 
 // New monta a interface. Nada e desenhado ate Run ser chamado.
@@ -43,13 +47,14 @@ func New(c core.API) *App {
 		pages: tview.NewPages(),
 		dash:  newDashboard(c),
 	}
+	a.setup = newSetupPage(a.app, c)
 
 	a.addTab("Dashboard", a.dash)
 	a.addTab("Apps", placeholder("Apps", 3, "Criar app pelo link do GitHub, deploy, logs ao vivo, restart."))
 	a.addTab("Secrets", placeholder("Secrets", 3, "Secrets centrais e por app: gerar, copiar, propagar."))
 	a.addTab("Bancos", placeholder("Bancos", 4, "Databases e usuarios no Postgres/MySQL, instancias dedicadas."))
 	a.addTab("Infra", placeholder("Infra", 2, "Status das stacks base: Traefik, bancos, registry, Woodpecker."))
-	a.addTab("Setup", placeholder("Setup", 2, "Assistente que prepara uma VPS vazia com tudo acima."))
+	a.addTab("Setup", a.setup)
 
 	tabBar := tview.NewFlex()
 	for _, t := range a.tabs {
@@ -72,6 +77,16 @@ func New(c core.API) *App {
 
 	a.app.SetRoot(root, true)
 	a.app.SetInputCapture(a.globalKeys)
+	// o tview converte em duplo-clique qualquer clique ate 500ms depois do
+	// anterior, mesmo em outro lugar da tela, e Button ignora duplo-clique:
+	// clicar na aba e logo num botao perdia o segundo clique. O cais nao usa
+	// duplo-clique em nada, entao todo duplo-clique vale como clique.
+	a.app.SetMouseCapture(func(ev *tcell.EventMouse, action tview.MouseAction) (*tcell.EventMouse, tview.MouseAction) {
+		if action == tview.MouseLeftDoubleClick {
+			action = tview.MouseLeftClick
+		}
+		return ev, action
+	})
 	a.selectTab(0)
 	return a
 }
@@ -80,21 +95,13 @@ func New(c core.API) *App {
 // sempre na goroutine da UI (via QueueUpdateDraw).
 func (a *App) render(s core.State) {
 	a.dash.render(s)
+	a.setup.render(s)
 }
 
 func (a *App) addTab(name string, page tview.Primitive) {
 	idx := len(a.tabs)
 	b := tview.NewButton(name)
 	b.SetSelectedFunc(func() { a.selectTab(idx) })
-	// o tview converte em duplo-clique qualquer clique ate 500ms depois do
-	// anterior (mesmo em outro lugar da tela), e Button ignora duplo-clique.
-	// Trocar de aba e idempotente, entao aqui duplo-clique vale como clique.
-	b.SetMouseCapture(func(action tview.MouseAction, ev *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if action == tview.MouseLeftDoubleClick {
-			action = tview.MouseLeftClick
-		}
-		return action, ev
-	})
 	a.tabs = append(a.tabs, &tab{name: name, button: b, page: page})
 	a.pages.AddPage(name, page, true, idx == 0)
 }
@@ -111,6 +118,10 @@ func (a *App) selectTab(idx int) {
 	t := a.tabs[idx]
 	a.pages.SwitchToPage(t.name)
 	a.app.SetFocus(t.page)
+	// o plano depende do disco: confere de novo ao abrir a aba
+	if t.page == a.setup && a.running {
+		a.setup.refreshPlan()
+	}
 }
 
 // globalKeys trata os atalhos que valem em qualquer tela. Numeros so trocam
@@ -165,6 +176,8 @@ func (a *App) Run() error {
 	}()
 
 	go a.core.CheckEnvironment(context.Background())
+	a.setup.load()
+	a.running = true
 	return a.app.Run()
 }
 
