@@ -30,10 +30,11 @@ func missingChecker(context.Context) docker.Status {
 
 // testCore e um core com caminhos temporarios e docker falso: o Setup roda
 // de verdade (secrets, compose no disco), so os comandos do docker nao.
-func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Core, *atomic.Int32) {
+// Devolve quantos compose up e compose ps foram pedidos.
+func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Core, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	root := t.TempDir()
-	var ups atomic.Int32
+	var ups, pss atomic.Int32
 	c := core.New(core.Deps{
 		CheckDocker: check,
 		ConfigPath:  filepath.Join(root, "config.yaml"),
@@ -44,9 +45,15 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 			return nil
 		},
 		ComposeDown: func(context.Context, string) error { return nil },
-		Login:       func(context.Context, string, string, []byte) error { return nil },
+		// toda stack instalada aparece com um container saudavel
+		ComposePS: func(_ context.Context, file string) ([]docker.Container, error) {
+			pss.Add(1)
+			name := filepath.Base(filepath.Dir(file))
+			return []docker.Container{{Name: name, Service: name, State: "running", Health: "healthy", Status: "Up 1 minute (healthy)"}}, nil
+		},
+		Login: func(context.Context, string, string, []byte) error { return nil },
 	})
-	return c, &ups
+	return c, &ups, &pss
 }
 
 // open monta a TUI sobre uma core.API, como o Run faz, numa tela de 130x34.
@@ -143,7 +150,7 @@ func press(t *testing.T, m *model, text string) tea.Msg {
 }
 
 func TestDashboardMostraDockerOK(t *testing.T) {
-	c, _ := testCore(t, okChecker)
+	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	waitFor(t, m, "Pronto.")
 	waitFor(t, m, "29.0.1")
@@ -151,7 +158,7 @@ func TestDashboardMostraDockerOK(t *testing.T) {
 }
 
 func TestDashboardMostraDockerAusente(t *testing.T) {
-	c, _ := testCore(t, missingChecker)
+	c, _, _ := testCore(t, missingChecker)
 	m := open(t, c)
 	waitFor(t, m, "docker nao encontrado")
 	waitFor(t, m, "Daemon   depende do CLI")
@@ -162,7 +169,7 @@ func TestDashboardMostraDockerAusente(t *testing.T) {
 // publicando um app enquanto alguem esta com a TUI aberta
 func TestUIReageAAcaoExternaNoCore(t *testing.T) {
 	var installed atomic.Bool
-	c, _ := testCore(t, func(ctx context.Context) docker.Status {
+	c, _, _ := testCore(t, func(ctx context.Context) docker.Status {
 		if installed.Load() {
 			return okChecker(ctx)
 		}
@@ -178,7 +185,7 @@ func TestUIReageAAcaoExternaNoCore(t *testing.T) {
 
 func TestBotaoVerificarDisparaAcao(t *testing.T) {
 	var calls atomic.Int32
-	c, _ := testCore(t, func(ctx context.Context) docker.Status {
+	c, _, _ := testCore(t, func(ctx context.Context) docker.Status {
 		calls.Add(1)
 		return okChecker(ctx)
 	})
@@ -199,7 +206,7 @@ func TestTUIViaDaemonReageAOutroCliente(t *testing.T) {
 		t.Fatal(err)
 	}
 	var installed atomic.Bool
-	daemonCore, _ := testCore(t, func(ctx context.Context) docker.Status {
+	daemonCore, _, _ := testCore(t, func(ctx context.Context) docker.Status {
 		if installed.Load() {
 			return okChecker(ctx)
 		}
@@ -240,7 +247,7 @@ func TestTUIViaDaemonReageAOutroCliente(t *testing.T) {
 }
 
 func TestCliqueTrocaDeAba(t *testing.T) {
-	c, _ := testCore(t, okChecker)
+	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	waitFor(t, m, "Pronto.")
 
@@ -252,7 +259,7 @@ func TestCliqueTrocaDeAba(t *testing.T) {
 }
 
 func TestAtalhoNumericoTrocaDeAba(t *testing.T) {
-	c, _ := testCore(t, okChecker)
+	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	waitFor(t, m, "Pronto.")
 
@@ -262,7 +269,7 @@ func TestAtalhoNumericoTrocaDeAba(t *testing.T) {
 
 // num campo de texto, numero e digitacao, nao troca de aba
 func TestNumeroNoCampoNaoTrocaDeAba(t *testing.T) {
-	c, _ := testCore(t, okChecker)
+	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	press(t, m, "6")
 	click(t, m, "domain")
@@ -276,7 +283,7 @@ func TestNumeroNoCampoNaoTrocaDeAba(t *testing.T) {
 }
 
 func TestSairPeloBotaoEPeloAtalho(t *testing.T) {
-	c, _ := testCore(t, okChecker)
+	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	if _, ok := click(t, m, "quit").(tea.QuitMsg); !ok {
 		t.Fatal("clique em Sair nao saiu")
@@ -285,4 +292,126 @@ func TestSairPeloBotaoEPeloAtalho(t *testing.T) {
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("ctrl+q nao saiu")
 	}
+}
+
+// configura a VPS e roda o Setup pelo core, com os servicos pedidos
+func setupDone(t *testing.T, c *core.Core, services ...string) {
+	t.Helper()
+	ctx := context.Background()
+	info, _ := c.LoadConfig(ctx)
+	cfg := info.Config
+	cfg.Domain, cfg.Email, cfg.TLS = "trd.localhost", "a@exemplo.com.br", "selfsigned"
+	cfg.Woodpecker.GitHubClient, cfg.Woodpecker.Admin = "Ov23liAbc", "fulano"
+	cfg.Stacks = services
+	if err := c.SaveConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetSecret(ctx, "github_client_secret", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RunSetup(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInfraMostraAsStacks(t *testing.T) {
+	c, _, _ := testCore(t, okChecker)
+	setupDone(t, c, "postgres")
+	// mysql ligado na config depois, sem aplicar
+	info, _ := c.LoadConfig(context.Background())
+	info.Config.Stacks = append(info.Config.Stacks, "mysql")
+	c.SaveConfig(context.Background(), info.Config)
+
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Ultima verificacao")
+	out := screen(m)
+	for _, want := range []string{
+		"(sobem sempre)", "✓ proxy", "✓ woodpecker", "Up 1 minute (healthy)",
+		"✓ postgres", "ligado, mas ainda nao subiu", // mysql
+		"· garage", "Ligar", "Desligar",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tela sem %q:\n%s", want, out)
+		}
+	}
+	// as fixas nao tem botao
+	for _, core := range []string{"proxy", "registry", "woodpecker"} {
+		if z := m.zones.Get("toggle:" + core); z != nil && !z.IsZero() {
+			t.Errorf("%s tem botao de desligar", core)
+		}
+	}
+}
+
+func TestInfraLigaEDesligaServico(t *testing.T) {
+	c, ups, _ := testCore(t, okChecker)
+	setupDone(t, c)
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Ultima verificacao")
+
+	before := ups.Load()
+	click(t, m, "toggle:postgres")
+	waitFor(t, m, "postgres ligado.")
+	if info, _ := c.LoadConfig(context.Background()); !info.Config.HasStack("postgres") {
+		t.Fatal("postgres nao ligou na config")
+	}
+	if ups.Load() <= before {
+		t.Fatal("ligar nao subiu nada")
+	}
+	waitFor(t, m, "✓ postgres")
+
+	// pelo teclado: postgres e o primeiro servico, ja selecionado
+	press(t, m, " ")
+	waitFor(t, m, "postgres desligado")
+	if info, _ := c.LoadConfig(context.Background()); info.Config.HasStack("postgres") {
+		t.Fatal("postgres continua ligado")
+	}
+}
+
+func TestInfraSemConfigAvisa(t *testing.T) {
+	c, _, _ := testCore(t, okChecker)
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Ultima verificacao")
+	click(t, m, "toggle:mysql")
+	waitFor(t, m, "preencha a aba Setup primeiro")
+}
+
+func TestInfraAtualizaAoAbrirEPeloBotao(t *testing.T) {
+	c, _, pss := testCore(t, okChecker)
+	setupDone(t, c, "postgres")
+	m := open(t, c)
+
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Ultima verificacao")
+	opened := pss.Load()
+	if opened == 0 {
+		t.Fatal("abrir a aba nao perguntou ao docker")
+	}
+	click(t, m, "infra-refresh")
+	if pss.Load() <= opened {
+		t.Fatal("Atualizar nao perguntou ao docker de novo")
+	}
+	press(t, m, "r")
+	if pss.Load() <= opened+2 {
+		t.Fatal("tecla r nao atualizou")
+	}
+}
+
+// depois de um Setup pela TUI, a Infra ja reflete o que subiu
+func TestInfraAtualizaDepoisDoSetup(t *testing.T) {
+	c, _, pss := testCore(t, okChecker)
+	m := open(t, c)
+	click(t, m, "tab:Setup")
+	fill(t, m, "trd.localhost")
+	click(t, m, "save")
+	waitFor(t, m, "Pronto pra executar")
+	click(t, m, "run")
+	waitFor(t, m, "Setup concluido.")
+	if pss.Load() == 0 {
+		t.Fatal("Setup terminou sem atualizar a Infra")
+	}
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "✓ woodpecker")
 }

@@ -2,7 +2,7 @@
 
 Painel TUI (Go + Bubble Tea/Lip Gloss, com suporte a mouse) para preparar e administrar uma VPS
 que so tem Docker instalado: Traefik, registry, bancos Postgres/MySQL,
-secrets por app e CI com Woodpecker.
+storage S3 com Garage, secrets por app e CI com Woodpecker.
 
 Roda direto no host, pela sessao SSH: nao abre porta e nao tem login proprio.
 
@@ -76,8 +76,8 @@ Regras:
 
 | Caminho | Conteudo |
 |---|---|
-| `/etc/cais/config.yaml` | configuracao: dominio base, e-mail, stacks ativas |
-| `/var/lib/cais/stacks/<stack>/` | compose das stacks base (proxy, postgres, mysql, registry, woodpecker) |
+| `/etc/cais/config.yaml` | configuracao: dominio base, e-mail, servicos opcionais ativos |
+| `/var/lib/cais/stacks/<stack>/` | compose das stacks base (proxy, registry, woodpecker, postgres, mysql, garage) |
 | `/var/lib/cais/apps/<app>/` | compose do app e `secrets/` dele |
 | `/var/lib/cais/secrets/` | secrets centrais (senhas das instancias de banco etc.) |
 | `/var/lib/cais/backups/` | backups |
@@ -95,7 +95,8 @@ criptografados com [age](https://age-encryption.org) para uma chave publica
 cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
 
 O cais gera sozinho todos os secrets das stacks (senhas dos bancos, agent
-secret do Woodpecker) e nunca troca um que ja existe; so o client secret do GitHub e informado. O
+secret do Woodpecker, RPC secret e token de admin do Garage) e nunca troca
+um que ja existe; so o client secret do GitHub e informado. O
 registry tem um usuario por quem acessa: `ci` (push do Woodpecker) e `vps`
 (pull do daemon) com senha guardada, e um por pessoa so com o hash (a senha e
 mostrada uma vez). Todo usuario pode push/pull, entao revogar e por pessoa; o
@@ -111,15 +112,16 @@ e o usuario `deploy` nao tem acesso a nenhum arquivo.
 `/etc/cais/config.yaml` guarda so o que um humano decide (secrets nunca):
 
 ```yaml
-domain: exemplo.com.br          # ci. e registry.<domain> saem daqui
+domain: exemplo.com.br          # ci., registry. e s3.<domain> saem daqui
 email: admin@exemplo.com.br     # avisos do Let's Encrypt
-stacks: [proxy, postgres, mysql, registry, woodpecker]   # bancos: so os que usar
+stacks: [postgres, mysql, garage] # opcionais: so os que usar
 proxy:
   http_port: 80                 # outra porta so numa migracao
   https_port: 443
 hosts:                          # opcional: troca o nome padrao
   ci: build.exemplo.com.br
   registry: imagens.exemplo.com.br
+  s3: arquivos.exemplo.com.br
 woodpecker:
   github_client: Ov23li...      # Client ID do OAuth app do GitHub
   admin: seu-usuario-github
@@ -135,12 +137,15 @@ Sem WAF no proxy, de proposito: pra apps proprios ele gera mais falso positivo
 que protecao. A protecao vem de TLS, login forte e bancos fora da rede publica.
 WAF e DDoS, se precisar, ficam melhor na borda (ex: Cloudflare).
 
-Postgres e MySQL sao stacks separadas: ative so o que for usar (ex:
-`--stacks proxy,postgres,registry,woodpecker`), e so os secrets dele sao
-gerados. Cada banco fica na propria rede (`postgres_network`, `mysql_network`),
+Proxy, registry e Woodpecker sao fixos e sobem sempre. O Setup exige o
+Client ID, o usuario administrador e o client secret do OAuth app do GitHub.
+O campo `stacks` lista apenas os opcionais: Postgres, MySQL e Garage.
+Ative cada um pela aba **Infra** ou com `cais service <nome> on`; para desligar,
+use `off`. So os secrets dos servicos ativos sao gerados. Cada banco fica
+na propria rede (`postgres_network`, `mysql_network`),
 entao um app so enxerga o banco que usa.
 
-Tirar uma stack da config nao apaga nada: o proximo `setup run` derruba os
+Tirar um servico opcional da config nao apaga nada: o proximo `setup run` derruba os
 containers dela (`docker compose down`, sem `-v`) e o compose vira
 `docker-compose.yml.desativada`, como registro. Os volumes, com os dados, ficam;
 religar a stack traz tudo de volta. Stacks de versoes antigas do cais sao
@@ -156,6 +161,25 @@ ssh -N -L 5432:127.0.0.1:5432 -L 3306:127.0.0.1:3306 voce@vps
 ```
 
 O `cais setup` mostra esse comando e onde ler as senhas.
+
+O Garage publica a API S3 em `https://s3.<domain>` (ou `hosts.s3`), com
+regiao `garage` e enderecamento por caminho (path-style). O Setup prepara
+o layout de no unico na primeira subida; execucoes seguintes preservam o
+layout. Os volumes `garage_meta` e `garage_data` persistem ao desligar.
+Esse layout nao oferece redundancia entre maquinas.
+
+Buckets e chaves ainda sao administrados pelo CLI do Garage:
+
+```sh
+cais service garage on
+docker exec garage /garage bucket create meu-bucket
+docker exec garage /garage key create minha-app
+docker exec garage /garage bucket allow --read --write --key minha-app meu-bucket
+```
+
+Guarde a chave retornada em local seguro. Configure seu cliente S3 com o
+endpoint HTTPS, regiao `garage` e path-style; no teste local, use a CA gerada
+pelo cais. O secret RPC e o token de admin sao internos, nao sao chaves S3.
 
 O registry de imagens e publico em `https://registry.<domain>` (TLS do Let's
 Encrypt + login), numa stack propria: CI e VPS fazem push/pull pelo mesmo nome,
@@ -178,11 +202,15 @@ cais daemon        # normalmente via systemd (assets/systemd/cais.service)
 cais               # abre a TUI
 cais state         # estado atual em JSON
 cais check         # checa o ambiente e imprime o resultado
+cais service postgres on # liga o Postgres e aplica a configuracao
+cais service garage off  # desliga o S3 e preserva os volumes
 ```
 
-Setup de uma VPS nova, pela aba **Setup** da TUI (formulario a esquerda; plano
-e andamento ao vivo a direita) ou pelo CLI. Pode rodar de novo a qualquer
-momento: nada que existe e regenerado e stacks sem mudanca nao sao recriadas.
+A aba **Setup** concentra dominio, e-mail, certificados, GitHub e hosts.
+A aba **Infra** mostra o estado das stacks fixas, os botoes Ligar/Desligar
+dos servicos opcionais, o passo em andamento e as instrucoes do S3.
+O plano e a aplicacao inicial tambem ficam disponiveis na TUI e pelo CLI.
+Pode rodar de novo a qualquer momento: nada que existe e regenerado e stacks sem mudanca nao sao recriadas.
 Um Setup disparado pelo CLI aparece ao vivo na TUI aberta, e vice-versa.
 
 ```sh
@@ -195,7 +223,8 @@ cais setup run                           # gera secrets, grava os compose, sobe 
 
 O `run` sobe as stacks em ordem com `docker compose up -d --wait` (cada uma
 saudavel antes da proxima) e termina com o `docker login` da VPS no registry.
-Antes, o DNS de `ci.` e `registry.<dominio>` precisa apontar pra VPS.
+Antes, o DNS de `ci.` e `registry.<dominio>` precisa apontar pra VPS,
+assim como `s3.<dominio>` quando o Garage estiver ativo.
 
 Pra testar num PC, sem DNS publico: use um dominio `.localhost` (o
 systemd-resolved e os navegadores ja resolvem `*.localhost` pra 127.0.0.1; `.local`

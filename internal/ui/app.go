@@ -19,6 +19,7 @@ var tabs = []string{"Dashboard", "Apps", "Secrets", "Bancos", "Infra", "Setup"}
 
 const (
 	tabDashboard = 0
+	tabInfra     = 4
 	tabSetup     = 5
 )
 
@@ -30,7 +31,13 @@ var placeholders = map[int]struct {
 	1: {3, "Criar app pelo link do GitHub, deploy, logs ao vivo, restart."},
 	2: {3, "Secrets centrais e por app: gerar, copiar, propagar."},
 	3: {4, "Databases e usuarios no Postgres/MySQL, instancias dedicadas."},
-	4: {2, "Status das stacks base: Traefik, bancos, registry, Woodpecker."},
+}
+
+// helps sao os atalhos de cada aba, no rodape.
+var helps = map[int]string{
+	tabDashboard: "enter/r verifica · ",
+	tabInfra:     "↑↓ servico · enter liga/desliga · r atualiza · ",
+	tabSetup:     "tab/↑↓ campo · espaco marca · ctrl+s salva · ctrl+r executa · ",
 }
 
 // App e a TUI inteira. Nada e desenhado ate Run ser chamado.
@@ -67,6 +74,12 @@ type model struct {
 	// a conexao com o daemon caiu: nada na tela e confiavel, so sair
 	disconnected bool
 	setup        *setupPage
+
+	// aba Infra
+	infraSel  int    // servico opcional selecionado (teclado)
+	toggling  string // servico sendo ligado/desligado daqui
+	infraMsg  string
+	infraMsgC string
 }
 
 type (
@@ -126,9 +139,25 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.click(msg)
 	case tea.KeyPressMsg:
 		return m, m.key(msg)
+	case serviceDoneMsg:
+		return m, m.onServiceDone(msg)
 	}
 	// respostas das acoes da aba Setup
-	return m, m.setup.update(msg)
+	cmd := m.setup.update(msg)
+	if _, ok := msg.(runDoneMsg); ok {
+		// o Setup mexeu nas stacks: a aba Infra ja abre atualizada
+		cmd = tea.Batch(cmd, m.stacksCmd())
+	}
+	return m, cmd
+}
+
+// setTab troca de aba; a Infra pergunta ao docker toda vez que abre.
+func (m *model) setTab(i int) tea.Cmd {
+	m.tab = i
+	if i == tabInfra && !m.state.Infra.Checking {
+		return m.stacksCmd()
+	}
+	return nil
 }
 
 func (m *model) click(msg tea.MouseMsg) tea.Cmd {
@@ -140,8 +169,7 @@ func (m *model) click(msg tea.MouseMsg) tea.Cmd {
 	}
 	for i, t := range tabs {
 		if m.zones.Get("tab:" + t).InBounds(msg) {
-			m.tab = i
-			return nil
+			return m.setTab(i)
 		}
 	}
 	switch m.tab {
@@ -149,6 +177,8 @@ func (m *model) click(msg tea.MouseMsg) tea.Cmd {
 		if m.zones.Get("check").InBounds(msg) && !m.state.Environment.Checking {
 			return m.checkCmd()
 		}
+	case tabInfra:
+		return m.infraClick(msg)
 	case tabSetup:
 		return m.setup.click(msg)
 	}
@@ -169,14 +199,15 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	// numeros trocam de aba, menos quando o foco esta num campo de texto
 	typing := m.tab == tabSetup && m.setup.typing()
 	if !typing && len(k) == 1 && k[0] >= '1' && int(k[0]-'1') < len(tabs) {
-		m.tab = int(k[0] - '1')
-		return nil
+		return m.setTab(int(k[0] - '1'))
 	}
 	switch m.tab {
 	case tabDashboard:
 		if (k == "enter" || k == "r") && !m.state.Environment.Checking {
 			return m.checkCmd()
 		}
+	case tabInfra:
+		return m.infraKey(k)
 	case tabSetup:
 		return m.setup.key(msg)
 	}
@@ -197,13 +228,15 @@ func (m *model) View() tea.View {
 	}
 
 	header := m.viewTabs()
-	footer := m.th.fg(m.th.muted).Render(" clique ou 1-6 troca de aba · tab/↑↓ campo · espaco marca · ctrl+s salva · ctrl+r executa · ctrl+q sai")
+	footer := m.th.fg(m.th.muted).Render(" clique ou 1-6 troca de aba · " + helps[m.tab] + "ctrl+q sai")
 	bodyH := m.h - lipgloss.Height(header) - lipgloss.Height(footer)
 
 	var body string
 	switch m.tab {
 	case tabDashboard:
 		body = m.viewDashboard(bodyH)
+	case tabInfra:
+		body = m.viewInfra(bodyH)
 	case tabSetup:
 		body = m.setup.view(m.w, bodyH)
 	default:

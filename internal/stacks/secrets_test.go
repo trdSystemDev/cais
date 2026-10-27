@@ -37,7 +37,7 @@ func TestEnsureSecretsGeraCertificadoLocal(t *testing.T) {
 	s := secrets.FileStore{Dir: filepath.Join(t.TempDir(), "secrets")}
 	c := validConfig()
 	c.Domain, c.TLS = "trd.localhost", config.TLSSelfSigned
-	c.Stacks = []string{"proxy", "postgres", "registry"}
+	c.Stacks = []string{"postgres"}
 	c.Hosts.Registry = "imagens.outro.localhost"
 
 	create, _, err := PlanSecrets(s, c)
@@ -126,19 +126,26 @@ func TestEnsureSecretsGeraOQueFaltaEPedeOResto(t *testing.T) {
 func TestEnsureSecretsSoDasStacksAtivas(t *testing.T) {
 	s := secrets.FileStore{Dir: filepath.Join(t.TempDir(), "secrets")}
 	c := validConfig()
-	c.Stacks = []string{"proxy", "postgres"}
+	c.Stacks = nil // so as fixas
 
 	res, err := EnsureSecrets(s, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Missing) != 0 || len(res.Recreate) != 0 {
-		t.Errorf("sem woodpecker/registry nao pede github nem cria htpasswd: %+v", res)
-	}
 	for _, n := range res.Created {
-		if strings.HasPrefix(n, "registry_") || n == "agent_secret" {
-			t.Errorf("criou secret de stack inativa: %s", n)
+		if strings.HasPrefix(n, "postgres") || strings.HasPrefix(n, "mysql") || strings.HasPrefix(n, "garage") {
+			t.Errorf("criou secret de servico desligado: %s", n)
 		}
+	}
+	if !slices.Contains(res.Created, "agent_secret") || !slices.Contains(res.Created, "registry_htpasswd") {
+		t.Errorf("fixas sem secrets: %v", res.Created)
+	}
+
+	c.Stacks = []string{"garage"}
+	res, _ = EnsureSecrets(s, c)
+	rpc, _ := s.Get("garage_rpc_secret")
+	if !slices.Contains(res.Created, "garage_rpc_secret") || len(rpc) != 64 {
+		t.Errorf("rpc_secret do Garage tem que ser 32 bytes em hex: %q", rpc)
 	}
 }
 

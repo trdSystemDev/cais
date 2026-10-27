@@ -24,6 +24,8 @@ type API interface {
 
 	// CheckEnvironment checa Docker e sistema e devolve o resultado.
 	CheckEnvironment(ctx context.Context) (Environment, error)
+	// CheckStacks pergunta ao docker o estado das stacks base.
+	CheckStacks(ctx context.Context) (Infra, error)
 
 	// LoadConfig le o config.yaml. Sem arquivo, devolve Exists falso e a
 	// config padrao (ponto de partida do Setup).
@@ -38,6 +40,9 @@ type API interface {
 	PlanSetup(ctx context.Context) (bootstrap.Plan, error)
 	// RunSetup executa o Setup, publicando o progresso em State.Setup.
 	RunSetup(ctx context.Context) (Setup, error)
+	// SetService liga ou desliga um servico opcional (postgres, mysql,
+	// garage) e aplica na hora, pelo Setup.
+	SetService(ctx context.Context, name string, on bool) (Setup, error)
 
 	// RegistryUsers lista quem pode entrar no registry.
 	RegistryUsers(ctx context.Context) ([]string, error)

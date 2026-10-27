@@ -28,7 +28,8 @@ func newSetupCore(t *testing.T, release <-chan struct{}) *Core {
 				return ctx.Err()
 			}
 		},
-		Login: func(context.Context, string, string, []byte) error { return nil },
+		ComposeDown: func(context.Context, string) error { return nil },
+		Login:       func(context.Context, string, string, []byte) error { return nil },
 	})
 	cfg := config.Default()
 	cfg.Domain = "exemplo.com.br"
@@ -87,11 +88,58 @@ func TestRunSetupPublicaProgressoERecusaSegundaAcao(t *testing.T) {
 func TestSaveConfigValidaStacks(t *testing.T) {
 	c := newSetupCore(t, nil)
 	info, _ := c.LoadConfig(context.Background())
-	info.Config.Stacks = []string{"woodpecker"}
+	info.Config.Stacks = []string{"redis"}
 	if err := c.SaveConfig(context.Background(), info.Config); err == nil {
-		t.Fatal("salvou woodpecker sem proxy/registry")
+		t.Fatal("salvou stack desconhecida")
 	}
 	if err := c.SetSecret(context.Background(), "postgres_password", "x"); err == nil {
 		t.Fatal("deixou sobrescrever secret gerado")
+	}
+}
+
+func TestSetServiceLigaEDesligaEAplica(t *testing.T) {
+	release := make(chan struct{})
+	close(release)
+	c := newSetupCore(t, release)
+	var stopped []string
+	c.deps.ComposeDown = func(_ context.Context, file string) error {
+		stopped = append(stopped, filepath.Base(filepath.Dir(file)))
+		return nil
+	}
+	ctx := context.Background()
+
+	if _, err := c.SetService(ctx, "postgres", true); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := c.LoadConfig(ctx)
+	if !info.Config.HasStack("postgres") {
+		t.Fatal("postgres nao ficou ligado na config")
+	}
+	if s := snap(t, c).Setup; s.Running || s.Error != "" || len(s.Steps) == 0 {
+		t.Fatalf("Setup nao rodou pra aplicar: %+v", s)
+	}
+
+	if _, err := c.SetService(ctx, "postgres", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(stopped) != 1 || stopped[0] != "postgres" {
+		t.Fatalf("stacks desligadas: %v", stopped)
+	}
+	if info, _ = c.LoadConfig(ctx); info.Config.HasStack("postgres") {
+		t.Fatal("postgres continua ligado")
+	}
+
+	for _, bad := range []string{"proxy", "woodpecker", "redis"} {
+		if _, err := c.SetService(ctx, bad, false); err == nil {
+			t.Errorf("deixou mexer em %q", bad)
+		}
+	}
+}
+
+func TestSetServiceSemConfig(t *testing.T) {
+	root := t.TempDir()
+	c := New(Deps{CheckDocker: okStatus, ConfigPath: filepath.Join(root, "config.yaml"), SecretsDir: filepath.Join(root, "s")})
+	if _, err := c.SetService(context.Background(), "postgres", true); err == nil {
+		t.Fatal("ligou servico sem a VPS configurada")
 	}
 }

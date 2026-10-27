@@ -22,6 +22,7 @@ func validConfig() config.Config {
 	c.Domain = "exemplo.com.br"
 	c.Email = "admin@exemplo.com.br"
 	c.Woodpecker = config.Woodpecker{GitHubClient: "Ov23liAbc123", Admin: "fulano"}
+	c.Stacks = []string{"postgres", "mysql"}
 	return c
 }
 
@@ -277,11 +278,8 @@ func TestEnabledValidaDependencias(t *testing.T) {
 		mutate func(*config.Config)
 		errHas string
 	}{
-		"desconhecida":            {[]string{"proxy", "redis"}, nil, `"redis"`},
-		"repetida":                {[]string{"proxy", "proxy"}, nil, "repetida"},
-		"woodpecker sem proxy":    {[]string{"registry", "woodpecker"}, nil, `precisa da stack "proxy"`},
-		"woodpecker sem registry": {[]string{"proxy", "woodpecker"}, nil, `precisa da stack "registry"`},
-		"registry sem proxy":      {[]string{"registry"}, nil, `precisa da stack "proxy"`},
+		"desconhecida": {[]string{"proxy", "redis"}, nil, `"redis"`},
+		"repetida":     {[]string{"proxy", "proxy"}, nil, "repetida"},
 		"woodpecker sem github": {[]string{"proxy", "registry", "woodpecker"},
 			func(c *config.Config) { c.Woodpecker = config.Woodpecker{} }, "github_client"},
 	}
@@ -297,6 +295,46 @@ func TestEnabledValidaDependencias(t *testing.T) {
 				t.Fatalf("esperava erro com %q, veio %v", tc.errHas, err)
 			}
 		})
+	}
+}
+
+// as fixas sobem sem estar na config; listar uma delas (config antiga) e aceito
+func TestFixasSempreAtivas(t *testing.T) {
+	for _, list := range [][]string{nil, {"proxy", "registry"}} {
+		c := validConfig()
+		c.Stacks = list
+		got, err := Enabled(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, s := range got {
+			names = append(names, s.Name)
+		}
+		if strings.Join(names, ",") != "proxy,registry,woodpecker" {
+			t.Errorf("stacks %v com config %v", names, list)
+		}
+	}
+	for _, s := range All {
+		if s.Optional == config.IsCore(s.Name) {
+			t.Errorf("%s: Optional e config.CoreStacks divergem", s.Name)
+		}
+	}
+}
+
+func TestGaragePublicadoEmS3(t *testing.T) {
+	c := validConfig()
+	c.Stacks = []string{"garage"}
+	r, cf := render(t, "garage", c)
+	labels := labelsOf(t, cf, "garage")
+	if labels["traefik.http.routers.garage.rule"] != "Host(`s3.exemplo.com.br`)" {
+		t.Errorf("rule = %q", labels["traefik.http.routers.garage.rule"])
+	}
+	if !slices.Equal(r.Secrets, []string{"garage_rpc_secret", "garage_admin_token"}) {
+		t.Errorf("secrets %v", r.Secrets)
+	}
+	if !slices.Contains(TLSHosts(c), "s3.exemplo.com.br") {
+		t.Error("certificado local sem o s3")
 	}
 }
 

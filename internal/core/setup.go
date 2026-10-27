@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/bootstrap"
@@ -30,6 +32,7 @@ func (c *Core) setupDeps() bootstrap.Deps {
 		},
 		ComposeUp:     c.deps.ComposeUp,
 		ComposeDown:   c.deps.ComposeDown,
+		Exec:          c.deps.Exec,
 		Login:         c.deps.Login,
 		LoginAttempts: 18,
 		LoginDelay:    10 * time.Second,
@@ -56,6 +59,10 @@ func (c *Core) LoadConfig(context.Context) (ConfigInfo, error) {
 }
 
 func (c *Core) SaveConfig(_ context.Context, cfg config.Config) error {
+	return c.saveConfig(cfg)
+}
+
+func (c *Core) saveConfig(cfg config.Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -81,7 +88,54 @@ func (c *Core) RunSetup(ctx context.Context) (Setup, error) {
 		return Setup{}, ErrBusy
 	}
 	defer c.infra.Unlock()
+	return c.runSetupLocked(ctx)
+}
 
+// SetService liga ou desliga um servico opcional (banco, storage) e aplica
+// na hora: grava a config e roda o Setup, que sobe ou derruba so o que
+// mudou. O lock vem antes de gravar: com outra acao em andamento, nada muda.
+func (c *Core) SetService(ctx context.Context, name string, on bool) (Setup, error) {
+	st, ok := stacks.Get(name)
+	if !ok || !st.Optional {
+		return Setup{}, fmt.Errorf("%q nao e um servico opcional (opcoes: %s)", name, strings.Join(optionalNames(), ", "))
+	}
+	if !c.infra.TryLock() {
+		return Setup{}, ErrBusy
+	}
+	defer c.infra.Unlock()
+
+	cfg, err := config.Load(c.deps.ConfigPath)
+	if errors.Is(err, config.ErrNotFound) {
+		return Setup{}, errors.New("a VPS ainda nao tem configuracao: preencha a aba Setup primeiro")
+	}
+	if err != nil {
+		return Setup{}, err
+	}
+	if cfg.HasStack(name) == on {
+		return c.runSetupLocked(ctx) // ja estava: so garante que esta aplicado
+	}
+	if on {
+		cfg.Stacks = append(cfg.Stacks, name)
+	} else {
+		cfg.Stacks = slices.DeleteFunc(cfg.Stacks, func(s string) bool { return s == name })
+	}
+	if err := c.saveConfig(cfg); err != nil {
+		return Setup{}, err
+	}
+	return c.runSetupLocked(ctx)
+}
+
+func optionalNames() []string {
+	var names []string
+	for _, s := range stacks.All {
+		if s.Optional {
+			names = append(names, s.Name)
+		}
+	}
+	return names
+}
+
+func (c *Core) runSetupLocked(ctx context.Context) (Setup, error) {
 	c.update(func(s *State) {
 		s.Setup = Setup{Running: true, StartedAt: c.deps.Now()}
 	})

@@ -1,0 +1,82 @@
+# gerado pelo cais a partir de /etc/cais/config.yaml -- nao edite aqui,
+# o proximo Setup sobrescreve
+name: garage
+
+# Storage S3 (Garage) de no unico. A API S3 e publicada pelo Traefik em
+# https://{{.S3Host}}; a API de admin e o RPC ficam so dentro do container.
+# Apps que usam o storage entram na garage_network. Buckets e chaves sao
+# criados pelo cais (fase de apps); o layout de no unico e aplicado pelo
+# Setup na primeira subida.
+
+services:
+  garage:
+    image: dxflrs/garage:v2.5.0
+    container_name: garage
+    restart: unless-stopped
+    environment:
+      # o Garage recusa secret legivel por todos; os do cais sao 0444 de
+      # proposito (container sem root precisa ler) e a protecao e a pasta
+      # /var/lib/cais, 0700 do root
+      GARAGE_ALLOW_WORLD_READABLE_SECRETS: "true"
+    configs:
+      - source: garage_toml
+        target: /etc/garage.toml
+    secrets:
+      - garage_rpc_secret
+      - garage_admin_token
+    volumes:
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.garage.rule: "Host(`{{.S3Host}}`)"
+      traefik.http.routers.garage.entrypoints: websecure
+      traefik.http.services.garage.loadbalancer.server.port: "3900"
+    networks:
+      - proxy_network
+      - garage_network
+    healthcheck:
+      # a imagem nao tem shell: o proprio binario confere o no
+      test: ["CMD", "/garage", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  proxy_network:
+    external: true
+    name: proxy_network
+  garage_network:
+    name: garage_network
+    driver: bridge
+
+volumes:
+  garage_meta:
+    name: garage_meta
+  garage_data:
+    name: garage_data
+
+configs:
+  garage_toml:
+    content: |
+      metadata_dir = "/var/lib/garage/meta"
+      data_dir = "/var/lib/garage/data"
+      db_engine = "lmdb"
+      replication_factor = 1
+      rpc_bind_addr = "[::]:3901"
+      rpc_public_addr = "127.0.0.1:3901"
+      rpc_secret_file = "/run/secrets/garage_rpc_secret"
+
+      [s3_api]
+      api_bind_addr = "[::]:3900"
+      s3_region = "garage"
+
+      [admin]
+      api_bind_addr = "127.0.0.1:3903"
+      admin_token_file = "/run/secrets/garage_admin_token"
+
+secrets:
+  garage_rpc_secret:
+    file: "{{secret "garage_rpc_secret"}}"
+  garage_admin_token:
+    file: "{{secret "garage_admin_token"}}"

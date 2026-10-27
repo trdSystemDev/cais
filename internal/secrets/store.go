@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -142,6 +143,16 @@ func Ensure(s Store, name string, gen func() ([]byte, error)) ([]byte, error) {
 // DATABASE_URI sem escape.
 func Password() []byte {
 	return []byte(rand.Text())
+}
+
+// HexSecret gera 32 bytes aleatorios em hex (64 caracteres), o formato que
+// o Garage exige no rpc_secret.
+func HexSecret() []byte {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // crypto/rand nao falha no Linux
+	}
+	return []byte(hex.EncodeToString(b))
 }
 
 // GenPassword e Password no formato que Ensure espera.

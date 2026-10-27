@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -32,6 +33,68 @@ func ComposeDown(ctx context.Context, file string) error {
 		return fmt.Errorf("docker compose down (%s): %w", file, lastLines(err.Error(), 15))
 	}
 	return nil
+}
+
+// Container e um container de um projeto compose, como o "compose ps" ve.
+type Container struct {
+	Name    string `json:"name"`
+	Service string `json:"service"`
+	Image   string `json:"image"`
+	// State e o estado do docker: running, exited, restarting, created...
+	State string `json:"state"`
+	// Health vem do healthcheck: healthy, unhealthy, starting ou vazio
+	// quando o servico nao tem healthcheck.
+	Health string `json:"health,omitempty"`
+	// Status e o texto do docker ("Up 5 minutes (healthy)").
+	Status string `json:"status"`
+}
+
+// ComposePS lista os containers do projeto do arquivo, inclusive parados.
+func ComposePS(ctx context.Context, file string) ([]Container, error) {
+	out, err := execRunner(ctx, "docker", "compose", "-f", file, "ps", "-a", "--format", "json")
+	if err != nil {
+		return nil, fmt.Errorf("docker compose ps (%s): %w", file, lastLines(err.Error(), 5))
+	}
+	return parsePS(out)
+}
+
+// parsePS aceita um JSON por linha (compose atual) ou uma lista JSON
+// (versoes antigas).
+func parsePS(out string) ([]Container, error) {
+	type raw struct {
+		Name, Service, Image, State, Health, Status string
+	}
+	var rows []raw
+	out = strings.TrimSpace(out)
+	switch {
+	case out == "":
+	case strings.HasPrefix(out, "["):
+		if err := json.Unmarshal([]byte(out), &rows); err != nil {
+			return nil, fmt.Errorf("saida do compose ps: %w", err)
+		}
+	default:
+		for _, line := range strings.Split(out, "\n") {
+			var r raw
+			if err := json.Unmarshal([]byte(line), &r); err != nil {
+				return nil, fmt.Errorf("saida do compose ps: %w", err)
+			}
+			rows = append(rows, r)
+		}
+	}
+	cs := make([]Container, 0, len(rows))
+	for _, r := range rows {
+		cs = append(cs, Container{Name: r.Name, Service: r.Service, Image: r.Image, State: r.State, Health: r.Health, Status: r.Status})
+	}
+	return cs, nil
+}
+
+// Exec roda um comando num container e devolve a saida padrao.
+func Exec(ctx context.Context, container string, args ...string) (string, error) {
+	out, err := execRunner(ctx, "docker", append([]string{"exec", container}, args...)...)
+	if err != nil {
+		return "", fmt.Errorf("docker exec %s %s: %w", container, strings.Join(args, " "), lastLines(err.Error(), 5))
+	}
+	return out, nil
 }
 
 // Login faz docker login com a senha pelo stdin (nunca na linha de

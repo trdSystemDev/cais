@@ -17,11 +17,13 @@ const (
 	MethodStateGet         = "state.get"
 	MethodStateSubscribe   = "state.subscribe"
 	MethodEnvironmentCheck = "environment.check"
+	MethodInfraCheck       = "infra.check"
 	MethodConfigGet        = "config.get"
 	MethodConfigSave       = "config.save" // params: config.Config
 	MethodSecretSet        = "secret.set"  // params: secretParams
 	MethodSetupPlan        = "setup.plan"
 	MethodSetupRun         = "setup.run"
+	MethodServiceSet       = "service.set" // params: serviceParams
 	MethodRegistryUsers    = "registry.users"
 	MethodRegistryUserAdd  = "registry.user.add"    // params: userParams
 	MethodRegistryUserDel  = "registry.user.remove" // params: userParams
@@ -81,4 +83,9 @@ type userParams struct {
 
 type passwordResult struct {
 	Password string `json:"password"`
+}
+
+type serviceParams struct {
+	Name string `json:"name"`
+	On   bool   `json:"on"`
 }

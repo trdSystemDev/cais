@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,14 +18,16 @@ import (
 
 // fakeDocker registra o que o Setup pediu ao docker.
 type fakeDocker struct {
-	mu       sync.Mutex
-	calls    []string // "up <stack>" e "down <stack>", na ordem
-	downs    []string
-	ups      []string // nome da stack (pasta do compose)
-	recreate []string
-	logins   []string
-	failUp   string // stack cujo up falha
-	loginErr int    // quantos logins falham antes de passar
+	mu            sync.Mutex
+	calls         []string // "up <stack>" e "down <stack>", na ordem
+	downs         []string
+	ups           []string // nome da stack (pasta do compose)
+	recreate      []string
+	logins        []string
+	failUp        string // stack cujo up falha
+	execs         []string
+	layoutVersion int
+	loginErr      int // quantos logins falham antes de passar
 }
 
 func (f *fakeDocker) up(_ context.Context, file string, recreate bool) error {
@@ -57,6 +60,25 @@ func (f *fakeDocker) down(_ context.Context, file string) error {
 	return nil
 }
 
+// exec finge o CLI do Garage: layout na versao 0 ate o apply.
+func (f *fakeDocker) exec(_ context.Context, container string, args ...string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.execs = append(f.execs, container+" "+strings.Join(args, " "))
+	switch strings.Join(args[1:], " ") {
+	case "layout show":
+		return fmt.Sprintf("==== CURRENT CLUSTER LAYOUT ====\nCurrent cluster layout version: %d\n", f.layoutVersion), nil
+	case "node id -q":
+		return "137b3cac6a9a3725@127.0.0.1:3901\n", nil
+	case "layout apply --version 1":
+		if f.layoutVersion != 0 {
+			return "", errors.New("Invalid new layout version")
+		}
+		f.layoutVersion = 1
+	}
+	return "", nil
+}
+
 func (f *fakeDocker) login(_ context.Context, host, user string, pw []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -77,6 +99,7 @@ func newDeps(t *testing.T, f *fakeDocker) Deps {
 		CheckDocker:   func(context.Context) error { return nil },
 		ComposeUp:     f.up,
 		ComposeDown:   f.down,
+		Exec:          f.exec,
 		Login:         f.login,
 		LoginAttempts: 3,
 	}
@@ -88,6 +111,7 @@ func writeConfig(t *testing.T, d Deps, mutate func(*config.Config)) config.Confi
 	c.Domain = "exemplo.com.br"
 	c.Email = "admin@exemplo.com.br"
 	c.Woodpecker = config.Woodpecker{GitHubClient: "Ov23liAbc", Admin: "fulano"}
+	c.Stacks = []string{"postgres", "mysql"}
 	if mutate != nil {
 		mutate(&c)
 	}
@@ -286,20 +310,60 @@ func TestRunLoginDesisteComDica(t *testing.T) {
 	}
 }
 
-func TestRunSemRegistryNaoFazLogin(t *testing.T) {
+// sem nenhum servico opcional, as fixas sobem do mesmo jeito
+func TestFixasSobemSempre(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
-	writeConfig(t, d, func(c *config.Config) { c.Stacks = []string{"proxy", "postgres"} })
+	writeConfig(t, d, func(c *config.Config) { c.Stacks = nil })
+	provideGitHub(t, d)
+
+	if _, err := Run(context.Background(), d, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.ups, []string{"proxy", "registry", "woodpecker"}) {
+		t.Errorf("subiu %v", f.ups)
+	}
+	if len(f.logins) != 1 {
+		t.Errorf("login da VPS no registry: %v", f.logins)
+	}
+	if ok, _ := secrets.Exists(d.store(), "postgres_password"); ok {
+		t.Error("gerou senha de banco desligado")
+	}
+}
+
+func TestGarageLayoutSoNaPrimeiraVez(t *testing.T) {
+	f := &fakeDocker{}
+	d := newDeps(t, f)
+	writeConfig(t, d, func(c *config.Config) { c.Stacks = []string{"garage"} })
+	provideGitHub(t, d)
 
 	steps, err := Run(context.Background(), d, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.logins) != 0 || slices.ContainsFunc(steps, func(s Step) bool { return s.ID == stepRegistryLogin }) {
-		t.Errorf("login sem registry: %v", f.logins)
+	if f.layoutVersion != 1 {
+		t.Fatal("layout do Garage nao foi aplicado")
 	}
-	if ok, _ := secrets.Exists(d.store(), secrets.RegistryHtpasswd); ok {
-		t.Error("criou htpasswd sem a stack registry")
+	if !slices.Contains(f.execs, "garage /garage layout assign -z dc1 -c 100G 137b3cac6a9a3725") {
+		t.Errorf("assign: %v", f.execs)
+	}
+	i := slices.IndexFunc(steps, func(s Step) bool { return s.ID == stepGarageLayout })
+	if i < 0 || steps[i].Detail != "no unico configurado" {
+		t.Fatalf("passo do layout: %+v", steps)
+	}
+	// o Garage sobe antes do layout
+	if slices.Index(f.ups, "garage") < 0 {
+		t.Errorf("garage nao subiu: %v", f.ups)
+	}
+
+	// de novo: reaplicar daria erro no Garage, entao nao reaplica
+	f.execs = nil
+	steps, err = Run(context.Background(), d, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps[i].Detail != "ja preparado" || slices.ContainsFunc(f.execs, func(e string) bool { return strings.Contains(e, "apply") }) {
+		t.Errorf("segunda rodada: %q, %v", steps[i].Detail, f.execs)
 	}
 }
 

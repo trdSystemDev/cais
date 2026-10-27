@@ -30,9 +30,9 @@ type Config struct {
 	// precisa de DNS publico) ou TLSSelfSigned (teste local, ex: dominio
 	// .localhost, que nao tem como ter certificado publico).
 	TLS string `yaml:"tls,omitempty" json:"tls,omitempty"`
-	// Stacks sao as stacks base ativas (proxy, postgres, mysql, registry,
-	// woodpecker). Os bancos sao independentes: ative so o que for usar.
-	Stacks     []string   `yaml:"stacks" json:"stacks"`
+	// Stacks sao os servicos opcionais ligados (postgres, mysql, garage).
+	// As stacks fixas (CoreStacks) sobem sempre e nao precisam estar aqui.
+	Stacks     []string   `yaml:"stacks,omitempty" json:"stacks,omitempty"`
 	Proxy      Proxy      `yaml:"proxy" json:"proxy"`
 	Hosts      Hosts      `yaml:"hosts,omitempty" json:"hosts"`
 	Woodpecker Woodpecker `yaml:"woodpecker,omitempty" json:"woodpecker"`
@@ -51,6 +51,8 @@ type Hosts struct {
 	// Registry e o nome do registry de imagens, usado no push do CI e no
 	// pull da VPS (e de qualquer outra maquina com o login).
 	Registry string `yaml:"registry,omitempty" json:"registry,omitempty"`
+	// S3 e o endpoint S3 do Garage (padrao s3.<domain>).
+	S3 string `yaml:"s3,omitempty" json:"s3,omitempty"`
 }
 
 // Woodpecker e o que o CI precisa e nao e secret. O client secret do app
@@ -71,11 +73,24 @@ const (
 // LetsEncrypt diz se os certificados vem do Let's Encrypt.
 func (c Config) LetsEncrypt() bool { return c.TLS == "" || c.TLS == TLSLetsEncrypt }
 
+// CoreStacks sobem sempre: sem proxy, registry e CI nao da pra publicar
+// app nenhum. O resto (bancos, storage) e ligado conforme o uso.
+var CoreStacks = []string{"proxy", "registry", "woodpecker"}
+
+// IsCore diz se a stack e fixa.
+func IsCore(name string) bool {
+	for _, s := range CoreStacks {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Default devolve a configuracao inicial do Setup, sem dominio e e-mail.
 func Default() Config {
 	return Config{
-		Stacks: []string{"proxy", "postgres", "mysql", "registry", "woodpecker"},
-		Proxy:  Proxy{HTTPPort: 80, HTTPSPort: 443},
+		Proxy: Proxy{HTTPPort: 80, HTTPSPort: 443},
 	}
 }
 
@@ -95,8 +110,19 @@ func (c Config) RegistryHost() string {
 	return "registry." + c.Domain
 }
 
-// HasStack diz se a stack esta ativa.
+// S3Host e o endpoint publico do Garage (API S3).
+func (c Config) S3Host() string {
+	if c.Hosts.S3 != "" {
+		return c.Hosts.S3
+	}
+	return "s3." + c.Domain
+}
+
+// HasStack diz se a stack esta ativa: as fixas sempre estao.
 func (c Config) HasStack(name string) bool {
+	if IsCore(name) {
+		return true
+	}
 	for _, s := range c.Stacks {
 		if s == name {
 			return true
@@ -130,6 +156,11 @@ func (c Config) Validate() error {
 	if c.Hosts.Registry != "" {
 		if err := validHost(c.Hosts.Registry); err != nil {
 			errs = append(errs, fmt.Errorf("hosts.registry: %w", err))
+		}
+	}
+	if c.Hosts.S3 != "" {
+		if err := validHost(c.Hosts.S3); err != nil {
+			errs = append(errs, fmt.Errorf("hosts.s3: %w", err))
 		}
 	}
 	if c.TLS != "" && c.TLS != TLSLetsEncrypt && c.TLS != TLSSelfSigned {

@@ -23,6 +23,8 @@ type Deps struct {
 	// Comandos do docker usados pelo Setup e pelo registry.
 	ComposeUp   func(ctx context.Context, file string, recreate bool) error
 	ComposeDown func(ctx context.Context, file string) error
+	ComposePS   func(ctx context.Context, file string) ([]docker.Container, error)
+	Exec        func(ctx context.Context, container string, args ...string) (string, error)
 	Login       func(ctx context.Context, host, user string, password []byte) error
 }
 
@@ -35,11 +37,12 @@ type Core struct {
 	// registry): uma segunda chamada falha na hora em vez de esperar.
 	infra sync.Mutex
 
-	mu      sync.Mutex
-	state   State
-	subs    map[int]chan State
-	nextSub int
-	checks  int // checagens de ambiente em andamento
+	mu          sync.Mutex
+	state       State
+	subs        map[int]chan State
+	nextSub     int
+	checks      int // checagens de ambiente em andamento
+	infraChecks int // checagens das stacks em andamento
 }
 
 // New cria o Core. Nenhuma acao roda aqui: quem decide quando checar o
@@ -65,6 +68,12 @@ func New(d Deps) *Core {
 	}
 	if d.ComposeDown == nil {
 		d.ComposeDown = docker.ComposeDown
+	}
+	if d.ComposePS == nil {
+		d.ComposePS = docker.ComposePS
+	}
+	if d.Exec == nil {
+		d.Exec = docker.Exec
 	}
 	if d.Login == nil {
 		d.Login = docker.Login

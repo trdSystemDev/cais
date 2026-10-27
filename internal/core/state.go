@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/bootstrap"
+	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 // State e uma foto imutavel de tudo que o cais sabe naquele momento.
@@ -17,6 +18,42 @@ type State struct {
 	Version     uint64      `json:"version"`
 	Environment Environment `json:"environment"`
 	Setup       Setup       `json:"setup"`
+	Infra       Infra       `json:"infra"`
+}
+
+// Infra e o estado das stacks base, como o docker ve.
+type Infra struct {
+	Checking  bool          `json:"checking"`
+	CheckedAt time.Time     `json:"checked_at,omitzero"`
+	Stacks    []StackStatus `json:"stacks,omitempty"`
+	// Error e problema lendo a config (as stacks ainda sao listadas).
+	Error string `json:"error,omitempty"`
+}
+
+// StackStatus e uma stack base e os containers dela.
+type StackStatus struct {
+	Name string `json:"name"`
+	Desc string `json:"desc"`
+	// Enabled diz se a stack esta ativa no config.yaml.
+	Enabled bool `json:"enabled"`
+	// Installed diz se o compose dela esta gravado (o Setup ja a subiu).
+	Installed  bool               `json:"installed"`
+	Containers []docker.Container `json:"containers,omitempty"`
+	Error      string             `json:"error,omitempty"`
+}
+
+// Healthy diz se a stack esta toda no ar: instalada, com containers, todos
+// rodando e nenhum com healthcheck falhando.
+func (s StackStatus) Healthy() bool {
+	if !s.Installed || s.Error != "" || len(s.Containers) == 0 {
+		return false
+	}
+	for _, c := range s.Containers {
+		if c.State != "running" || c.Health == "unhealthy" || c.Health == "starting" {
+			return false
+		}
+	}
+	return true
 }
 
 // Setup e o andamento da ultima execucao do Setup (bootstrap da VPS).

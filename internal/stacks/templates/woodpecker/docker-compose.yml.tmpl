@@ -37,6 +37,8 @@ services:
     container_name: woodpecker-agent
     restart: unless-stopped
     command: agent
+    volumes:
+      - woodpecker_agent_data:/etc/woodpecker
     environment:
       WOODPECKER_SERVER: woodpecker-server:9000
       WOODPECKER_AGENT_SECRET_FILE: /run/secrets/agent_secret
@@ -65,6 +67,8 @@ services:
       VOLUMES: 1
       BUILD: 1
       POST: 1
+      # o agent le /info ao carregar o backend docker (somente leitura)
+      INFO: 1
       # tudo que da acesso a OUTROS containers/ao host fica bloqueado
       EXEC: 0
       SYSTEM: 0
@@ -94,6 +98,8 @@ networks:
     internal: true
 
 volumes:
+  woodpecker_agent_data:
+    name: woodpecker_agent_data
   woodpecker_server_data:
     name: woodpecker_server_data
 

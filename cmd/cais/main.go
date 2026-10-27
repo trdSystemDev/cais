@@ -32,10 +32,13 @@ Uso:
 Setup da VPS:
   cais setup                         mostra o plano: o que falta e o que vai mudar
   cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
-      --domain --email --tls letsencrypt|selfsigned --stacks proxy,postgres,mysql,... --http-port --https-port
-      --github-client --github-admin --host-ci --host-registry
+      --domain --email --tls letsencrypt|selfsigned --http-port --https-port
+      --github-client --github-admin --host-ci --host-registry --host-s3
   cais setup secret <nome>           grava um secret informado (le do stdin)
   cais setup run                     executa o Setup e mostra o progresso
+
+Servicos opcionais (proxy, registry e woodpecker sobem sempre):
+  cais service <nome> on|off         liga ou desliga postgres, mysql ou garage e aplica
 
 Registry de imagens:
   cais registry users                lista quem pode entrar
@@ -65,6 +68,8 @@ func main() {
 		err = runSetup(args)
 	case "registry":
 		err = runRegistry(args)
+	case "service":
+		err = runService(args)
 	case "version":
 		fmt.Println("cais", version)
 	case "help":

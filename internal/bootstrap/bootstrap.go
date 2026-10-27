@@ -47,6 +47,7 @@ type Deps struct {
 	CheckDocker func(ctx context.Context) error
 	ComposeUp   func(ctx context.Context, file string, recreate bool) error
 	ComposeDown func(ctx context.Context, file string) error
+	Exec        func(ctx context.Context, container string, args ...string) (string, error)
 	Login       func(ctx context.Context, host, user string, password []byte) error
 
 	// o login no registry depende do DNS e do certificado do Let's Encrypt,
@@ -255,6 +256,7 @@ const (
 	stepSecrets       = "secrets"
 	stepFiles         = "files"
 	stepRegistryLogin = "registry-login"
+	stepGarageLayout  = "garage-layout"
 	stackStepPrefix   = "stack:"
 	stopStepPrefix    = "stop:"
 )
@@ -271,6 +273,9 @@ func steps(enabled []stacks.Stack, disable []StackPlan, cfg config.Config) []Ste
 	}
 	for _, st := range enabled {
 		out = append(out, Step{ID: stackStepPrefix + st.Name, Desc: "Subir " + st.Name + " (" + st.Desc + ")"})
+	}
+	if cfg.HasStack("garage") {
+		out = append(out, Step{ID: stepGarageLayout, Desc: "Preparar o Garage (layout de no unico)"})
 	}
 	if cfg.HasStack("registry") {
 		out = append(out, Step{ID: stepRegistryLogin, Desc: "Login da VPS em " + cfg.RegistryHost()})
@@ -374,6 +379,14 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 		}
 	}
 
+	if cfg.HasStack("garage") {
+		if err := r.do(stepGarageLayout, func() (string, error) {
+			return garageLayout(ctx, d.Exec)
+		}); err != nil {
+			return r.steps, err
+		}
+	}
+
 	if cfg.HasStack("registry") {
 		host := cfg.RegistryHost()
 		if err := r.do(stepRegistryLogin, func() (string, error) {
@@ -442,4 +455,35 @@ func retry(ctx context.Context, attempts int, delay time.Duration, fn func() err
 		}
 	}
 	return err
+}
+
+// garageLayout da ao no unico do Garage o papel de guardar tudo. So na
+// primeira vez (layout na versao 0): reaplicar a versao 1 e erro no Garage.
+// A capacidade so pesa na distribuicao entre nos; com um no nao limita nada.
+func garageLayout(ctx context.Context, exec func(context.Context, string, ...string) (string, error)) (string, error) {
+	g := func(args ...string) (string, error) {
+		return exec(ctx, "garage", append([]string{"/garage"}, args...)...)
+	}
+	show, err := g("layout", "show")
+	if err != nil {
+		return "", err
+	}
+	if !strings.Contains(show, "Current cluster layout version: 0") {
+		return "ja preparado", nil
+	}
+	id, err := g("node", "id", "-q")
+	if err != nil {
+		return "", err
+	}
+	id, _, _ = strings.Cut(strings.TrimSpace(id), "@")
+	if id == "" {
+		return "", errors.New("garage nao informou o id do no")
+	}
+	if _, err := g("layout", "assign", "-z", "dc1", "-c", "100G", id); err != nil {
+		return "", err
+	}
+	if _, err := g("layout", "apply", "--version", "1"); err != nil {
+		return "", err
+	}
+	return "no unico configurado", nil
 }

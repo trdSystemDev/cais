@@ -170,13 +170,13 @@ func setupConfig(args []string) error {
 	domain := fs.String("domain", "", "dominio base")
 	email := fs.String("email", "", "e-mail do Let's Encrypt")
 	tls := fs.String("tls", "", "letsencrypt (padrao) ou selfsigned (teste local)")
-	stackList := fs.String("stacks", "", "stacks ativas, separadas por virgula")
 	httpPort := fs.Int("http-port", 0, "porta http do proxy no host")
 	httpsPort := fs.Int("https-port", 0, "porta https do proxy no host")
 	ghClient := fs.String("github-client", "", "Client ID do OAuth app do GitHub")
 	ghAdmin := fs.String("github-admin", "", "usuario do GitHub que administra o Woodpecker")
 	hostCI := fs.String("host-ci", "", "nome do Woodpecker (padrao ci.<dominio>)")
 	hostReg := fs.String("host-registry", "", "nome do registry (padrao registry.<dominio>)")
+	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (padrao s3.<dominio>)")
 	fs.Parse(args)
 
 	c, err := connect(*socket)
@@ -200,8 +200,6 @@ func setupConfig(args []string) error {
 			cfg.Email = *email
 		case "tls":
 			cfg.TLS = *tls
-		case "stacks":
-			cfg.Stacks = splitList(*stackList)
 		case "http-port":
 			cfg.Proxy.HTTPPort = *httpPort
 		case "https-port":
@@ -214,6 +212,8 @@ func setupConfig(args []string) error {
 			cfg.Hosts.CI = *hostCI
 		case "host-registry":
 			cfg.Hosts.Registry = *hostReg
+		case "host-s3":
+			cfg.Hosts.S3 = *hostS3
 		}
 	})
 	if err := c.SaveConfig(ctx, cfg); err != nil {
@@ -290,6 +290,32 @@ func setupRun(args []string) error {
 		return err
 	}
 	defer c.Close()
+	return withProgress(c, func(ctx context.Context) error {
+		_, err := c.RunSetup(ctx)
+		return err
+	})
+}
+
+func runService(args []string) error {
+	fs, socket := newFlags("service")
+	fs.Parse(args)
+	if fs.NArg() != 2 || (fs.Arg(1) != "on" && fs.Arg(1) != "off") {
+		return errors.New("uso: cais service <postgres|mysql|garage> on|off")
+	}
+	c, err := connect(*socket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	return withProgress(c, func(ctx context.Context) error {
+		_, err := c.SetService(ctx, fs.Arg(0), fs.Arg(1) == "on")
+		return err
+	})
+}
+
+// withProgress roda uma acao que dispara o Setup e imprime os passos dele
+// ao vivo; no fim, as instrucoes de acesso.
+func withProgress(c *rpc.Client, action func(context.Context) error) error {
 	ctx := context.Background()
 
 	// o Subscribe entrega primeiro o estado atual, que pode ter os passos
@@ -311,7 +337,7 @@ func setupRun(args []string) error {
 		}
 	}()
 
-	_, runErr := c.RunSetup(ctx)
+	runErr := action(ctx)
 	unsubscribe()
 	<-printed
 	// a resposta pode chegar antes da ultima notificacao, e em caso de erro

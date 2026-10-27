@@ -66,6 +66,11 @@ func (c *Client) CheckEnvironment(ctx context.Context) (env core.Environment, er
 	return
 }
 
+func (c *Client) CheckStacks(ctx context.Context) (infra core.Infra, err error) {
+	err = c.call(ctx, MethodInfraCheck, nil, &infra)
+	return
+}
+
 func (c *Client) LoadConfig(ctx context.Context) (info core.ConfigInfo, err error) {
 	err = c.call(ctx, MethodConfigGet, nil, &info)
 	return
@@ -88,6 +93,12 @@ func (c *Client) PlanSetup(ctx context.Context) (p bootstrap.Plan, err error) {
 // chega pelo Subscribe. Se o cliente desistir, o Setup continua no daemon.
 func (c *Client) RunSetup(ctx context.Context) (st core.Setup, err error) {
 	err = c.call(ctx, MethodSetupRun, nil, &st)
+	return
+}
+
+// SetService bloqueia ate o Setup que aplica a mudanca terminar.
+func (c *Client) SetService(ctx context.Context, name string, on bool) (st core.Setup, err error) {
+	err = c.call(ctx, MethodServiceSet, serviceParams{Name: name, On: on}, &st)
 	return
 }
 

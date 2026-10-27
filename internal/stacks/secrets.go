@@ -40,6 +40,8 @@ var generators = map[string]func(secrets.Store) ([]byte, error){
 	"postgres_password":   func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 	"mysql_root_password": func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 	"agent_secret":        func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
+	"garage_rpc_secret":   func(secrets.Store) ([]byte, error) { return secrets.HexSecret(), nil },
+	"garage_admin_token":  func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 }
 
 // SecretsResult e o que EnsureSecrets fez.
@@ -208,6 +210,9 @@ func TLSHosts(c config.Config) []string {
 	}
 	if c.HasStack("woodpecker") {
 		add(c.CIHost())
+	}
+	if c.HasStack("garage") {
+		add(c.S3Host())
 	}
 	return hosts
 }

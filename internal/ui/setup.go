@@ -15,7 +15,6 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
-	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
 const formWidth = 50
@@ -31,12 +30,12 @@ type item struct {
 const (
 	kindInput = iota
 	kindSelect
-	kindCheck
 	kindButton
 )
 
-// setupPage e a aba Setup: formulario do config.yaml a esquerda e, a
-// direita, o plano (o que o Setup faria) ou o andamento da execucao. So
+// setupPage e a aba Setup: as configuracoes da VPS (dominio, certificados,
+// GitHub, nomes) a esquerda e, a direita, o plano ou o andamento. Quais
+// servicos ligar (bancos, storage) fica na aba Infra. So
 // chama acoes do core; o progresso chega pelo estado, entao um Setup
 // disparado pelo CLI tambem aparece aqui.
 type setupPage struct {
@@ -47,7 +46,6 @@ type setupPage struct {
 	items []*item
 	focus int
 	tls   int // 0 Let's Encrypt, 1 CA local
-	on    map[string]bool
 
 	cfg     config.Config // ultima lida: base do que o form nao mostra
 	plan    bootstrap.Plan
@@ -85,7 +83,7 @@ type (
 )
 
 func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
-	p := &setupPage{api: api, zones: zones, on: map[string]bool{}}
+	p := &setupPage{api: api, zones: zones}
 	input := func(id, label, placeholder string) {
 		ti := textinput.New()
 		ti.Prompt = ""
@@ -96,15 +94,13 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	input("domain", "Dominio", "exemplo.com.br")
 	input("email", "E-mail", "voce@exemplo.com.br")
 	p.items = append(p.items, &item{id: "tls", label: "Certificados", kind: kindSelect})
-	for _, st := range stacks.All {
-		p.items = append(p.items, &item{id: "stack:" + st.Name, label: st.Name, kind: kindCheck})
-	}
-	input("ghClient", "GitHub client ID", "so com woodpecker")
+	input("ghClient", "GitHub client ID", "do OAuth app do CI")
 	input("ghAdmin", "GitHub admin", "seu usuario")
 	input("ghSecret", "GitHub secret", "so pra gravar ou trocar")
 	p.get("ghSecret").input.EchoMode = textinput.EchoPassword
 	input("hostCI", "Host do CI", "padrao ci.<dominio>")
 	input("hostReg", "Host do registry", "padrao registry.<dominio>")
+	input("hostS3", "Host do S3", "padrao s3.<dominio>")
 	p.items = append(p.items,
 		&item{id: "save", label: "Salvar", kind: kindButton},
 		&item{id: "run", label: "Executar setup", kind: kindButton})
@@ -222,17 +218,15 @@ func (p *setupPage) fill(c config.Config) {
 	if !c.LetsEncrypt() {
 		p.tls = 1
 	}
-	for _, st := range stacks.All {
-		p.on[st.Name] = c.HasStack(st.Name)
-	}
 	p.get("ghClient").input.SetValue(c.Woodpecker.GitHubClient)
 	p.get("ghAdmin").input.SetValue(c.Woodpecker.Admin)
 	p.get("hostCI").input.SetValue(c.Hosts.CI)
 	p.get("hostReg").input.SetValue(c.Hosts.Registry)
+	p.get("hostS3").input.SetValue(c.Hosts.S3)
 }
 
 // formConfig monta a config do formulario, mantendo o que ele nao mostra
-// (portas do proxy) como estava.
+// (portas do proxy, servicos ligados na aba Infra) como estava.
 func (p *setupPage) formConfig() config.Config {
 	c := p.cfg
 	val := func(id string) string { return strings.TrimSpace(p.get(id).input.Value()) }
@@ -241,14 +235,8 @@ func (p *setupPage) formConfig() config.Config {
 	if p.tls == 1 {
 		c.TLS = config.TLSSelfSigned
 	}
-	c.Stacks = nil
-	for _, st := range stacks.All {
-		if p.on[st.Name] {
-			c.Stacks = append(c.Stacks, st.Name)
-		}
-	}
 	c.Woodpecker.GitHubClient, c.Woodpecker.Admin = val("ghClient"), val("ghAdmin")
-	c.Hosts.CI, c.Hosts.Registry = val("hostCI"), val("hostReg")
+	c.Hosts.CI, c.Hosts.Registry, c.Hosts.S3 = val("hostCI"), val("hostReg"), val("hostS3")
 	return c
 }
 
@@ -304,9 +292,6 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 	switch {
 	case it.kind == kindSelect:
 		p.tls = 1 - p.tls
-	case it.kind == kindCheck:
-		name := strings.TrimPrefix(it.id, "stack:")
-		p.on[name] = !p.on[name]
 	case it.id == "save":
 		return p.save()
 	case it.id == "run":
@@ -396,11 +381,6 @@ func (p *setupPage) viewForm() string {
 			value = field.Render(it.input.View())
 		case kindSelect:
 			value = field.Render("‹ " + []string{"Let's Encrypt", "CA local (teste)"}[p.tls] + " ›")
-		case kindCheck:
-			value = t.fg(t.muted).Render("[ ]")
-			if p.on[strings.TrimPrefix(it.id, "stack:")] {
-				value = t.fg(t.accent).Bold(true).Render("[x]")
-			}
 		case kindButton:
 			st := t.pill(focused)
 			if it.id == "run" && !p.canRun() {
@@ -428,7 +408,7 @@ func (p *setupPage) viewPlan(w int) string {
 	}
 	if !pl.Configured {
 		b.WriteString("\n" + t.fg(t.warn).Bold(true).Render("Ainda sem configuracao.") + "\n\n")
-		b.WriteString(wrap.Render("Preencha dominio e e-mail, escolha as stacks e salve (ctrl+s).") + "\n")
+		b.WriteString(wrap.Render("Preencha dominio, e-mail e o OAuth app do GitHub (o CI sobe sempre) e salve (ctrl+s). Bancos e storage voce liga depois, na aba Infra.") + "\n")
 		return b.String()
 	}
 

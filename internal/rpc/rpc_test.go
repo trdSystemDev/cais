@@ -294,7 +294,8 @@ func startSetupDaemon(t *testing.T) (*daemon, *atomic.Int32) {
 			ups.Add(1)
 			return nil
 		},
-		Login: func(context.Context, string, string, []byte) error { return nil },
+		ComposeDown: func(context.Context, string) error { return nil },
+		Login:       func(context.Context, string, string, []byte) error { return nil },
 	})
 	return d, &ups
 }
@@ -311,8 +312,12 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	cfg := info.Config
 	cfg.Domain = "exemplo.com.br"
 	cfg.Email = "admin@exemplo.com.br"
-	cfg.Stacks = []string{"proxy", "postgres", "registry"}
+	cfg.Stacks = []string{"postgres"}
+	cfg.Woodpecker = config.Woodpecker{GitHubClient: "Ov23li", Admin: "fulano"}
 	if err := c.SaveConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetSecret(ctx, "github_client_secret", "x"); err != nil {
 		t.Fatal(err)
 	}
 	if info, _ = c.LoadConfig(ctx); !info.Exists || info.Config.Domain != "exemplo.com.br" {
@@ -320,7 +325,7 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	}
 
 	plan, err := c.PlanSetup(ctx)
-	if err != nil || !plan.Ready() || len(plan.Stacks) != 3 {
+	if err != nil || !plan.Ready() || len(plan.Stacks) != 4 {
 		t.Fatalf("plano: %+v, %v", plan, err)
 	}
 
@@ -330,8 +335,8 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	if err != nil || setup.Running || setup.Error != "" {
 		t.Fatalf("RunSetup: %+v, %v", setup, err)
 	}
-	if ups.Load() != 3 {
-		t.Errorf("%d compose up, esperava 3", ups.Load())
+	if ups.Load() != 4 {
+		t.Errorf("%d compose up, esperava 4", ups.Load())
 	}
 	// o progresso chegou pela notificacao de estado
 	st := recv(t, states, func(s core.State) bool { return !s.Setup.Running && !s.Setup.FinishedAt.IsZero() })
@@ -347,8 +352,16 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	if strings.Join(users, ",") != "ci,vps,patrick" {
 		t.Errorf("usuarios %v", users)
 	}
-	if ups.Load() != 4 {
+	if ups.Load() != 5 {
 		t.Error("registry nao foi recriado depois de criar usuario")
+	}
+
+	// ligar um servico pelo socket aplica na hora
+	if _, err := c.SetService(ctx, "mysql", true); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := c.LoadConfig(ctx); !info.Config.HasStack("mysql") {
+		t.Error("mysql nao ligou pelo socket")
 	}
 	if err := c.RemoveRegistryUser(ctx, "ci"); err == nil {
 		t.Error("removeu usuario de servico pelo socket")

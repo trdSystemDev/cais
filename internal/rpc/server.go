@@ -143,6 +143,9 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodEnvironmentCheck:
 		return wrap(s.api.CheckEnvironment(s.ctx))
 
+	case MethodInfraCheck:
+		return wrap(s.api.CheckStacks(s.ctx))
+
 	case MethodConfigGet:
 		return wrap(s.api.LoadConfig(s.ctx))
 
@@ -165,6 +168,13 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 
 	case MethodSetupRun:
 		return wrap(s.api.RunSetup(s.ctx))
+
+	case MethodServiceSet:
+		var p serviceParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.SetService(s.ctx, p.Name, p.On))
 
 	case MethodRegistryUsers:
 		return wrap(s.api.RegistryUsers(s.ctx))

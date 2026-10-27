@@ -23,13 +23,17 @@ type Stack struct {
 	Desc string `json:"desc"`
 	// Requires sao as stacks que precisam estar de pe antes (redes externas).
 	Requires []string `json:"requires,omitempty"`
+	// Optional e servico que o usuario liga e desliga (aba Infra); as
+	// outras sobem sempre (config.CoreStacks).
+	Optional bool `json:"optional,omitempty"`
 }
 
 // All lista as stacks na ordem de subida: cada uma so depende das anteriores.
 var All = []Stack{
 	{Name: "proxy", Desc: "Traefik: reverse proxy e TLS, sites por label"},
-	{Name: "postgres", Desc: "Postgres compartilhado, so no loopback (tunel SSH)"},
-	{Name: "mysql", Desc: "MySQL compartilhado, so no loopback (tunel SSH)"},
+	{Name: "postgres", Desc: "Postgres compartilhado, so no loopback (tunel SSH)", Optional: true},
+	{Name: "mysql", Desc: "MySQL compartilhado, so no loopback (tunel SSH)", Optional: true},
+	{Name: "garage", Desc: "Storage S3 (Garage), publico com TLS", Requires: []string{"proxy"}, Optional: true},
 	{Name: "registry", Desc: "Registry de imagens publico, com TLS e login", Requires: []string{"proxy"}},
 	{Name: "woodpecker", Desc: "CI ligado ao GitHub", Requires: []string{"proxy", "registry"}},
 }
@@ -48,11 +52,18 @@ func Enabled(c config.Config) ([]Stack, error) {
 	var errs []error
 	seen := map[string]bool{}
 	for _, name := range c.Stacks {
-		if _, ok := Get(name); !ok {
+		st, ok := Get(name)
+		switch {
+		case !ok:
 			errs = append(errs, fmt.Errorf("stack desconhecida %q", name))
-		} else if seen[name] {
+		case seen[name]:
 			errs = append(errs, fmt.Errorf("stack %q repetida", name))
+		case !st.Optional:
+			// config antiga que lista uma fixa: ela ja sobe sempre
 		}
+		seen[name] = true
+	}
+	for _, name := range config.CoreStacks {
 		seen[name] = true
 	}
 
@@ -109,6 +120,7 @@ type vars struct {
 	HTTPSPort    int
 	CIHost       string
 	RegistryHost string
+	S3Host       string
 	GitHubClient string
 	Admin        string
 }
@@ -157,6 +169,7 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 		HTTPSPort:    c.Proxy.HTTPSPort,
 		CIHost:       c.CIHost(),
 		RegistryHost: c.RegistryHost(),
+		S3Host:       c.S3Host(),
 		GitHubClient: c.Woodpecker.GitHubClient,
 		Admin:        c.Woodpecker.Admin,
 	})
