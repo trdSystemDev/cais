@@ -3,7 +3,9 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/stacks"
@@ -48,4 +50,23 @@ func (c *Core) inspectStacks(ctx context.Context) Infra {
 		infra.Stacks = append(infra.Stacks, ss)
 	}
 	return infra
+}
+
+// ContainerLogs so aceita containers pertencentes ao compose da stack pedida.
+func (c *Core) ContainerLogs(ctx context.Context, stack, container string) (string, error) {
+	if _, ok := stacks.Get(stack); !ok {
+		return "", fmt.Errorf("stack desconhecida: %s", stack)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	containers, err := c.deps.ComposePS(ctx, c.setupDeps().ComposeFile(stack))
+	if err != nil {
+		return "", err
+	}
+	for _, item := range containers {
+		if item.Name == container {
+			return c.deps.ContainerLogs(ctx, container)
+		}
+	}
+	return "", fmt.Errorf("container %q nao pertence a stack %s", container, stack)
 }

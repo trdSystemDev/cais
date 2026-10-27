@@ -271,3 +271,8 @@ func (c *Client) publish(st core.State) {
 		ch <- st
 	}
 }
+
+func (c *Client) ContainerLogs(ctx context.Context, stack, container string) (out string, err error) {
+	err = c.call(ctx, MethodContainerLogs, logsParams{Stack: stack, Container: container}, &out)
+	return
+}

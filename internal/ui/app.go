@@ -7,6 +7,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -36,7 +37,7 @@ var placeholders = map[int]struct {
 // helps sao os atalhos de cada aba, no rodape.
 var helps = map[int]string{
 	tabDashboard: "enter/r verifica · ",
-	tabInfra:     "↑↓ servico · enter liga/desliga · r atualiza · ",
+	tabInfra:     "↑↓ card · ←→ container · espaco liga/desliga · r atualiza · ",
 	tabSetup:     "tab/↑↓ campo · espaco marca · ctrl+s salva · ctrl+r executa · ",
 }
 
@@ -75,16 +76,29 @@ type model struct {
 	disconnected bool
 	setup        *setupPage
 
+	selectionGeneration uint64
+	logSelection        logSelection
+	logArea             logArea
+	copiedNotice        bool
+	copiedGeneration    uint64
+
 	// aba Infra
-	infraSel  int    // servico opcional selecionado (teclado)
-	toggling  string // servico sendo ligado/desligado daqui
-	infraMsg  string
-	infraMsgC string
+	infraContainer                  int
+	logsGeneration                  uint64
+	logsTarget, logsText, logsError string
+	logsOffset                      int
+	infraSel                        int    // servico opcional selecionado (teclado)
+	toggling                        string // servico sendo ligado/desligado daqui
+	infraMsg                        string
+	infraMsgC                       string
+	infraMsgStack                   string
+	togglingOn                      bool
 }
 
 type (
-	stateMsg  core.State
-	closedMsg struct{}
+	stateMsg            core.State
+	closedMsg           struct{}
+	copiedNoticeExpired uint64
 )
 
 func newModel(api core.API, states <-chan core.State) *model {
@@ -118,7 +132,15 @@ func (m *model) checkCmd() tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case logSelectionScrollTick:
+		return m, m.scrollLogSelection(uint64(msg))
+	case copiedNoticeExpired:
+		if uint64(msg) == m.copiedGeneration {
+			m.copiedNotice = false
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
+		m.logSelection = logSelection{}
 		m.w, m.h = msg.Width, msg.Height
 		return m, nil
 	case tea.BackgroundColorMsg:
@@ -128,17 +150,75 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateMsg:
 		m.state = core.State(msg)
 		m.setup.onState(m.state)
-		return m, m.waitState()
+		return m, tea.Batch(m.waitState(), m.syncInfraLogs(false))
 	case closedMsg:
 		m.disconnected = true
 		return m, nil
+	case tea.MouseClickMsg:
+		if m.startLogSelection(msg) {
+			return m, nil
+		}
+		m.logSelection = logSelection{}
+		return m, nil
+	case tea.MouseMotionMsg:
+		if m.logSelection.dragging {
+			if msg.Button != tea.MouseLeft {
+				return m, m.finishLogSelection(msg.X, msg.Y)
+			}
+			m.moveLogSelection(msg.X, msg.Y)
+			return m, m.selectionScrollCmd()
+		}
+		return m, nil
+	case tea.MouseWheelMsg:
+		m.logSelection = logSelection{}
+
+		if m.tab != tabInfra || m.disconnected {
+			return m, nil
+		}
+		key := "down"
+		if msg.Button == tea.MouseWheelUp {
+			key = "up"
+		}
+		if m.zones.Get("infra-logs").InBounds(msg) {
+			key = "pgdown"
+			if msg.Button == tea.MouseWheelUp {
+				key = "pgup"
+			}
+		}
+		return m, m.infraKey(key)
 	case tea.MouseReleaseMsg:
+		if m.logSelection.dragging && (msg.Button == tea.MouseLeft || msg.Button == tea.MouseNone) {
+			return m, m.finishLogSelection(msg.X, msg.Y)
+		}
 		if msg.Button != tea.MouseLeft {
 			return m, nil
 		}
 		return m, m.click(msg)
 	case tea.KeyPressMsg:
 		return m, m.key(msg)
+	case infraLogsMsg:
+		if msg.generation != m.logsGeneration || m.tab != tabInfra || m.disconnected {
+			return m, nil
+		}
+		m.logsText = msg.text
+		m.logsError = ""
+		if msg.err != nil {
+			m.logsError = msg.err.Error()
+		}
+		generation := m.logsGeneration
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return infraLogsTick(generation) })
+	case infraLogsTick:
+		if uint64(msg) != m.logsGeneration || m.tab != tabInfra || m.disconnected {
+			return m, nil
+		}
+		if len(m.logSelection.lines) > 0 {
+			generation := uint64(msg)
+			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return infraLogsTick(generation) })
+		}
+		if !m.state.Infra.Checking {
+			return m, tea.Batch(m.fetchInfraLogs(), m.stacksCmd())
+		}
+		return m, m.fetchInfraLogs()
 	case serviceDoneMsg:
 		return m, m.onServiceDone(msg)
 	}
@@ -153,9 +233,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // setTab troca de aba; a Infra pergunta ao docker toda vez que abre.
 func (m *model) setTab(i int) tea.Cmd {
+	if m.tab != i {
+		m.logsGeneration++
+		m.logsTarget = ""
+	}
+	m.logSelection = logSelection{}
 	m.tab = i
 	if i == tabInfra && !m.state.Infra.Checking {
-		return m.stacksCmd()
+		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
 	}
 	return nil
 }
@@ -245,7 +330,14 @@ func (m *model) View() tea.View {
 			m.th.fg(m.th.muted).Render(p.desc) + "\n\n" +
 			m.th.fg(m.th.warn).Render("Em construcao -- chega na fase "+strconv.Itoa(p.phase)))
 	}
-	v.SetContent(m.zones.Scan(lipgloss.JoinVertical(lipgloss.Left, header, body, footer)))
+	content := m.zones.Scan(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
+	if m.copiedNotice {
+		notice := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.th.ok).
+			Background(m.th.fieldBg).Foreground(m.th.text).Padding(0, 2).Bold(true).Render("Texto copiado")
+		content = lipgloss.NewCompositor(lipgloss.NewLayer(content), lipgloss.NewLayer(notice).
+			X(max(0, (m.w-lipgloss.Width(notice))/2)).Y(max(0, m.h-lipgloss.Height(notice)-1)).Z(1)).Render()
+	}
+	v.SetContent(content)
 	return v
 }
 

@@ -88,7 +88,7 @@ func (c *Core) RunSetup(ctx context.Context) (Setup, error) {
 		return Setup{}, ErrBusy
 	}
 	defer c.infra.Unlock()
-	return c.runSetupLocked(ctx)
+	return c.runSetupLocked(ctx, "", false)
 }
 
 // SetService liga ou desliga um servico opcional (banco, storage) e aplica
@@ -112,7 +112,7 @@ func (c *Core) SetService(ctx context.Context, name string, on bool) (Setup, err
 		return Setup{}, err
 	}
 	if cfg.HasStack(name) == on {
-		return c.runSetupLocked(ctx) // ja estava: so garante que esta aplicado
+		return c.runSetupLocked(ctx, name, on) // ja estava: so garante que esta aplicado
 	}
 	if on {
 		cfg.Stacks = append(cfg.Stacks, name)
@@ -122,7 +122,7 @@ func (c *Core) SetService(ctx context.Context, name string, on bool) (Setup, err
 	if err := c.saveConfig(cfg); err != nil {
 		return Setup{}, err
 	}
-	return c.runSetupLocked(ctx)
+	return c.runSetupLocked(ctx, name, on)
 }
 
 func optionalNames() []string {
@@ -135,9 +135,9 @@ func optionalNames() []string {
 	return names
 }
 
-func (c *Core) runSetupLocked(ctx context.Context) (Setup, error) {
+func (c *Core) runSetupLocked(ctx context.Context, service string, on bool) (Setup, error) {
 	c.update(func(s *State) {
-		s.Setup = Setup{Running: true, StartedAt: c.deps.Now()}
+		s.Setup = Setup{Running: true, StartedAt: c.deps.Now(), Service: service, ServiceOn: on}
 	})
 
 	steps, err := bootstrap.Run(ctx, c.setupDeps(), func(steps []bootstrap.Step) {

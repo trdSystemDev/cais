@@ -209,6 +209,10 @@ cais service garage off  # desliga o S3 e preserva os volumes
 A aba **Setup** concentra dominio, e-mail, certificados, GitHub e hosts.
 A aba **Infra** mostra o estado das stacks fixas, os botoes Ligar/Desligar
 dos servicos opcionais, o passo em andamento e as instrucoes do S3.
+Os cards ficam a esquerda; a direita aparecem os logs do container selecionado
+(ultimas 200 linhas, atualizadas a cada 2 segundos). Clique num card ou use
+↑/↓; ←/→ troca o container nas stacks com mais de um. PgUp/PgDown ou a roda
+do mouse rola os logs, e End volta a acompanhar as mensagens recentes.
 O plano e a aplicacao inicial tambem ficam disponiveis na TUI e pelo CLI.
 Pode rodar de novo a qualquer momento: nada que existe e regenerado e stacks sem mudanca nao sao recriadas.
 Um Setup disparado pelo CLI aparece ao vivo na TUI aberta, e vice-versa.

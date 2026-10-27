@@ -86,3 +86,26 @@ func TestHealthyComHealthcheckSubindo(t *testing.T) {
 		t.Error("healthcheck ainda subindo nao e saudavel")
 	}
 }
+
+func TestContainerLogsValidaPertencimento(t *testing.T) {
+	var called string
+	c := New(Deps{
+		ComposePS: func(context.Context, string) ([]docker.Container, error) {
+			return []docker.Container{{Name: "woodpecker-agent"}}, nil
+		},
+		ContainerLogs: func(_ context.Context, name string) (string, error) { called = name; return "agent pronto", nil },
+	})
+	if _, err := c.ContainerLogs(context.Background(), "inexistente", "woodpecker-agent"); err == nil {
+		t.Fatal("aceitou stack desconhecida")
+	}
+	if _, err := c.ContainerLogs(context.Background(), "woodpecker", "mysql"); err == nil {
+		t.Fatal("aceitou container de outra stack")
+	}
+	if called != "" {
+		t.Fatal("leu logs antes de validar")
+	}
+	out, err := c.ContainerLogs(context.Background(), "woodpecker", "woodpecker-agent")
+	if err != nil || out != "agent pronto" || called != "woodpecker-agent" {
+		t.Fatalf("%q, %v, %q", out, err, called)
+	}
+}

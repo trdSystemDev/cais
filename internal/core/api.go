@@ -27,6 +27,8 @@ type API interface {
 	// CheckStacks pergunta ao docker o estado das stacks base.
 	CheckStacks(ctx context.Context) (Infra, error)
 
+	ContainerLogs(ctx context.Context, stack, container string) (string, error)
+
 	// LoadConfig le o config.yaml. Sem arquivo, devolve Exists falso e a
 	// config padrao (ponto de partida do Setup).
 	LoadConfig(ctx context.Context) (ConfigInfo, error)

@@ -115,12 +115,15 @@ func TestSetServiceLigaEDesligaEAplica(t *testing.T) {
 	if !info.Config.HasStack("postgres") {
 		t.Fatal("postgres nao ficou ligado na config")
 	}
-	if s := snap(t, c).Setup; s.Running || s.Error != "" || len(s.Steps) == 0 {
+	if s := snap(t, c).Setup; s.Running || s.Error != "" || len(s.Steps) == 0 || s.Service != "postgres" || !s.ServiceOn {
 		t.Fatalf("Setup nao rodou pra aplicar: %+v", s)
 	}
 
 	if _, err := c.SetService(ctx, "postgres", false); err != nil {
 		t.Fatal(err)
+	}
+	if s := snap(t, c).Setup; s.Service != "postgres" || s.ServiceOn {
+		t.Fatalf("operacao sem destino: %+v", s)
 	}
 	if len(stopped) != 1 || stopped[0] != "postgres" {
 		t.Fatalf("stacks desligadas: %v", stopped)

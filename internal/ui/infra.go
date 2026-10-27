@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
+	"unicode"
+
+	"github.com/charmbracelet/x/ansi"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -50,6 +54,8 @@ func (m *model) toggle(name string) tea.Cmd {
 	}
 	on := !m.serviceOn(name)
 	m.toggling = name
+	m.togglingOn = on
+	m.infraMsgStack = name
 	verb := map[bool]string{true: "Ligando", false: "Desligando"}[on]
 	m.infraMsgC, m.infraMsg = "warn", verb+" "+name+"..."
 	return func() tea.Msg {
@@ -69,6 +75,7 @@ func (m *model) serviceOn(name string) bool {
 
 func (m *model) onServiceDone(msg serviceDoneMsg) tea.Cmd {
 	m.toggling = ""
+	m.infraMsgStack = msg.name
 	switch {
 	case msg.err != nil:
 		m.infraMsgC, m.infraMsg = "danger", firstLine(msg.err.Error())
@@ -81,51 +88,246 @@ func (m *model) onServiceDone(msg serviceDoneMsg) tea.Cmd {
 	return tea.Batch(m.stacksCmd(), m.setup.planCmd())
 }
 
-func (m *model) viewInfra(h int) string {
-	t := m.th
-	infra := m.state.Infra
-	var b strings.Builder
-
-	if infra.CheckedAt.IsZero() {
-		b.WriteString(t.bold().Render("Infra") + "\n\n" + t.fg(t.warn).Render("Perguntando ao docker...") + "\n")
-		return t.panel(false, m.w-2, h-2).Render(b.String())
-	}
-	if infra.Error != "" {
-		b.WriteString(t.fg(t.danger).Render(infra.Error) + "\n\n")
-	}
-
-	byName := map[string]core.StackStatus{}
-	for _, s := range infra.Stacks {
-		byName[s.Name] = s
-	}
-
-	b.WriteString(t.bold().Render("Base") + " " + t.fg(t.muted).Render("(sobem sempre)") + "\n")
-	for _, s := range stacks.All {
-		if !s.Optional {
-			b.WriteString("\n" + m.viewStack(byName[s.Name], false, false))
+// infraOrder agrupa base e opcionais, incluindo ambos na selecao de logs.
+func infraOrder() []string {
+	var names []string
+	for _, optional := range []bool{false, true} {
+		for _, st := range stacks.All {
+			if st.Optional == optional {
+				names = append(names, st.Name)
+			}
 		}
 	}
+	return names
+}
 
-	b.WriteString("\n" + t.bold().Render("Servicos") + " " + t.fg(t.muted).Render("(ligue so o que for usar)") + "\n")
-	for i, name := range optional() {
-		b.WriteString("\n" + m.viewStack(byName[name], true, i == m.infraSel))
+func (m *model) selectedStack() core.StackStatus {
+	name := infraOrder()[m.infraSel]
+	for _, st := range m.state.Infra.Stacks {
+		if st.Name == name {
+			return st
+		}
 	}
+	st, _ := stacks.Get(name)
+	return core.StackStatus{Name: name, Desc: st.Desc}
+}
 
-	if m.busy() {
-		b.WriteString("\n" + t.fg(t.warn).Render("Aplicando: "+runningStep(m.state.Setup)) + "\n")
+func (m *model) viewInfra(h int) string {
+	m.logArea = logArea{}
+	t := m.th
+	leftW := min(52, max(30, m.w*2/5))
+	if m.w < 72 {
+		return t.panel(false, m.w-2, max(1, h-2)).Render("Amplie o terminal para pelo menos 72 colunas para ver cards e logs.")
 	}
-	if m.infraMsg != "" {
-		c := map[string]lipgloss.Style{"ok": t.fg(t.ok), "warn": t.fg(t.warn), "danger": t.fg(t.danger)}[m.infraMsgC]
-		b.WriteString("\n" + c.Bold(true).Width(m.w-8).Render(m.infraMsg) + "\n")
+	innerH := max(1, h-2)
+	var cards []string
+	order := infraOrder()
+	count := max(1, (innerH-5)/4)
+	start := max(0, m.infraSel-count+1)
+	start = min(start, max(0, len(order)-count))
+	for i := start; i < min(len(order), start+count); i++ {
+		name := order[i]
+		st := core.StackStatus{Name: name}
+		for _, item := range m.state.Infra.Stacks {
+			if item.Name == name {
+				st = item
+			}
+		}
+		def, _ := stacks.Get(name)
+		selected := i == m.infraSel
+		mark, status := "○", "aguardando"
+		switch {
+		case m.serviceChanging(name):
+			mark, status = "◌", "ligando..."
+			if on, _, _ := m.serviceOperation(name); !on {
+				status = "desligando..."
+			}
+		case st.Error != "":
+			mark, status = "✗", "erro"
+		case !st.Enabled:
+			mark, status = "·", "desligado"
+		case !st.Installed:
+			status = "ainda nao subiu"
+		case st.Healthy():
+			mark, status = "✓", "no ar"
+		default:
+			mark, status = "✗", "com problema"
+		}
+		statusColor := t.muted
+		if m.serviceChanging(name) {
+			statusColor = t.warn
+		}
+		title := t.bold().Render(mark+" "+name) + "  " + t.fg(statusColor).Render(status)
+		label := "Base · sobe sempre"
+		if def.Optional {
+			label = "Opcional"
+		}
+		line := t.fg(t.muted).Render(label)
+		if def.Optional {
+			text := "Ligar"
+			if st.Enabled {
+				text = "Desligar"
+			}
+			btn := t.pill(false)
+			if m.busy() {
+				btn = t.disabledPill()
+			}
+			line += "  " + m.zones.Mark("toggle:"+name, btn.Render(text))
+		}
+		card := t.panel(selected, leftW-4, 2).Render(ansi.Truncate(title, leftW-6, "…") + "\n" + line)
+		cards = append(cards, m.zones.Mark("stack:"+name, card))
 	}
+	header := t.bold().Render("Infra") + "  " + t.fg(t.muted).Render("Base e servicos")
+	footer := m.zones.Mark("infra-refresh", t.pill(false).Render("Atualizar"))
+	if !m.state.Infra.CheckedAt.IsZero() {
+		footer += "\n" + t.fg(t.muted).Render("Ultima verificacao: "+m.state.Infra.CheckedAt.Local().Format("15:04:05"))
+	}
+	if m.state.Infra.Error != "" {
+		footer += "\n" + t.fg(t.danger).Render(firstLine(m.state.Infra.Error))
+	}
+	left := lipgloss.NewStyle().Width(leftW).Height(h).Render(header + "\n" + strings.Join(cards, "\n") + "\n" + footer)
+	rightW := m.w - leftW - 1
+	right := m.zones.Mark("infra-logs", m.viewInfraLogs(rightW, innerH))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+}
 
-	btn := t.pill(false)
-	if infra.Checking {
-		btn = t.disabledPill()
+type infraLogsMsg struct {
+	generation uint64
+	text       string
+	err        error
+}
+type infraLogsTick uint64
+
+func (m *model) syncInfraLogs(force bool) tea.Cmd {
+	if m.tab != tabInfra || m.disconnected {
+		return nil
 	}
-	b.WriteString("\n" + m.zones.Mark("infra-refresh", btn.Render("Atualizar")) + "  " +
-		t.fg(t.muted).Render("Ultima verificacao: "+infra.CheckedAt.Local().Format("02/01/2006 15:04:05")))
-	return t.panel(false, m.w-2, h-2).Render(b.String())
+	st := m.selectedStack()
+	if m.infraContainer >= len(st.Containers) {
+		m.infraContainer = 0
+	}
+	target := ""
+	if len(st.Containers) > 0 {
+		target = st.Containers[m.infraContainer].Name
+	}
+	if !force && target == m.logsTarget {
+		return nil
+	}
+	m.logSelection = logSelection{}
+	m.logsGeneration++
+	m.logsTarget = target
+	m.logsText = ""
+	m.logsError = ""
+	m.logsOffset = 0
+	if target == "" {
+		return nil
+	}
+	return m.fetchInfraLogs()
+}
+
+func (m *model) fetchInfraLogs() tea.Cmd {
+	generation, stack, target := m.logsGeneration, m.selectedStack().Name, m.logsTarget
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		defer cancel()
+		out, err := m.api.ContainerLogs(ctx, stack, target)
+		return infraLogsMsg{generation, out, err}
+	}
+}
+
+func (m *model) viewInfraLogs(w, h int) string {
+	t := m.th
+	st := m.selectedStack()
+	if on, detail, changing := m.serviceOperation(st.Name); changing {
+		return m.viewServiceModal(w, h, st.Name, on, detail)
+	}
+	var b strings.Builder
+	title := "Logs · " + st.Name
+	if s := m.logSelection; len(s.lines) > 0 {
+		title = fmt.Sprintf("Logs · %d–%d/%d", s.viewStart+1, min(len(s.lines), s.viewStart+s.viewHeight), len(s.lines))
+		if s.viewStart == 0 {
+			title += " · início"
+		} else if s.viewStart+s.viewHeight == len(s.lines) {
+			title += " · fim"
+		}
+	}
+	b.WriteString(t.bold().Render(ansi.Truncate(title, w-6, "…")) + "\n")
+	if len(st.Containers) > 0 {
+		columns := min(len(st.Containers), max(1, (w-6)/16))
+		tabW := (w - 6 - (columns - 1)) / columns
+		var row []string
+		for i, c := range st.Containers {
+			state, color := c.State, t.ok
+			if c.Health != "" {
+				state = c.Health
+			}
+			switch {
+			case c.State != "running" || c.Health == "unhealthy":
+				color = t.danger
+			case c.Health == "starting":
+				color = t.warn
+			}
+			content := t.bold().Render(ansi.Truncate(c.Name, max(1, tabW-4), "…")) + "\n" + t.fg(color).Render(ansi.Truncate("● "+state, max(1, tabW-4), "…"))
+			tab := t.panel(i == m.infraContainer, tabW-2, 2).Render(content)
+			row = append(row, m.zones.Mark("container:"+c.Name, tab))
+			if len(row) == columns || i == len(st.Containers)-1 {
+				b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, interleaveTabs(row)...) + "\n")
+				row = nil
+			}
+		}
+	}
+	if st.Name == "garage" && st.Enabled {
+		b.WriteString(t.fg(t.muted).Render(ansi.Truncate("S3: https://"+m.setup.plan.Config.S3Host()+" · regiao garage", w-6, "…")) + "\n")
+	}
+	if m.infraMsg != "" && m.infraMsgStack == st.Name {
+		color := t.warn
+		if m.infraMsgC == "danger" {
+			color = t.danger
+		}
+		if m.infraMsgC == "ok" {
+			color = t.ok
+		}
+		b.WriteString(t.fg(color).Render(ansi.Truncate(m.infraMsg, w-6, "…")) + "\n")
+	}
+	b.WriteString("\n")
+	text := m.logsText
+	switch {
+	case len(st.Containers) == 0:
+		text = "Nenhum container disponivel. Ligue o servico ou execute o Setup."
+	case m.logsError != "":
+		text = "Erro ao ler logs: " + m.logsError
+	case text == "":
+		text = "Aguardando logs do container..."
+	}
+	text = strings.Map(func(r rune) rune {
+		if r == '\n' {
+			return r
+		}
+		if r == '\t' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, ansi.Strip(text))
+	lines := strings.Split(ansi.Hardwrap(text, max(1, w-6), true), "\n")
+	available := max(1, h-lipgloss.Height(b.String()))
+	offset := min(m.logsOffset, max(0, len(lines)-available))
+	end := max(1, len(lines)-offset)
+	start := max(0, end-available)
+	visibleLines := lines[start:end]
+	visible := strings.Join(visibleLines, "\n")
+	if len(m.logSelection.lines) > 0 {
+		start = m.logSelection.viewStart
+		end = min(len(m.logSelection.lines), start+m.logSelection.viewHeight)
+		lines = m.logSelection.lines
+		visibleLines = lines[start:end]
+		visible = m.renderLogSelection()
+	}
+	m.logArea = logArea{x: m.w - w + 2, y: lipgloss.Height(m.viewTabs()) + lipgloss.Height(b.String()), width: w - 6, height: available, lines: append([]string(nil), visibleLines...), allLines: lines, start: start}
+	b.WriteString(visible)
+	return t.panel(false, w-2, h).MaxHeight(h + 2).Render(b.String())
 }
 
 // runningStep e a descricao do passo do Setup em andamento.
@@ -138,94 +340,144 @@ func runningStep(s core.Setup) string {
 	return "comecando..."
 }
 
-func (m *model) viewStack(s core.StackStatus, toggleable, selected bool) string {
-	t := m.th
-	name := lipgloss.NewStyle().Bold(true).Width(12).Render(s.Name)
-	var mark, label string
-	switch {
-	case !s.Enabled && !s.Installed:
-		mark, label = t.fg(t.muted).Render("·"), t.fg(t.muted).Render("desligado")
-	case s.Error != "":
-		mark, label = t.fg(t.danger).Render("✗"), t.fg(t.danger).Render("erro: "+firstLine(s.Error))
-	case s.Enabled && !s.Installed:
-		mark, label = t.fg(t.warn).Render("○"), t.fg(t.warn).Render("ligado, mas ainda nao subiu")
-	case !s.Enabled:
-		mark, label = t.fg(t.warn).Render("○"), t.fg(t.warn).Render("desligado, ainda no ar (o proximo Setup derruba)")
-	case s.Healthy():
-		mark, label = t.fg(t.ok).Render("✓"), t.fg(t.ok).Render("no ar")
-	case len(s.Containers) == 0:
-		mark, label = t.fg(t.danger).Render("✗"), t.fg(t.danger).Render("sem containers")
-	default:
-		mark, label = t.fg(t.danger).Render("✗"), t.fg(t.danger).Render("com problema")
-	}
-
-	cursor := "  "
-	if selected {
-		cursor = t.fg(t.accent).Bold(true).Render("› ")
-	}
-	line := cursor + mark + " " + name + " " + label
-	if toggleable {
-		st := t.pill(selected)
-		text := "Ligar"
-		if s.Enabled {
-			text = "Desligar"
-		}
-		if m.busy() {
-			st = t.disabledPill()
-		}
-		line += "  " + m.zones.Mark("toggle:"+s.Name, st.Render(text))
-	}
-	line += "\n    " + t.fg(t.muted).Render(s.Desc) + "\n"
-
-	for _, c := range s.Containers {
-		state := t.fg(t.ok).Render(c.State)
-		switch {
-		case c.State != "running":
-			state = t.fg(t.danger).Render(c.State)
-		case c.Health == "unhealthy":
-			state = t.fg(t.danger).Render("unhealthy")
-		case c.Health == "starting":
-			state = t.fg(t.warn).Render("subindo")
-		case c.Health == "healthy":
-			state = t.fg(t.ok).Render("healthy")
-		}
-		line += fmt.Sprintf("    %s %s %s\n",
-			lipgloss.NewStyle().Width(24).Render(c.Name),
-			lipgloss.NewStyle().Width(10).Render(state),
-			t.fg(t.muted).Render(c.Status))
-	}
-	if s.Name == "garage" && s.Enabled {
-		line += "    " + t.fg(t.muted).Render("S3: https://"+m.setup.plan.Config.S3Host()+" (regiao garage) · chaves e buckets: docker exec garage /garage key|bucket ...") + "\n"
-	}
-	return line
-}
-
 func (m *model) infraClick(msg tea.MouseMsg) tea.Cmd {
 	if m.zones.Get("infra-refresh").InBounds(msg) && !m.state.Infra.Checking {
-		return m.stacksCmd()
+		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
 	}
-	for i, name := range optional() {
+	for i, name := range infraOrder() {
 		if m.zones.Get("toggle:" + name).InBounds(msg) {
 			m.infraSel = i
-			return m.toggle(name)
+			m.infraContainer = 0
+			return tea.Batch(m.toggle(name), m.syncInfraLogs(true))
+		}
+		if m.zones.Get("stack:" + name).InBounds(msg) {
+			m.infraSel = i
+			m.infraContainer = 0
+			return m.syncInfraLogs(true)
+		}
+	}
+	for i, c := range m.selectedStack().Containers {
+		if m.zones.Get("container:" + c.Name).InBounds(msg) {
+			m.infraContainer = i
+			return m.syncInfraLogs(true)
 		}
 	}
 	return nil
 }
 
 func (m *model) infraKey(k string) tea.Cmd {
-	n := len(optional())
+	m.logSelection = logSelection{}
+	n := len(infraOrder())
 	switch k {
 	case "r":
-		if !m.state.Infra.Checking {
-			return m.stacksCmd()
-		}
+		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
 	case "down", "tab":
 		m.infraSel = (m.infraSel + 1) % n
 	case "up", "shift+tab":
 		m.infraSel = (m.infraSel + n - 1) % n
+	case "left", "right":
+		count := len(m.selectedStack().Containers)
+		if count == 0 {
+			return nil
+		}
+		delta := 1
+		if k == "left" {
+			delta = -1
+		}
+		m.infraContainer = (m.infraContainer + delta + count) % count
+		return m.syncInfraLogs(true)
+	case "pgup":
+		m.logsOffset = min(m.logsOffset+10, max(0, len(m.logArea.allLines)-m.logArea.height))
+		return nil
+	case "pgdown":
+		m.logsOffset = max(0, m.logsOffset-10)
+		return nil
+	case "end":
+		m.logsOffset = 0
+		return nil
 	case "enter", "space":
-		return m.toggle(optional()[m.infraSel])
+		name := infraOrder()[m.infraSel]
+		st, _ := stacks.Get(name)
+		if st.Optional {
+			return m.toggle(name)
+		}
+		return m.syncInfraLogs(true)
+	default:
+		return nil
 	}
-	return nil
+	m.infraContainer = 0
+	return m.syncInfraLogs(true)
+}
+
+// serviceOperation vincula o progresso ao servico, inclusive quando a acao
+// foi iniciada por outro cliente do daemon.
+func (m *model) serviceOperation(name string) (on bool, detail string, changing bool) {
+	if m.toggling == name {
+		return m.togglingOn, runningStep(m.state.Setup), true
+	}
+	setup := m.state.Setup
+	if !setup.Running {
+		return m.containerStarting(name)
+	}
+	if setup.Service != "" {
+		if setup.Service == name {
+			return setup.ServiceOn, runningStep(setup), true
+		}
+		return false, "", false
+	}
+	for _, step := range setup.Steps {
+		if step.Status != bootstrap.Running {
+			continue
+		}
+		if step.ID == "stack:"+name || (name == "garage" && step.ID == "garage-layout") {
+			return true, step.Desc, true
+		}
+		if step.ID == "stop:"+name {
+			return false, step.Desc, true
+		}
+	}
+	return m.containerStarting(name)
+}
+
+func (m *model) serviceChanging(name string) bool {
+	_, _, changing := m.serviceOperation(name)
+	return changing
+}
+
+func (m *model) viewServiceModal(w, h int, name string, on bool, detail string) string {
+	t := m.th
+	title := "Derrubando container"
+	if on {
+		title = "Iniciando container"
+	}
+	width := max(16, min(48, w-8))
+	text := t.fg(t.warn).Bold(true).Render("◌ "+title) + "\n" + t.bold().Render(name) + "\n\n" + detail
+	modal := t.panel(true, width, 0).MaxHeight(h).Render(text)
+	centered := lipgloss.Place(w-4, h, lipgloss.Center, lipgloss.Center, modal)
+	return t.panel(false, w-2, h).MaxHeight(h + 2).Render(centered)
+}
+
+func (m *model) containerStarting(name string) (bool, string, bool) {
+	for _, st := range m.state.Infra.Stacks {
+		if st.Name != name {
+			continue
+		}
+		for _, c := range st.Containers {
+			if c.Health == "starting" || c.State == "created" || c.State == "restarting" {
+				return true, "Aguardando " + c.Name + " ficar pronto...", true
+			}
+		}
+	}
+	return false, "", false
+}
+
+func interleaveTabs(tabs []string) []string {
+	var parts []string
+	for i, tab := range tabs {
+		if i > 0 {
+			parts = append(parts, " ")
+		}
+		parts = append(parts, tab)
+	}
+	return parts
 }

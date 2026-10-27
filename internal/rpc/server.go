@@ -143,6 +143,13 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodEnvironmentCheck:
 		return wrap(s.api.CheckEnvironment(s.ctx))
 
+	case MethodContainerLogs:
+		var p logsParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.ContainerLogs(c.ctx, p.Stack, p.Container))
+
 	case MethodInfraCheck:
 		return wrap(s.api.CheckStacks(s.ctx))
 

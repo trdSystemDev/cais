@@ -388,3 +388,20 @@ func TestParametroDesconhecidoERecusado(t *testing.T) {
 		t.Fatalf("esperava CodeInvalidParams, veio %v", err)
 	}
 }
+
+func TestContainerLogsPeloSocket(t *testing.T) {
+	d := startDaemonDeps(t, core.Deps{
+		ComposePS: func(context.Context, string) ([]docker.Container, error) {
+			return []docker.Container{{Name: "garage"}}, nil
+		},
+		ContainerLogs: func(context.Context, string) (string, error) { return "stdout\nstderr\n", nil },
+	})
+	c := dial(t, d.path)
+	out, err := c.ContainerLogs(context.Background(), "garage", "garage")
+	if err != nil || out != "stdout\nstderr\n" {
+		t.Fatalf("%q, %v", out, err)
+	}
+	if _, err := c.ContainerLogs(context.Background(), "garage", "mysql"); err == nil {
+		t.Fatal("aceitou container de outra stack")
+	}
+}

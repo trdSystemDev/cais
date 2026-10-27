@@ -58,6 +58,9 @@ func (s StackStatus) Healthy() bool {
 
 // Setup e o andamento da ultima execucao do Setup (bootstrap da VPS).
 type Setup struct {
+	// Service identifica o servico alterado; vazio quando o Setup e geral.
+	Service    string           `json:"service,omitempty"`
+	ServiceOn  bool             `json:"service_on,omitempty"`
 	Running    bool             `json:"running"`
 	Steps      []bootstrap.Step `json:"steps,omitempty"`
 	StartedAt  time.Time        `json:"started_at,omitzero"`

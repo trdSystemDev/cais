@@ -17,6 +17,7 @@ const (
 	MethodStateGet         = "state.get"
 	MethodStateSubscribe   = "state.subscribe"
 	MethodEnvironmentCheck = "environment.check"
+	MethodContainerLogs    = "infra.logs"
 	MethodInfraCheck       = "infra.check"
 	MethodConfigGet        = "config.get"
 	MethodConfigSave       = "config.save" // params: config.Config
@@ -88,4 +89,9 @@ type passwordResult struct {
 type serviceParams struct {
 	Name string `json:"name"`
 	On   bool   `json:"on"`
+}
+
+type logsParams struct {
+	Stack     string `json:"stack"`
+	Container string `json:"container"`
 }

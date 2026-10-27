@@ -44,7 +44,8 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 			ups.Add(1)
 			return nil
 		},
-		ComposeDown: func(context.Context, string) error { return nil },
+		ContainerLogs: func(context.Context, string) (string, error) { return "container iniciado\nouvindo conexoes", nil },
+		ComposeDown:   func(context.Context, string) error { return nil },
 		// toda stack instalada aparece com um container saudavel
 		ComposePS: func(_ context.Context, file string) ([]docker.Container, error) {
 			pss.Add(1)
@@ -95,6 +96,9 @@ func run(t *testing.T, m *model, cmd tea.Cmd) tea.Msg {
 		}
 		last = msg
 		_, cmd = m.Update(msg)
+		if _, ok := msg.(infraLogsMsg); ok {
+			return last
+		}
 		if _, ok := msg.(stateMsg); ok {
 			return last
 		}
@@ -327,8 +331,8 @@ func TestInfraMostraAsStacks(t *testing.T) {
 	waitFor(t, m, "Ultima verificacao")
 	out := screen(m)
 	for _, want := range []string{
-		"(sobem sempre)", "✓ proxy", "✓ woodpecker", "Up 1 minute (healthy)",
-		"✓ postgres", "ligado, mas ainda nao subiu", // mysql
+		"Base · sobe sempre", "✓ proxy", "✓ woodpecker", "Logs · proxy",
+		"✓ postgres", "ainda nao subiu", // mysql
 		"· garage", "Ligar", "Desligar",
 	} {
 		if !strings.Contains(out, want) {
