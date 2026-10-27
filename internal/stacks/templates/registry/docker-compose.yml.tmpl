@@ -18,6 +18,9 @@ services:
       REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
       # atras do proxy: Location relativo, sem depender do Host/porta interna
       REGISTRY_HTTP_RELATIVEURLS: "true"
+      # ja e o padrao, mas fica explicito: uma senha vazada publica imagem,
+      # mas nao apaga o historico pela API
+      REGISTRY_STORAGE_DELETE_ENABLED: "false"
     secrets:
       - source: registry_htpasswd
         target: /auth/htpasswd

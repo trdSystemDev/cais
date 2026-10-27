@@ -94,6 +94,14 @@ Secrets ficam em texto puro em `/var/lib/cais` (pasta root `0700`, arquivos
 criptografados com [age](https://age-encryption.org) para uma chave publica
 cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
 
+O cais gera sozinho todos os secrets das stacks (senhas dos bancos,
+`database_uri` do BunkerWeb, agent secret do Woodpecker, login do DBGate) e
+nunca troca um que ja existe; so o client secret do GitHub e informado. O
+registry tem um usuario por quem acessa: `ci` (push do Woodpecker) e `vps`
+(pull do daemon) com senha guardada, e um por pessoa so com o hash (a senha e
+mostrada uma vez). Todo usuario pode push/pull, entao revogar e por pessoa; o
+delete pela API fica desligado.
+
 Nao ha script de deploy no host: o CI faz `ssh deploy@vps <app> < docker-compose.yml`
 e o forced command da chave e o proprio `cais deploy` (fase 3), que manda o
 compose pro daemon pelo socket. O daemon valida, grava e roda `pull`/`up -d`,
