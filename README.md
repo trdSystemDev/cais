@@ -140,6 +140,12 @@ Postgres e MySQL sao stacks separadas: ative so o que for usar (ex:
 gerados. Cada banco fica na propria rede (`postgres_network`, `mysql_network`),
 entao um app so enxerga o banco que usa.
 
+Tirar uma stack da config nao apaga nada: o proximo `setup run` derruba os
+containers dela (`docker compose down`, sem `-v`) e o compose vira
+`docker-compose.yml.desativada`, como registro. Os volumes, com os dados, ficam;
+religar a stack traz tudo de volta. Stacks de versoes antigas do cais sao
+tratadas do mesmo jeito.
+
 Os bancos nao tem painel web: so escutam no loopback da VPS (`127.0.0.1:5432` e
 `:3306`), e a administracao e por tunel SSH, com o cliente que preferir no seu
 computador. Nenhuma porta nova fica aberta na internet:

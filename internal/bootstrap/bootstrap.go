@@ -46,6 +46,7 @@ type Deps struct {
 
 	CheckDocker func(ctx context.Context) error
 	ComposeUp   func(ctx context.Context, file string, recreate bool) error
+	ComposeDown func(ctx context.Context, file string) error
 	Login       func(ctx context.Context, host, user string, password []byte) error
 
 	// o login no registry depende do DNS e do certificado do Let's Encrypt,
@@ -61,11 +62,39 @@ func (d Deps) ComposeFile(stack string) string {
 	return filepath.Join(d.StackDir(stack), "docker-compose.yml")
 }
 
+// disabledSuffix marca o compose de uma stack desativada: o arquivo fica
+// como registro do que existia (volumes inclusive), mas nao e mais
+// detectado como stack no ar.
+const disabledSuffix = ".desativada"
+
+// stacksOnDisk lista as stacks que tem compose gravado (ativo).
+func (d Deps) stacksOnDisk() ([]string, error) {
+	root := filepath.Dir(d.StackDir("x"))
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(d.ComposeFile(e.Name())); err == nil {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
+}
+
 // Mudancas no compose de uma stack em relacao ao que esta no disco.
 const (
 	ChangeNew       = "nova"
 	ChangeModified  = "alterada"
 	ChangeUnchanged = "igual"
+	ChangeDisabled  = "desativada"
 )
 
 // StackPlan e o que o Setup vai fazer com uma stack.
@@ -86,7 +115,11 @@ type Plan struct {
 	Missing       []stacks.Provided `json:"missing,omitempty"`
 	CreateSecrets []string          `json:"create_secrets,omitempty"`
 	Stacks        []StackPlan       `json:"stacks,omitempty"`
-	Steps         []Step            `json:"steps,omitempty"`
+	// Disable sao stacks com compose no disco que nao estao mais ativas
+	// (desligadas na config ou de versoes antigas do cais): o Setup as
+	// derruba, sem apagar os volumes.
+	Disable []StackPlan `json:"disable,omitempty"`
+	Steps   []Step      `json:"steps,omitempty"`
 	// CAFile e o certificado da CA local (tls: selfsigned), que quem testa
 	// instala como confiavel. Vazio com Let's Encrypt.
 	CAFile string `json:"ca_file,omitempty"`
@@ -150,7 +183,21 @@ func MakePlan(d Deps) (Plan, error) {
 		}
 		p.Stacks = append(p.Stacks, StackPlan{Name: st.Name, Desc: st.Desc, File: file, Change: change})
 	}
-	p.Steps = steps(enabled, cfg)
+	onDisk, err := d.stacksOnDisk()
+	if err != nil {
+		return p, err
+	}
+	for _, name := range onDisk {
+		if cfg.HasStack(name) {
+			continue
+		}
+		desc := "(stack que nao existe mais no cais)"
+		if st, ok := stacks.Get(name); ok {
+			desc = st.Desc
+		}
+		p.Disable = append(p.Disable, StackPlan{Name: name, Desc: desc, File: d.ComposeFile(name), Change: ChangeDisabled})
+	}
+	p.Steps = steps(enabled, p.Disable, cfg)
 	return p, nil
 }
 
@@ -174,13 +221,18 @@ const (
 	stepFiles         = "files"
 	stepRegistryLogin = "registry-login"
 	stackStepPrefix   = "stack:"
+	stopStepPrefix    = "stop:"
 )
 
-func steps(enabled []stacks.Stack, cfg config.Config) []Step {
+func steps(enabled []stacks.Stack, disable []StackPlan, cfg config.Config) []Step {
 	out := []Step{
 		{ID: stepDocker, Desc: "Docker e Compose funcionando"},
 		{ID: stepSecrets, Desc: "Gerar os secrets que faltam"},
 		{ID: stepFiles, Desc: "Gravar o compose das stacks"},
+	}
+	// derruba antes de subir: libera portas que uma stack nova pode usar
+	for _, sp := range disable {
+		out = append(out, Step{ID: stopStepPrefix + sp.Name, Desc: "Derrubar " + sp.Name + " (desativada; volumes mantidos)"})
 	}
 	for _, st := range enabled {
 		out = append(out, Step{ID: stackStepPrefix + st.Name, Desc: "Subir " + st.Name + " (" + st.Desc + ")"})
@@ -251,6 +303,10 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 			if err := fsx.WriteAtomic(sp.File, rendered.Compose, 0o644); err != nil {
 				return "", err
 			}
+			// stack reativada: o registro de quando ela foi desligada sai
+			if err := os.Remove(sp.File + disabledSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return "", err
+			}
 			changed = append(changed, sp.Name)
 		}
 		if len(changed) == 0 {
@@ -259,6 +315,17 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 		return strings.Join(changed, ", "), nil
 	}); err != nil {
 		return r.steps, err
+	}
+
+	for _, sp := range plan.Disable {
+		if err := r.do(stopStepPrefix+sp.Name, func() (string, error) {
+			if err := d.ComposeDown(ctx, sp.File); err != nil {
+				return "", err
+			}
+			return "", os.Rename(sp.File, sp.File+disabledSuffix)
+		}); err != nil {
+			return r.steps, err
+		}
 	}
 
 	for _, sp := range plan.Stacks {

@@ -18,6 +18,8 @@ import (
 // fakeDocker registra o que o Setup pediu ao docker.
 type fakeDocker struct {
 	mu       sync.Mutex
+	calls    []string // "up <stack>" e "down <stack>", na ordem
+	downs    []string
 	ups      []string // nome da stack (pasta do compose)
 	recreate []string
 	logins   []string
@@ -33,12 +35,25 @@ func (f *fakeDocker) up(_ context.Context, file string, recreate bool) error {
 		return err // o compose tem que estar gravado antes do up
 	}
 	f.ups = append(f.ups, name)
+	f.calls = append(f.calls, "up "+name)
 	if recreate {
 		f.recreate = append(f.recreate, name)
 	}
 	if name == f.failUp {
 		return errors.New("container unhealthy")
 	}
+	return nil
+}
+
+func (f *fakeDocker) down(_ context.Context, file string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, err := os.Stat(file); err != nil {
+		return err // derruba pelo compose que estava no ar
+	}
+	name := filepath.Base(filepath.Dir(file))
+	f.downs = append(f.downs, name)
+	f.calls = append(f.calls, "down "+name)
 	return nil
 }
 
@@ -61,6 +76,7 @@ func newDeps(t *testing.T, f *fakeDocker) Deps {
 		StackDir:      func(n string) string { return filepath.Join(root, "data", "stacks", n) },
 		CheckDocker:   func(context.Context) error { return nil },
 		ComposeUp:     f.up,
+		ComposeDown:   f.down,
 		Login:         f.login,
 		LoginAttempts: 3,
 	}
@@ -266,5 +282,91 @@ func TestRunSemRegistryNaoFazLogin(t *testing.T) {
 	}
 	if ok, _ := secrets.Exists(d.store(), secrets.RegistryHtpasswd); ok {
 		t.Error("criou htpasswd sem a stack registry")
+	}
+}
+
+func TestStackDesativadaEDerrubadaEReativada(t *testing.T) {
+	f := &fakeDocker{}
+	d := newDeps(t, f)
+	writeConfig(t, d, nil)
+	provideGitHub(t, d)
+	if _, err := Run(context.Background(), d, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// desliga o mysql na config
+	writeConfig(t, d, func(c *config.Config) {
+		c.Stacks = []string{"proxy", "postgres", "registry", "woodpecker"}
+	})
+	p, err := MakePlan(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Disable) != 1 || p.Disable[0].Name != "mysql" || p.Disable[0].Change != ChangeDisabled {
+		t.Fatalf("Disable = %+v", p.Disable)
+	}
+	if !p.Ready() {
+		t.Fatal("stack desativada nao pode impedir o Setup")
+	}
+
+	f.calls = nil
+	if _, err := Run(context.Background(), d, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) == 0 || f.calls[0] != "down mysql" {
+		t.Errorf("tem que derrubar antes de subir as outras: %v", f.calls)
+	}
+	if _, err := os.Stat(d.ComposeFile("mysql")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("compose da stack derrubada continua ativo")
+	}
+	if _, err := os.Stat(d.ComposeFile("mysql") + disabledSuffix); err != nil {
+		t.Error("compose da stack derrubada nao ficou como registro")
+	}
+
+	// na proxima vez ja nao aparece
+	if p, _ := MakePlan(d); len(p.Disable) != 0 {
+		t.Errorf("stack ja derrubada no plano de novo: %+v", p.Disable)
+	}
+
+	// religa: compose volta, registro sai
+	writeConfig(t, d, nil)
+	p, _ = MakePlan(d)
+	if i := slices.IndexFunc(p.Stacks, func(s StackPlan) bool { return s.Name == "mysql" }); i < 0 || p.Stacks[i].Change != ChangeNew {
+		t.Fatalf("mysql religado: %+v", p.Stacks)
+	}
+	f.calls = nil
+	if _, err := Run(context.Background(), d, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(f.calls, "up mysql") || slices.Contains(f.calls, "down mysql") {
+		t.Errorf("chamadas ao religar: %v", f.calls)
+	}
+	if _, err := os.Stat(d.ComposeFile("mysql") + disabledSuffix); !errors.Is(err, os.ErrNotExist) {
+		t.Error("registro de desativada sobrou depois de religar")
+	}
+}
+
+// stacks de versoes antigas do cais (ex: infra, dbgate) tambem sao derrubadas
+func TestStackLegadaEDerrubada(t *testing.T) {
+	f := &fakeDocker{}
+	d := newDeps(t, f)
+	writeConfig(t, d, nil)
+	provideGitHub(t, d)
+	old := d.ComposeFile("infra")
+	os.MkdirAll(filepath.Dir(old), 0o700)
+	os.WriteFile(old, []byte("name: infra\n"), 0o644)
+
+	p, err := MakePlan(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Disable) != 1 || p.Disable[0].Name != "infra" || !strings.Contains(p.Disable[0].Desc, "nao existe mais") {
+		t.Fatalf("Disable = %+v", p.Disable)
+	}
+	if _, err := Run(context.Background(), d, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls[0] != "down infra" {
+		t.Errorf("chamadas %v", f.calls)
 	}
 }

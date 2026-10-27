@@ -29,6 +29,7 @@ func (c *Core) setupDeps() bootstrap.Deps {
 			return nil
 		},
 		ComposeUp:     c.deps.ComposeUp,
+		ComposeDown:   c.deps.ComposeDown,
 		Login:         c.deps.Login,
 		LoginAttempts: 18,
 		LoginDelay:    10 * time.Second,

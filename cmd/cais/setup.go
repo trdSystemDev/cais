@@ -101,6 +101,13 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 		}
 		w.Flush()
 	}
+	if len(p.Disable) > 0 {
+		fmt.Fprintln(out, "\nDesativadas (o run derruba; os volumes, com os dados, ficam):")
+		for _, s := range p.Disable {
+			fmt.Fprintf(w, "  %s\t%s\n", s.Name, s.Desc)
+		}
+		w.Flush()
+	}
 	if len(p.CreateSecrets) > 0 {
 		fmt.Fprintf(out, "\nSecrets que o cais vai gerar: %s\n", strings.Join(p.CreateSecrets, ", "))
 	}

@@ -21,8 +21,9 @@ type Deps struct {
 	StackDir   func(name string) string
 
 	// Comandos do docker usados pelo Setup e pelo registry.
-	ComposeUp func(ctx context.Context, file string, recreate bool) error
-	Login     func(ctx context.Context, host, user string, password []byte) error
+	ComposeUp   func(ctx context.Context, file string, recreate bool) error
+	ComposeDown func(ctx context.Context, file string) error
+	Login       func(ctx context.Context, host, user string, password []byte) error
 }
 
 // Core guarda o estado e executa as acoes. E seguro pra uso concorrente:
@@ -61,6 +62,9 @@ func New(d Deps) *Core {
 	}
 	if d.ComposeUp == nil {
 		d.ComposeUp = docker.ComposeUp
+	}
+	if d.ComposeDown == nil {
+		d.ComposeDown = docker.ComposeDown
 	}
 	if d.Login == nil {
 		d.Login = docker.Login

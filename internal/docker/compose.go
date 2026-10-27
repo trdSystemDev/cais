@@ -24,6 +24,16 @@ func ComposeUp(ctx context.Context, file string, recreate bool) error {
 	return nil
 }
 
+// ComposeDown derruba o projeto do arquivo (containers e redes dele). Os
+// volumes ficam: apagar dados e outra decisao, nunca efeito colateral.
+func ComposeDown(ctx context.Context, file string) error {
+	_, err := execRunner(ctx, "docker", "compose", "-f", file, "down", "--remove-orphans")
+	if err != nil {
+		return fmt.Errorf("docker compose down (%s): %w", file, lastLines(err.Error(), 15))
+	}
+	return nil
+}
+
 // Login faz docker login com a senha pelo stdin (nunca na linha de
 // comando, onde apareceria no ps). A credencial fica no config.json do
 // usuario que roda o daemon, que e quem faz os pulls.
