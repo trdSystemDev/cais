@@ -37,6 +37,8 @@ const (
 	MethodAppRestart       = "app.restart" // params: appParams (service opcional)
 	MethodAppStop          = "app.stop"    // params: appParams
 	MethodAppLogs          = "app.logs"    // params: appParams (container)
+	MethodAppDatabase      = "app.db"      // params: dbParams
+	MethodAppDatabaseOff   = "app.db.off"  // params: appParams
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -119,4 +121,11 @@ type routesParams struct {
 type deployParams struct {
 	Name    string `json:"name"`
 	Compose string `json:"compose"`
+}
+
+type dbParams struct {
+	Name     string            `json:"name"`
+	Engine   string            `json:"engine"`
+	Services []string          `json:"services,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
 }

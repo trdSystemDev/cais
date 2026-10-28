@@ -15,6 +15,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/trdSystemDev/cais/internal/compose"
+	"github.com/trdSystemDev/cais/internal/databases"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
 
@@ -283,10 +284,10 @@ func TestOverrideJuntaComOComposeNoDocker(t *testing.T) {
 	data := composeV("v1")
 	os.WriteFile(filepath.Join(dir, ComposeFile), data, 0o644)
 	services, _ := compose.Services(data)
-	ov, err := Override("meu-app", []Route{
+	ov, err := Override(App{Name: "meu-app", Routes: []Route{
 		{Host: "app.exemplo.com.br", Service: "web", Port: 3000},
 		{Host: "app.exemplo.com.br", Path: "/api", Service: "worker", Port: 8080},
-	}, services)
+	}}, services, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,5 +323,153 @@ func TestOverrideJuntaComOComposeNoDocker(t *testing.T) {
 	}
 	if worker.Labels["traefik.http.routers.meu-app-worker-2.rule"] == "" {
 		t.Errorf("labels do worker nao chegaram: %v", worker.Labels)
+	}
+}
+
+func TestBancoNoOverride(t *testing.T) {
+	m, f := newManager(t)
+	ctx := context.Background()
+	m.Create("meu-app")
+	m.Deploy(ctx, "meu-app", composeV("v1"))
+	if _, err := m.EnsureDBPassword("meu-app"); err != nil {
+		t.Fatal(err)
+	}
+	pw, _ := m.secrets("meu-app").Get(DBSecret)
+
+	env := DefaultDBEnv()
+	env["DATABASE_URL_FILE"] = "url_file"
+	db := &Database{Engine: "postgres", Services: []string{"web"}, Env: env}
+	if err := m.SetDatabase(ctx, "meu-app", db); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.ups) != 2 {
+		t.Fatal("ligar o banco em app no ar tem que subir de novo")
+	}
+
+	file := filepath.Join(m.Root, "meu-app", OverrideFile)
+	data0, _ := os.ReadFile(file)
+	if strings.Contains(string(data0), string(pw)) {
+		t.Fatal("a senha do banco foi parar no override")
+	}
+	url, err := m.secrets("meu-app").Get(DBURLSecret)
+	if err != nil || string(url) != "postgres://meu_app:"+string(pw)+"@postgres:5432/meu_app" {
+		t.Errorf("secret da URL: %q %v", url, err)
+	}
+	var ov struct {
+		Services map[string]struct {
+			Environment map[string]string
+			Secrets     []string
+			Networks    []string
+		}
+		Secrets map[string]struct{ File string }
+	}
+	data, _ := os.ReadFile(file)
+	yaml.Unmarshal(data, &ov)
+	web := ov.Services["web"]
+	want := map[string]string{
+		"DB_HOST": "postgres", "DB_PORT": "5432", "DB_NAME": "meu_app", "DB_USER": "meu_app",
+		"DB_PASSWORD_FILE":  "/run/secrets/" + DBSecret,
+		"DATABASE_URL_FILE": "/run/secrets/" + DBURLSecret,
+	}
+	for k, v := range want {
+		if web.Environment[k] != v {
+			t.Errorf("%s = %q, esperava %q", k, web.Environment[k], v)
+		}
+	}
+	if !slices.Equal(web.Networks, []string{"default", "postgres_network"}) {
+		t.Errorf("redes do web %v", web.Networks)
+	}
+	if !slices.Equal(web.Secrets, []string{DBSecret, DBURLSecret}) || ov.Secrets[DBURLSecret].File != "./secrets/"+DBURLSecret {
+		t.Errorf("secret do banco: %v %v", web.Secrets, ov.Secrets)
+	}
+	if _, ok := ov.Services["worker"]; ok {
+		t.Error("worker nao foi pedido e recebeu o banco")
+	}
+
+	// desligar o banco tira tudo do override (sem rotas, o arquivo some)
+	if err := m.SetDatabase(ctx, "meu-app", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Error("sem rotas nem banco o override tem que sumir")
+	}
+}
+
+func TestCheckDatabaseRecusa(t *testing.T) {
+	cases := map[string]Database{
+		"engine desconhecido": {Engine: "mongo", Env: DefaultDBEnv()},
+		"sem variaveis":       {Engine: "postgres"},
+		"valor invalido":      {Engine: "postgres", Env: map[string]string{"X": "senha"}},
+		"senha em variavel":   {Engine: "postgres", Env: map[string]string{"DB_PASSWORD": "password"}},
+		"url em variavel":     {Engine: "postgres", Env: map[string]string{"DATABASE_URL": "url"}},
+		"variavel invalida":   {Engine: "postgres", Env: map[string]string{"1X": "host"}},
+		"service invalido":    {Engine: "postgres", Env: DefaultDBEnv(), Services: []string{"a b"}},
+	}
+	for name, db := range cases {
+		if err := CheckDatabase(db); err == nil {
+			t.Errorf("%s: aceitou %+v", name, db)
+		}
+	}
+	m, _ := newManager(t)
+	m.Create("meu-app")
+	m.Deploy(context.Background(), "meu-app", composeV("v1"))
+	m.EnsureDBPassword("meu-app")
+	err := m.SetDatabase(context.Background(), "meu-app", &Database{Engine: "postgres", Services: []string{"api"}, Env: DefaultDBEnv()})
+	if err == nil || !strings.Contains(err.Error(), `"api"`) {
+		t.Errorf("aceitou banco pra service que nao existe: %v", err)
+	}
+}
+
+// rotas + banco no mesmo service: o docker compose aceita e junta tudo
+func TestOverrideComBancoNoDocker(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker nao instalado")
+	}
+	dir := t.TempDir()
+	data := composeV("v1")
+	os.WriteFile(filepath.Join(dir, ComposeFile), data, 0o644)
+	os.Mkdir(filepath.Join(dir, "secrets"), 0o700)
+	os.WriteFile(filepath.Join(dir, "secrets", DBSecret), []byte("SENHA"), 0o444)
+	os.WriteFile(filepath.Join(dir, "secrets", DBURLSecret), []byte("postgres://x"), 0o444)
+	services, _ := compose.Services(data)
+	e, _ := databases.Get("postgres")
+	a := App{Name: "meu-app",
+		Routes:   []Route{{Host: "app.exemplo.com.br", Service: "web", Port: 3000}},
+		Database: &Database{Engine: "postgres", Env: DefaultDBEnv()}}
+	ov, err := Override(a, services, &DBConn{Engine: e, Name: "meu_app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, OverrideFile), ov, 0o600)
+	out, err := exec.Command("docker", "compose", "-p", "meu-app", "-f", filepath.Join(dir, ComposeFile),
+		"-f", filepath.Join(dir, OverrideFile), "config", "--format", "json").CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker compose recusou: %v\n%s", err, out)
+	}
+	var merged struct {
+		Services map[string]struct {
+			Environment map[string]string
+			Networks    map[string]any
+			Secrets     []struct{ Source string }
+		}
+	}
+	yaml.Unmarshal(out, &merged)
+	for _, svc := range []string{"web", "worker"} {
+		s := merged.Services[svc]
+		if s.Environment["DB_HOST"] != "postgres" {
+			t.Errorf("%s sem DB_HOST: %v", svc, s.Environment)
+		}
+		if _, ok := s.Networks["postgres_network"]; !ok {
+			t.Errorf("%s sem postgres_network: %v", svc, s.Networks)
+		}
+		if _, ok := s.Networks["default"]; !ok {
+			t.Errorf("%s saiu da default: %v", svc, s.Networks)
+		}
+		if len(s.Secrets) != 2 || s.Secrets[0].Source != DBSecret || s.Secrets[1].Source != DBURLSecret {
+			t.Errorf("%s secrets %v", svc, s.Secrets)
+		}
+	}
+	if _, ok := merged.Services["web"].Networks["proxy_network"]; !ok {
+		t.Error("web perdeu a proxy_network da rota")
 	}
 }

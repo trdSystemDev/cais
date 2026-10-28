@@ -247,6 +247,24 @@ cais app deploy meu-app < docker-compose.yml       # valida, sobe e espera os he
 cais app routes meu-app app.exemplo.com.br=web:3000 app.exemplo.com.br/api=api:8080
 cais apps                                          # estado de todos
 cais app logs meu-app meu-app-web-1
+cais app db meu-app postgres                       # database + usuario do app no Postgres da infra
+cais app db meu-app postgres DATABASE_URL_FILE=url_file   # caminho do arquivo com a URL completa
+```
+
+O app nao declara o banco no compose: `cais app db` cria database e usuario com o
+nome do app e injeta a conexao pelo override -- rede do banco, os secrets e as
+variaveis (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD_FILE` por
+padrao; `VAR=host|port|name|user|password_file|url_file` pra outros nomes). O
+usuario de um app nao conecta no database de outro.
+
+**A senha nunca vai em variavel de ambiente** (apareceria no `docker inspect`):
+fica so nos arquivos `/run/secrets/cais_db_password` e `/run/secrets/cais_db_url`
+(a URL completa), e o app le de la. Pra framework que so aceita `DATABASE_URL`,
+leia o arquivo no codigo antes de conectar, ou num entrypoint:
+
+```sh
+export DATABASE_URL="$(cat /run/secrets/cais_db_url)"   # so dentro do processo
+exec "$@"
 ```
 
 O compose do app vem do repositorio e passa pela validacao de `internal/compose`

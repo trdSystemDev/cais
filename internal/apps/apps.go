@@ -16,8 +16,10 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/compose"
 	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/databases"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/fsx"
+	"github.com/trdSystemDev/cais/internal/secrets"
 	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
@@ -62,9 +64,78 @@ type Deploy struct {
 
 // App e o que o cais guarda de um app (app.yaml).
 type App struct {
-	Name   string  `yaml:"-" json:"name"`
-	Routes []Route `yaml:"routes,omitempty" json:"routes,omitempty"`
-	Last   *Deploy `yaml:"last_deploy,omitempty" json:"last_deploy,omitempty"`
+	Name     string    `yaml:"-" json:"name"`
+	Routes   []Route   `yaml:"routes,omitempty" json:"routes,omitempty"`
+	Database *Database `yaml:"database,omitempty" json:"database,omitempty"`
+	Last     *Deploy   `yaml:"last_deploy,omitempty" json:"last_deploy,omitempty"`
+}
+
+// Database liga o app a um database proprio numa instancia compartilhada.
+// O cais cria database e usuario (com o nome do app) e injeta a conexao
+// pelo override: rede do banco, secret da senha e variaveis de ambiente.
+type Database struct {
+	Engine string `yaml:"engine" json:"engine"`
+	// Services que usam o banco; vazio = todos os services do app.
+	Services []string `yaml:"services,omitempty" json:"services,omitempty"`
+	// Env diz que variavel recebe o que: VAR -> host, port, name, user,
+	// password_file ou url_file. Senha nunca vai em variavel (apareceria
+	// no docker inspect): o app le do arquivo. Cada framework espera nomes
+	// diferentes (DB_DATABASE, DATABASE_URL_FILE...).
+	Env map[string]string `yaml:"env" json:"env"`
+}
+
+// DefaultDBEnv e o mapeamento padrao.
+func DefaultDBEnv() map[string]string {
+	return map[string]string{
+		"DB_HOST":          "host",
+		"DB_PORT":          "port",
+		"DB_NAME":          "name",
+		"DB_USER":          "user",
+		"DB_PASSWORD_FILE": "password_file",
+	}
+}
+
+// Secrets do banco na pasta secrets/ do app, montados em /run/secrets/ em
+// todo service que usa o banco: a senha e a URL de conexao completa (pra
+// quem prefere ler um arquivo so). O prefixo evita colidir com um secret
+// declarado pelo proprio app.
+const (
+	DBSecret    = "cais_db_password"
+	DBURLSecret = "cais_db_url"
+)
+
+var (
+	envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	// de proposito nao tem password nem url: senha so em arquivo
+	envValue = []string{"host", "port", "name", "user", "password_file", "url_file"}
+)
+
+// CheckDatabase confere a configuracao do banco de um app.
+func CheckDatabase(db Database) error {
+	if _, err := databases.Get(db.Engine); err != nil {
+		return err
+	}
+	if len(db.Env) == 0 {
+		return errors.New("nenhuma variavel de ambiente pro banco (o app nao saberia onde conectar)")
+	}
+	var errs []error
+	for k, v := range db.Env {
+		if !envName.MatchString(k) {
+			errs = append(errs, fmt.Errorf("variavel invalida %q", k))
+		}
+		switch {
+		case v == "password" || v == "url":
+			errs = append(errs, fmt.Errorf("%s=%s: a senha nunca vai em variavel de ambiente (aparece no docker inspect); use %s_file e leia o arquivo no app", k, v, v))
+		case !slices.Contains(envValue, v):
+			errs = append(errs, fmt.Errorf("%s=%s: valor precisa ser um de %s", k, v, strings.Join(envValue, ", ")))
+		}
+	}
+	for _, svc := range db.Services {
+		if !serviceName.MatchString(svc) {
+			errs = append(errs, fmt.Errorf("service invalido %q", svc))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Docker sao as operacoes de projeto compose que os apps usam.
@@ -248,13 +319,13 @@ func (m Manager) SetRoutes(ctx context.Context, name string, routes []Route, res
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	a.Routes = routes
 	if deployed {
-		if err := checkRouteServices(routes, composeData); err != nil {
+		if err := checkServices(a, composeData); err != nil {
 			return err
 		}
 	}
 
-	a.Routes = routes
 	if err := m.save(a); err != nil {
 		return err
 	}
@@ -267,25 +338,36 @@ func (m Manager) SetRoutes(ctx context.Context, name string, routes []Route, res
 	return m.Docker.Up(ctx, m.Project(name))
 }
 
-// checkRouteServices garante que toda rota aponta pra um service que existe.
-func checkRouteServices(routes []Route, composeData []byte) error {
+// checkServices garante que rotas e banco apontam pra services que existem.
+func checkServices(a App, composeData []byte) error {
 	services, err := compose.Services(composeData)
 	if err != nil {
 		return err
 	}
+	has := func(name string) bool {
+		return slices.ContainsFunc(services, func(s compose.Service) bool { return s.Name == name })
+	}
 	var errs []error
-	for _, r := range routes {
-		if !slices.ContainsFunc(services, func(s compose.Service) bool { return s.Name == r.Service }) {
+	for _, r := range a.Routes {
+		if !has(r.Service) {
 			errs = append(errs, fmt.Errorf("rota %s: o compose nao tem o service %q", r, r.Service))
+		}
+	}
+	if a.Database != nil {
+		for _, svc := range a.Database.Services {
+			if !has(svc) {
+				errs = append(errs, fmt.Errorf("banco: o compose nao tem o service %q", svc))
+			}
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// writeOverride grava (ou apaga, sem rotas) o cais.override.yml.
+// writeOverride grava (ou apaga, sem rotas nem banco) o cais.override.yml.
+// Ele nunca tem senha: a do banco fica so em secrets/, montada por arquivo.
 func (m Manager) writeOverride(a App, composeData []byte) error {
 	file := filepath.Join(m.dir(a.Name), OverrideFile)
-	if len(a.Routes) == 0 {
+	if len(a.Routes) == 0 && a.Database == nil {
 		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -295,11 +377,78 @@ func (m Manager) writeOverride(a App, composeData []byte) error {
 	if err != nil {
 		return err
 	}
-	data, err := Override(a.Name, a.Routes, services)
+	var db *DBConn
+	if a.Database != nil {
+		e, err := databases.Get(a.Database.Engine)
+		if err != nil {
+			return err
+		}
+		pw, err := m.secrets(a.Name).Get(DBSecret)
+		if err != nil {
+			return fmt.Errorf("senha do banco do app: %w", err)
+		}
+		db = &DBConn{Engine: e, Name: databases.Identifier(a.Name)}
+		// a URL leva a senha: vai pra secrets/, nunca pro override
+		url := []byte(e.URL(db.Name, pw))
+		if cur, err := m.secrets(a.Name).Get(DBURLSecret); err != nil || string(cur) != string(url) {
+			if err := m.secrets(a.Name).Put(DBURLSecret, url); err != nil {
+				return err
+			}
+		}
+	}
+	data, err := Override(a, services, db)
 	if err != nil {
 		return err
 	}
 	return fsx.WriteAtomic(file, data, 0o644)
+}
+
+func (m Manager) secrets(name string) secrets.FileStore {
+	return secrets.FileStore{Dir: filepath.Join(m.dir(name), "secrets")}
+}
+
+// EnsureDBPassword gera (uma vez) a senha do banco do app.
+func (m Manager) EnsureDBPassword(name string) ([]byte, error) {
+	if _, err := m.Get(name); err != nil {
+		return nil, err
+	}
+	return secrets.Ensure(m.secrets(name), DBSecret, secrets.GenPassword)
+}
+
+// SetDatabase grava a ligacao do app com o banco (nil desliga, sem apagar
+// os dados). Se o app esta no ar, regrava o override e sobe de novo. O
+// database e o usuario precisam ter sido criados antes (databases.Provision).
+func (m Manager) SetDatabase(ctx context.Context, name string, db *Database) error {
+	a, err := m.Get(name)
+	if err != nil {
+		return err
+	}
+	if db != nil {
+		if err := CheckDatabase(*db); err != nil {
+			return err
+		}
+	}
+	a.Database = db
+	composeData, err := os.ReadFile(filepath.Join(m.dir(name), ComposeFile))
+	deployed := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if deployed {
+		if err := checkServices(a, composeData); err != nil {
+			return err
+		}
+	}
+	if err := m.save(a); err != nil {
+		return err
+	}
+	if !deployed {
+		return nil
+	}
+	if err := m.writeOverride(a, composeData); err != nil {
+		return err
+	}
+	return m.Docker.Up(ctx, m.Project(name))
 }
 
 // Status lista os containers do app. Antes do primeiro deploy, nenhum.
@@ -352,39 +501,83 @@ func sanitize(s string) string {
 	return b.String()
 }
 
-// Override gera o cais.override.yml: labels do Traefik e a proxy_network
-// nos services com rota. Os nomes de router e service do Traefik levam o
-// nome do app na frente, entao nunca colidem com os de outro app ou stack.
-func Override(app string, routes []Route, services []compose.Service) ([]byte, error) {
+// DBConn e o que o override precisa pra ligar o app ao banco. Sem senha:
+// ela so existe nos arquivos de secrets/.
+type DBConn struct {
+	Engine databases.Engine
+	Name   string // database e usuario
+}
+
+func (c DBConn) value(kind string) string {
+	switch kind {
+	case "host":
+		return c.Engine.Host
+	case "port":
+		return fmt.Sprint(c.Engine.Port)
+	case "name", "user":
+		return c.Name
+	case "password_file":
+		return "/run/secrets/" + DBSecret
+	case "url_file":
+		return "/run/secrets/" + DBURLSecret
+	}
+	return ""
+}
+
+// Override gera o cais.override.yml: labels do Traefik e proxy_network nos
+// services com rota; rede do banco, secret da senha e variaveis nos que
+// usam o banco. Os nomes de router e service do Traefik levam o nome do app
+// na frente, entao nunca colidem com os de outro app ou stack.
+func Override(a App, services []compose.Service, db *DBConn) ([]byte, error) {
 	type svcOverride struct {
-		Labels   map[string]string `yaml:"labels"`
-		Networks []string          `yaml:"networks"`
+		Labels      map[string]string `yaml:"labels,omitempty"`
+		Environment map[string]string `yaml:"environment,omitempty"`
+		Secrets     []string          `yaml:"secrets,omitempty"`
+		Networks    []string          `yaml:"networks"`
 	}
 	out := map[string]*svcOverride{}
+	networks := map[string]any{}
 
-	for i, r := range routes {
-		idx := slices.IndexFunc(services, func(s compose.Service) bool { return s.Name == r.Service })
+	// get devolve o override do service, ja com a default quando o compose
+	// nao declara redes: o override somaria so as dele e tiraria o service
+	// da default (e dos outros services do app)
+	get := func(name string) (*svcOverride, error) {
+		idx := slices.IndexFunc(services, func(s compose.Service) bool { return s.Name == name })
 		if idx < 0 {
-			return nil, fmt.Errorf("rota %s: o compose nao tem o service %q", r, r.Service)
+			return nil, fmt.Errorf("o compose nao tem o service %q", name)
 		}
-		so := out[r.Service]
+		so := out[name]
 		if so == nil {
-			so = &svcOverride{Labels: map[string]string{
-				"traefik.enable":         "true",
-				"traefik.docker.network": "proxy_network",
-			}}
-			// sem networks no compose o service so esta na default
-			// implicita; o override somaria so a proxy_network e tiraria
-			// ele da default (e dos outros services do app)
+			so = &svcOverride{}
 			if len(services[idx].Networks) == 0 {
 				so.Networks = append(so.Networks, "default")
 			}
-			so.Networks = append(so.Networks, "proxy_network")
-			out[r.Service] = so
+			out[name] = so
 		}
+		return so, nil
+	}
+	addNet := func(so *svcOverride, net string) {
+		if !slices.Contains(so.Networks, net) {
+			so.Networks = append(so.Networks, net)
+		}
+		networks[net] = map[string]any{"external": true}
+	}
 
-		router := fmt.Sprintf("%s-%s-%d", app, sanitize(r.Service), i+1)
-		backend := fmt.Sprintf("%s-%s-%d", app, sanitize(r.Service), r.Port)
+	for i, r := range a.Routes {
+		so, err := get(r.Service)
+		if err != nil {
+			return nil, fmt.Errorf("rota %s: %w", r, err)
+		}
+		if so.Labels == nil {
+			so.Labels = map[string]string{
+				"traefik.enable":         "true",
+				"traefik.docker.network": "proxy_network",
+			}
+		}
+		addNet(so, "proxy_network")
+
+		router := fmt.Sprintf("%s-%s-%d", a.Name, sanitize(r.Service), i+1)
+		backend := fmt.Sprintf("%s-%s-%d", a.Name, sanitize(r.Service), r.Port)
 		rule := fmt.Sprintf("Host(`%s`)", r.Host)
 		if r.Path != "" && r.Path != "/" {
 			rule += fmt.Sprintf(" && PathPrefix(`%s`)", r.Path)
@@ -395,15 +588,43 @@ func Override(app string, routes []Route, services []compose.Service) ([]byte, e
 		so.Labels["traefik.http.services."+backend+".loadbalancer.server.port"] = fmt.Sprint(r.Port)
 	}
 
-	doc := map[string]any{
-		"services": out,
-		"networks": map[string]any{"proxy_network": map[string]any{"external": true}},
+	doc := map[string]any{}
+	if db != nil && a.Database != nil {
+		users := a.Database.Services
+		if len(users) == 0 {
+			for _, s := range services {
+				users = append(users, s.Name)
+			}
+		}
+		for _, name := range users {
+			so, err := get(name)
+			if err != nil {
+				return nil, fmt.Errorf("banco: %w", err)
+			}
+			addNet(so, db.Engine.Network)
+			so.Secrets = append(so.Secrets, DBSecret, DBURLSecret)
+			if so.Environment == nil {
+				so.Environment = map[string]string{}
+			}
+			for k, kind := range a.Database.Env {
+				so.Environment[k] = db.value(kind)
+			}
+		}
+		doc["secrets"] = map[string]any{
+			DBSecret:    map[string]any{"file": "./secrets/" + DBSecret},
+			DBURLSecret: map[string]any{"file": "./secrets/" + DBURLSecret},
+		}
+	}
+
+	doc["services"] = out
+	if len(networks) > 0 {
+		doc["networks"] = networks
 	}
 	data, err := yaml.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte("# gerado pelo cais a partir das rotas do app -- nao edite\n"), data...), nil
+	return append([]byte("# gerado pelo cais a partir das rotas e do banco do app -- nao edite\n"), data...), nil
 }
 
 // imagesOf lista as imagens do compose (uma por service, sem repetir).
@@ -436,7 +657,7 @@ func (m Manager) Deploy(ctx context.Context, name string, composeData []byte) (D
 	if err := compose.Validate(composeData, compose.Policy{App: name, Networks: Networks}); err != nil {
 		return DeployResult{}, fmt.Errorf("compose recusado:\n%w", err)
 	}
-	if err := checkRouteServices(a.Routes, composeData); err != nil {
+	if err := checkServices(a, composeData); err != nil {
 		return DeployResult{}, err
 	}
 	services, err := compose.Services(composeData)

@@ -71,6 +71,12 @@ type API interface {
 	StopApp(ctx context.Context, name string) error
 	// AppLogs le as ultimas linhas de um container do app.
 	AppLogs(ctx context.Context, name, container string) (string, error)
+	// SetAppDatabase cria database e usuario do app no Postgres/MySQL
+	// compartilhado e injeta a conexao. env: VAR -> host, port, name, user,
+	// password, password_file ou url (vazio = DB_HOST, DB_PORT, ...).
+	SetAppDatabase(ctx context.Context, name, engine string, services []string, env map[string]string) error
+	// RemoveAppDatabase desliga o app do banco sem apagar os dados.
+	RemoveAppDatabase(ctx context.Context, name string) error
 }
 
 // ConfigInfo e o config.yaml atual.

@@ -50,6 +50,13 @@ Apps:
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
+  cais app db <nome> postgres|mysql [--services web,worker] [VAR=valor...]
+                                     cria database e usuario do app e injeta a conexao
+                                     valor: host port name user password_file url_file
+                                     padrao: DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD_FILE
+                                     a senha nunca vai em variavel: o app le o arquivo
+                                     (/run/secrets/cais_db_password ou cais_db_url)
+  cais app db <nome> off             desliga o banco do app (os dados ficam)
 
 Registry de imagens:
   cais registry users                lista quem pode entrar

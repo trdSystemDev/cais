@@ -311,3 +311,11 @@ func (c *Client) AppLogs(ctx context.Context, name, container string) (out strin
 	err = c.call(ctx, MethodAppLogs, appParams{Name: name, Container: container}, &out)
 	return
 }
+
+func (c *Client) SetAppDatabase(ctx context.Context, name, engine string, services []string, env map[string]string) error {
+	return c.call(ctx, MethodAppDatabase, dbParams{Name: name, Engine: engine, Services: services, Env: env}, nil)
+}
+
+func (c *Client) RemoveAppDatabase(ctx context.Context, name string) error {
+	return c.call(ctx, MethodAppDatabaseOff, appParams{Name: name}, nil)
+}

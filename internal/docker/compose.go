@@ -181,3 +181,21 @@ func (CLI) Stop(ctx context.Context, p Project) error {
 	}
 	return nil
 }
+
+// ExecInput roda um comando num container mandando input pelo stdin. Use
+// pra qualquer coisa com senha (SQL de criar usuario): pela linha de
+// comando ela apareceria no ps do host enquanto o comando roda.
+func ExecInput(ctx context.Context, container string, input []byte, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", "-i", container}, args...)...)
+	cmd.Stdin = bytes.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("docker exec %s %s: %s", container, args[0], msg)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}

@@ -32,6 +32,8 @@ type Deps struct {
 	AppsDir   string
 	AppDocker apps.Docker
 	Exec      func(ctx context.Context, container string, args ...string) (string, error)
+	// ExecInput e o Exec com stdin: SQL com senha nunca vai na linha de comando.
+	ExecInput func(ctx context.Context, container string, input []byte, args ...string) (string, error)
 	Login     func(ctx context.Context, host, user string, password []byte) error
 }
 
@@ -98,6 +100,9 @@ func New(d Deps) *Core {
 	}
 	if d.Exec == nil {
 		d.Exec = docker.Exec
+	}
+	if d.ExecInput == nil {
+		d.ExecInput = docker.ExecInput
 	}
 	if d.Login == nil {
 		d.Login = docker.Login

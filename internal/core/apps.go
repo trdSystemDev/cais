@@ -9,6 +9,7 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/databases"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
 
@@ -175,4 +176,59 @@ func (c *Core) AppLogs(ctx context.Context, name, container string) (string, err
 		return "", fmt.Errorf("container %q nao pertence ao app %s", container, name)
 	}
 	return c.deps.ContainerLogs(ctx, container)
+}
+
+// SetAppDatabase cria (ou acerta) o database e o usuario do app na
+// instancia compartilhada do engine e liga o app a ele pelo override. env
+// vazio usa apps.DefaultDBEnv; services vazio liga todos os services.
+func (c *Core) SetAppDatabase(ctx context.Context, name, engine string, services []string, env map[string]string) error {
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	e, err := databases.Get(engine)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(c.deps.ConfigPath)
+	if err != nil {
+		return err
+	}
+	if !cfg.HasStack(engine) {
+		return fmt.Errorf("a stack %s esta desligada; ligue no Setup antes de criar o banco", engine)
+	}
+	if len(env) == 0 {
+		env = apps.DefaultDBEnv()
+	}
+	db := &apps.Database{Engine: engine, Services: services, Env: env}
+	if err := apps.CheckDatabase(*db); err != nil {
+		return err
+	}
+
+	m := c.appManager()
+	pw, err := m.EnsureDBPassword(name)
+	if err != nil {
+		return err
+	}
+	if err := databases.Provision(ctx, c.deps.ExecInput, e, databases.Identifier(name), pw); err != nil {
+		return err
+	}
+	err = m.SetDatabase(ctx, name, db)
+	c.CheckApps(ctx)
+	return err
+}
+
+// RemoveAppDatabase desliga o app do banco. O database e os dados ficam:
+// apagar dados nunca e efeito colateral.
+func (c *Core) RemoveAppDatabase(ctx context.Context, name string) error {
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = c.appManager().SetDatabase(ctx, name, nil)
+	c.CheckApps(ctx)
+	return err
 }

@@ -70,10 +70,11 @@ func runApps(args []string) error {
 func runApp(args []string) error {
 	sub, args := subcommand(args)
 	fs, socket := newFlags("app " + sub)
+	dbServices := fs.String("services", "", "services que usam o banco (padrao: todos)")
 	fs.Parse(args)
 	need := map[string][2]int{ // minimo e maximo de argumentos
 		"create": {1, 1}, "routes": {1, -1}, "deploy": {1, 1},
-		"restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2},
+		"restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "db": {2, -1},
 	}
 	lim, ok := need[sub]
 	if !ok {
@@ -139,6 +140,24 @@ func runApp(args []string) error {
 			return err
 		}
 		fmt.Printf("%s parado. Volta com: cais app restart %s\n", name, name)
+	case "db":
+		engine := fs.Arg(1)
+		if engine == "off" {
+			if err := c.RemoveAppDatabase(ctx, name); err != nil {
+				return err
+			}
+			fmt.Printf("Banco desligado de %s. O database e os dados continuam la.\n", name)
+			return nil
+		}
+		env, err := parseEnvMap(fs.Args()[2:])
+		if err != nil {
+			return err
+		}
+		if err := c.SetAppDatabase(ctx, name, engine, splitList(*dbServices), env); err != nil {
+			return err
+		}
+		fmt.Printf("Database %s criado no %s e ligado ao app.\n", strings.ReplaceAll(name, "-", "_"), engine)
+		fmt.Println("O app nao precisa declarar o banco no compose: a conexao entra pelo cais.")
 	case "logs":
 		out, err := c.AppLogs(ctx, name, fs.Arg(1))
 		if err != nil {
@@ -188,4 +207,20 @@ func parseRoutes(args []string) ([]apps.Route, error) {
 		routes = append(routes, r)
 	}
 	return routes, nil
+}
+
+// parseEnvMap le VAR=valor (o que a variavel recebe: host, url...).
+func parseEnvMap(args []string) (map[string]string, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	env := map[string]string{}
+	for _, a := range args {
+		k, v, ok := strings.Cut(a, "=")
+		if !ok || k == "" || v == "" {
+			return nil, fmt.Errorf("%q: use VAR=valor (ex: DATABASE_URL=url)", a)
+		}
+		env[k] = v
+	}
+	return env, nil
 }

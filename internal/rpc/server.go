@@ -188,6 +188,20 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		}
 		return ok(s.api.StopApp(s.ctx, p.Name))
 
+	case MethodAppDatabase:
+		var p dbParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetAppDatabase(s.ctx, p.Name, p.Engine, p.Services, p.Env))
+
+	case MethodAppDatabaseOff:
+		var p appParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.RemoveAppDatabase(s.ctx, p.Name))
+
 	case MethodAppLogs:
 		var p appParams
 		if err := params(m, &p); err != nil {
