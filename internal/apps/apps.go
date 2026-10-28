@@ -67,7 +67,10 @@ type App struct {
 	Name     string    `yaml:"-" json:"name"`
 	Routes   []Route   `yaml:"routes,omitempty" json:"routes,omitempty"`
 	Database *Database `yaml:"database,omitempty" json:"database,omitempty"`
-	Last     *Deploy   `yaml:"last_deploy,omitempty" json:"last_deploy,omitempty"`
+	// Spec e a configuracao de onde o compose sai no deploy por tag. Sem
+	// spec, o app recebe o compose pronto no deploy (modo avancado).
+	Spec *Spec   `yaml:"spec,omitempty" json:"spec,omitempty"`
+	Last *Deploy `yaml:"last_deploy,omitempty" json:"last_deploy,omitempty"`
 }
 
 // Database liga o app a um database proprio numa instancia compartilhada.
@@ -141,6 +144,7 @@ func CheckDatabase(db Database) error {
 // Docker sao as operacoes de projeto compose que os apps usam.
 type Docker interface {
 	Up(ctx context.Context, p docker.Project) error
+	Recreate(ctx context.Context, p docker.Project) error
 	PS(ctx context.Context, p docker.Project) ([]docker.Container, error)
 	Restart(ctx context.Context, p docker.Project, service string) error
 	Stop(ctx context.Context, p docker.Project) error

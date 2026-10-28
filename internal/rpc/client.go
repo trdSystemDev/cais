@@ -10,6 +10,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/detect"
 )
 
 // Client fala com o daemon pelo socket e implementa core.API: quem usa
@@ -318,4 +319,33 @@ func (c *Client) SetAppDatabase(ctx context.Context, name, engine string, servic
 
 func (c *Client) RemoveAppDatabase(ctx context.Context, name string) error {
 	return c.call(ctx, MethodAppDatabaseOff, appParams{Name: name}, nil)
+}
+
+func (c *Client) PlanApp(ctx context.Context, name string, files detect.Files) (p apps.Plan, err error) {
+	err = c.call(ctx, MethodAppPlan, planParams{Name: name, Files: files}, &p)
+	return
+}
+
+func (c *Client) ApplyApp(ctx context.Context, p apps.Plan) error {
+	return c.call(ctx, MethodAppApply, p, nil)
+}
+
+func (c *Client) SetAppSpec(ctx context.Context, name string, spec apps.Spec) error {
+	return c.call(ctx, MethodAppSpec, specParams{Name: name, Spec: spec}, nil)
+}
+
+// DeployAppTag bloqueia ate o deploy terminar; se o cliente desistir, o
+// deploy continua no daemon.
+func (c *Client) DeployAppTag(ctx context.Context, name, tag string) (r apps.DeployResult, err error) {
+	err = c.call(ctx, MethodAppDeployTag, tagParams{Name: name, Tag: tag}, &r)
+	return
+}
+
+func (c *Client) AppSecrets(ctx context.Context, name string) (list []apps.Secret, err error) {
+	err = c.call(ctx, MethodAppSecrets, appParams{Name: name}, &list)
+	return
+}
+
+func (c *Client) SetAppSecret(ctx context.Context, name, secret, value string) error {
+	return c.call(ctx, MethodAppSecretSet, appSecretParams{Name: name, Secret: secret, Value: value}, nil)
 }

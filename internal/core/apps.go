@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/databases"
+	"github.com/trdSystemDev/cais/internal/detect"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
 
@@ -121,6 +123,116 @@ func (c *Core) SetAppRoutes(ctx context.Context, name string, routes []apps.Rout
 	return err
 }
 
+// PlanApp analisa os arquivos do repositorio do app e devolve a proposta
+// de configuracao (spec, rota, banco). Nao grava nada.
+func (c *Core) PlanApp(_ context.Context, name string, files detect.Files) (apps.Plan, error) {
+	if err := apps.CheckName(name); err != nil {
+		return apps.Plan{}, err
+	}
+	for path, data := range files {
+		if !slices.Contains(detect.Wanted, path) {
+			return apps.Plan{}, fmt.Errorf("arquivo %q nao faz parte da analise", path)
+		}
+		if len(data) > 1<<20 {
+			return apps.Plan{}, fmt.Errorf("arquivo %s grande demais pra analise", path)
+		}
+	}
+	cfg, err := config.Load(c.deps.ConfigPath)
+	if err != nil {
+		return apps.Plan{}, err
+	}
+	return apps.PlanFromAnalysis(name, cfg.RegistryHost(), cfg.Domain, detect.Analyze(files)), nil
+}
+
+// ApplyApp aplica um plano (ja revisado pelo usuario): cria o app se
+// precisar, grava a spec e as rotas e cria o banco. O deploy vem depois,
+// pela tag do primeiro build.
+func (c *Core) ApplyApp(ctx context.Context, p apps.Plan) error {
+	if err := apps.CheckName(p.App); err != nil {
+		return err
+	}
+	if err := apps.CheckSpec(p.Spec); err != nil {
+		return err
+	}
+	if p.Database != nil {
+		if err := apps.CheckDatabase(*p.Database); err != nil {
+			return err
+		}
+	}
+	c.routes.Lock()
+	defer c.routes.Unlock()
+	unlock, err := c.lockApp(p.App)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	defer c.CheckApps(ctx)
+
+	m := c.appManager()
+	if _, err := m.Get(p.App); errors.Is(err, apps.ErrNotFound) {
+		if _, err := m.Create(p.App); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if err := m.SetSpec(p.App, p.Spec); err != nil {
+		return err
+	}
+	if err := m.SetRoutes(ctx, p.App, p.Routes, c.reservedHosts()); err != nil {
+		return err
+	}
+	if p.Database != nil {
+		return c.setDatabase(ctx, p.App, p.Database.Engine, p.Database.Services, p.Database.Env)
+	}
+	return nil
+}
+
+func (c *Core) SetAppSpec(ctx context.Context, name string, spec apps.Spec) error {
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = c.appManager().SetSpec(name, spec)
+	c.CheckApps(ctx)
+	return err
+}
+
+// DeployAppTag gera o compose da spec com a tag e faz o deploy. E o que o
+// CI chama: ele escolhe so a tag, nunca a configuracao do app.
+func (c *Core) DeployAppTag(ctx context.Context, name, tag string) (apps.DeployResult, error) {
+	if err := apps.CheckName(name); err != nil {
+		return apps.DeployResult{}, err
+	}
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return apps.DeployResult{}, err
+	}
+	defer unlock()
+
+	c.setDeploying(name, true)
+	res, err := c.appManager().DeployTag(ctx, name, tag)
+	c.setDeploying(name, false)
+	c.CheckApps(ctx)
+	return res, err
+}
+
+func (c *Core) AppSecrets(_ context.Context, name string) ([]apps.Secret, error) {
+	return c.appManager().Secrets(name)
+}
+
+func (c *Core) SetAppSecret(ctx context.Context, name, secret, value string) error {
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = c.appManager().SetSecret(ctx, name, secret, []byte(value))
+	c.CheckApps(ctx)
+	return err
+}
+
 // DeployApp valida e sobe o compose novo do app. O progresso (Deploying)
 // aparece no estado; o resultado tambem e devolvido. Roda com o contexto
 // do daemon: se o CI desconectar, o deploy termina mesmo assim.
@@ -187,7 +299,13 @@ func (c *Core) SetAppDatabase(ctx context.Context, name, engine string, services
 		return err
 	}
 	defer unlock()
+	err = c.setDatabase(ctx, name, engine, services, env)
+	c.CheckApps(ctx)
+	return err
+}
 
+// setDatabase e o SetAppDatabase sem a trava (quem chama ja tem).
+func (c *Core) setDatabase(ctx context.Context, name, engine string, services []string, env map[string]string) error {
 	e, err := databases.Get(engine)
 	if err != nil {
 		return err
@@ -215,9 +333,7 @@ func (c *Core) SetAppDatabase(ctx context.Context, name, engine string, services
 	if err := databases.Provision(ctx, c.deps.ExecInput, e, databases.Identifier(name), pw); err != nil {
 		return err
 	}
-	err = m.SetDatabase(ctx, name, db)
-	c.CheckApps(ctx)
-	return err
+	return m.SetDatabase(ctx, name, db)
 }
 
 // RemoveAppDatabase desliga o app do banco. O database e os dados ficam:

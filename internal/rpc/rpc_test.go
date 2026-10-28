@@ -414,6 +414,7 @@ func (f *fakeAppDocker) PS(_ context.Context, p docker.Project) ([]docker.Contai
 	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running"}}, nil
 }
 func (f *fakeAppDocker) Restart(context.Context, docker.Project, string) error { return nil }
+func (f *fakeAppDocker) Recreate(ctx context.Context, p docker.Project) error  { return f.Up(ctx, p) }
 func (f *fakeAppDocker) Stop(context.Context, docker.Project) error            { return nil }
 
 func TestAppPeloSocket(t *testing.T) {

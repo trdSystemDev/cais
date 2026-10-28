@@ -149,3 +149,16 @@ func TestDockerfileComLinhasContinuadasEComentarios(t *testing.T) {
 		t.Fatalf("porta %d healthcheck %v volumes %v", r.Port, r.Healthcheck, r.Volumes)
 	}
 }
+
+func TestLooksSecret(t *testing.T) {
+	for _, n := range []string{"JWT_SECRET", "DB_PASSWORD", "API_KEY", "GITHUB_TOKEN", "SENTRY_DSN", "DATABASE_URL", "MONGO_URI", "app_key"} {
+		if !LooksSecret(n) {
+			t.Errorf("%s devia parecer segredo", n)
+		}
+	}
+	for _, n := range []string{"NODE_ENV", "APP_URL", "PORT", "LOG_LEVEL", "DB_HOST"} {
+		if LooksSecret(n) {
+			t.Errorf("%s nao e segredo", n)
+		}
+	}
+}

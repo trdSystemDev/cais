@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 )
@@ -201,6 +202,48 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 			return nil, err
 		}
 		return ok(s.api.RemoveAppDatabase(s.ctx, p.Name))
+
+	case MethodAppPlan:
+		var p planParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.PlanApp(s.ctx, p.Name, p.Files))
+
+	case MethodAppApply:
+		var p apps.Plan
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.ApplyApp(s.ctx, p))
+
+	case MethodAppSpec:
+		var p specParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetAppSpec(s.ctx, p.Name, p.Spec))
+
+	case MethodAppDeployTag:
+		var p tagParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.DeployAppTag(s.ctx, p.Name, p.Tag))
+
+	case MethodAppSecrets:
+		var p appParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.AppSecrets(s.ctx, p.Name))
+
+	case MethodAppSecretSet:
+		var p appSecretParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetAppSecret(s.ctx, p.Name, p.Secret, p.Value))
 
 	case MethodAppLogs:
 		var p appParams

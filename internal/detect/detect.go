@@ -220,6 +220,14 @@ var (
 	secretVar = regexp.MustCompile(`SECRET|PASSWORD|PASSWD|PASS$|TOKEN|PRIVATE|CREDENTIAL|_KEY$|^KEY$|APIKEY|API_KEY|DSN$`)
 )
 
+// LooksSecret diz se o nome de uma variavel parece de segredo (senha,
+// token, chave). Esses valores vao em arquivo, nunca no ambiente.
+func LooksSecret(name string) bool {
+	return secretVar.MatchString(strings.ToUpper(name)) || dbPassword.MatchString(strings.ToUpper(name))
+}
+
+var dbPassword = regexp.MustCompile(`(DATABASE_URL|_URI)$`)
+
 // envVars le o .env.example (ou .env.sample/.env.dist) e classifica cada
 // variavel.
 func envVars(files Files) []Var {

@@ -32,6 +32,7 @@ func (d *appDocker) PS(_ context.Context, p docker.Project) ([]docker.Container,
 	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running"}}, nil
 }
 func (d *appDocker) Restart(context.Context, docker.Project, string) error { return nil }
+func (d *appDocker) Recreate(ctx context.Context, p docker.Project) error  { return d.Up(ctx, p) }
 func (d *appDocker) Stop(context.Context, docker.Project) error            { return nil }
 
 func newAppsCore(t *testing.T) (*Core, *appDocker) {

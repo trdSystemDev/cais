@@ -6,6 +6,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/detect"
 )
 
 // API e o contrato que toda interface usa pra falar com o nucleo. *Core
@@ -77,6 +78,20 @@ type API interface {
 	SetAppDatabase(ctx context.Context, name, engine string, services []string, env map[string]string) error
 	// RemoveAppDatabase desliga o app do banco sem apagar os dados.
 	RemoveAppDatabase(ctx context.Context, name string) error
+
+	// PlanApp analisa os arquivos do repositorio (so os de detect.Wanted) e
+	// propoe a configuracao do app. Nao grava nada.
+	PlanApp(ctx context.Context, name string, files detect.Files) (apps.Plan, error)
+	// ApplyApp aplica um plano revisado: app, spec, rotas e banco.
+	ApplyApp(ctx context.Context, p apps.Plan) error
+	// SetAppSpec troca a spec (vale a partir do proximo deploy por tag).
+	SetAppSpec(ctx context.Context, name string, spec apps.Spec) error
+	// DeployAppTag gera o compose da spec com a tag e faz o deploy.
+	DeployAppTag(ctx context.Context, name, tag string) (apps.DeployResult, error)
+	// AppSecrets lista os secrets do app (nomes, nunca valores).
+	AppSecrets(ctx context.Context, name string) ([]apps.Secret, error)
+	// SetAppSecret grava um secret do app; com o app no ar, recria os containers.
+	SetAppSecret(ctx context.Context, name, secret, value string) error
 }
 
 // ConfigInfo e o config.yaml atual.

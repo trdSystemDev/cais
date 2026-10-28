@@ -153,6 +153,16 @@ func (CLI) Up(ctx context.Context, p Project) error {
 	return nil
 }
 
+// Recreate e o Up recriando todos os containers: um arquivo de secret
+// trocado so chega no container novo (o bind mount prende o arquivo antigo).
+func (CLI) Recreate(ctx context.Context, p Project) error {
+	_, err := execRunner(ctx, "docker", p.args("up", "-d", "--wait", "--wait-timeout", "300", "--remove-orphans", "--force-recreate")...)
+	if err != nil {
+		return fmt.Errorf("docker compose up (%s): %w", p.Name, lastLines(err.Error(), 15))
+	}
+	return nil
+}
+
 // PS lista os containers do projeto, inclusive parados.
 func (CLI) PS(ctx context.Context, p Project) ([]Container, error) {
 	out, err := execRunner(ctx, "docker", p.args("ps", "-a", "--format", "json")...)

@@ -42,11 +42,17 @@ Servicos opcionais (proxy, registry e woodpecker sobem sempre):
 
 Apps:
   cais apps                          lista os apps e o estado dos containers
-  cais app create <nome>             cria um app (o nome do repositorio no GitHub)
+  cais app init <nome> <pasta>       analisa o repositorio (Dockerfile, .env.example...),
+                                     mostra o plano e configura o app (spec, rota, banco)
+  cais app create <nome>             cria um app vazio (o nome do repositorio no GitHub)
   cais app routes <nome> [rota...]   mostra ou troca as rotas; rota: dominio[/caminho]=service:porta
                                      ex: app.exemplo.com.br=web:3000 app.exemplo.com.br/api=api:8080
+  cais app deploy <nome> --tag <tag> sobe a imagem da tag com a spec do app (o que o CI usa)
   cais app deploy <nome> < docker-compose.yml
-                                     valida e sobe; se falhar, a versao anterior volta
+                                     modo avancado: compose pronto (validado do mesmo jeito)
+                                     nos dois, se o deploy falhar, a versao anterior volta
+  cais app secrets <nome>            lista os secrets do app (so nomes)
+  cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log

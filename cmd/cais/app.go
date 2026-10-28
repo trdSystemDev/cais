@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/compose"
+	"github.com/trdSystemDev/cais/internal/detect"
 	"github.com/trdSystemDev/cais/internal/rpc"
 )
 
@@ -71,23 +75,32 @@ func runApp(args []string) error {
 	sub, args := subcommand(args)
 	fs, socket := newFlags("app " + sub)
 	dbServices := fs.String("services", "", "services que usam o banco (padrao: todos)")
-	fs.Parse(args)
+	tag := fs.String("tag", "", "deploy da imagem nessa tag, com a spec do app")
+	yes := fs.Bool("yes", false, "aplica o plano sem perguntar")
+	pos := parseInterspersed(fs, args)
+	arg := func(i int) string {
+		if i < len(pos) {
+			return pos[i]
+		}
+		return ""
+	}
 	need := map[string][2]int{ // minimo e maximo de argumentos
 		"create": {1, 1}, "routes": {1, -1}, "deploy": {1, 1},
 		"restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "db": {2, -1},
+		"init": {2, 2}, "secrets": {1, 1}, "secret": {2, 2},
 	}
 	lim, ok := need[sub]
 	if !ok {
 		return fmt.Errorf("subcomando desconhecido: app %s (veja: cais help)", sub)
 	}
-	if n := fs.NArg(); n < lim[0] || (lim[1] >= 0 && n > lim[1]) {
+	if n := len(pos); n < lim[0] || (lim[1] >= 0 && n > lim[1]) {
 		return fmt.Errorf("argumentos errados pra app %s (veja: cais help)", sub)
 	}
-	name := fs.Arg(0)
+	name := arg(0)
 
 	// o compose vem do stdin; le antes de conectar pra falhar cedo
 	var composeData []byte
-	if sub == "deploy" {
+	if sub == "deploy" && *tag == "" {
 		var err error
 		if composeData, err = io.ReadAll(io.LimitReader(os.Stdin, compose.MaxSize+1)); err != nil {
 			return err
@@ -111,10 +124,10 @@ func runApp(args []string) error {
 		}
 		fmt.Printf("App %s criado. Proximos passos:\n  cais app routes %s %s.<dominio>=web:3000\n  cais app deploy %s < docker-compose.yml\n", name, name, name, name)
 	case "routes":
-		if fs.NArg() == 1 {
+		if len(pos) == 1 {
 			return printRoutes(ctx, c, name)
 		}
-		routes, err := parseRoutes(fs.Args()[1:])
+		routes, err := parseRoutes(pos[1:])
 		if err != nil {
 			return err
 		}
@@ -123,15 +136,50 @@ func runApp(args []string) error {
 		}
 		fmt.Printf("Rotas de %s gravadas.\n", name)
 		return printRoutes(ctx, c, name)
+	case "init":
+		return appInit(ctx, c, name, arg(1), *yes)
+	case "secrets":
+		list, err := c.AppSecrets(ctx, name)
+		if err != nil {
+			return err
+		}
+		if len(list) == 0 {
+			fmt.Printf("%s sem secrets.\n", name)
+		}
+		for _, s := range list {
+			state := "ok"
+			switch {
+			case s.Managed:
+				state = "do cais"
+			case !s.Set:
+				state = "FALTA: cais app secret " + name + " " + s.Name
+			}
+			fmt.Printf("  %-24s %s\n", s.Name, state)
+		}
+	case "secret":
+		value, err := readSecret("Valor de " + arg(1) + ": ")
+		if err != nil {
+			return err
+		}
+		if err := c.SetAppSecret(ctx, name, arg(1), value); err != nil {
+			return err
+		}
+		fmt.Printf("%s gravado. O app le em /run/secrets/%s.\n", arg(1), arg(1))
 	case "deploy":
 		fmt.Printf("Deploy de %s (esperando os healthchecks)...\n", name)
-		res, err := c.DeployApp(ctx, name, string(composeData))
+		var res apps.DeployResult
+		var err error
+		if *tag != "" {
+			res, err = c.DeployAppTag(ctx, name, *tag)
+		} else {
+			res, err = c.DeployApp(ctx, name, string(composeData))
+		}
 		if err != nil {
 			return err
 		}
 		fmt.Printf("%s no ar: %s\n", name, strings.Join(res.Images, ", "))
 	case "restart":
-		if err := c.RestartApp(ctx, name, fs.Arg(1)); err != nil {
+		if err := c.RestartApp(ctx, name, arg(1)); err != nil {
 			return err
 		}
 		fmt.Printf("%s reiniciado.\n", name)
@@ -141,7 +189,7 @@ func runApp(args []string) error {
 		}
 		fmt.Printf("%s parado. Volta com: cais app restart %s\n", name, name)
 	case "db":
-		engine := fs.Arg(1)
+		engine := arg(1)
 		if engine == "off" {
 			if err := c.RemoveAppDatabase(ctx, name); err != nil {
 				return err
@@ -149,7 +197,7 @@ func runApp(args []string) error {
 			fmt.Printf("Banco desligado de %s. O database e os dados continuam la.\n", name)
 			return nil
 		}
-		env, err := parseEnvMap(fs.Args()[2:])
+		env, err := parseEnvMap(pos[2:])
 		if err != nil {
 			return err
 		}
@@ -159,7 +207,7 @@ func runApp(args []string) error {
 		fmt.Printf("Database %s criado no %s e ligado ao app.\n", strings.ReplaceAll(name, "-", "_"), engine)
 		fmt.Println("O app nao precisa declarar o banco no compose: a conexao entra pelo cais.")
 	case "logs":
-		out, err := c.AppLogs(ctx, name, fs.Arg(1))
+		out, err := c.AppLogs(ctx, name, arg(1))
 		if err != nil {
 			return err
 		}
@@ -223,4 +271,117 @@ func parseEnvMap(args []string) (map[string]string, error) {
 		env[k] = v
 	}
 	return env, nil
+}
+
+// appInit le da pasta so os arquivos da analise, pede o plano ao daemon,
+// mostra e aplica com confirmacao.
+func appInit(ctx context.Context, c *rpc.Client, name, dir string, yes bool) error {
+	files := detect.Files{}
+	for _, p := range detect.Wanted {
+		data, err := os.ReadFile(filepath.Join(dir, p))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		files[p] = data
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("nenhum arquivo do app em %s (Dockerfile, .env.example, package.json...)", dir)
+	}
+
+	plan, err := c.PlanApp(ctx, name, files)
+	if err != nil {
+		return err
+	}
+	printAppPlan(plan)
+	if !plan.Analysis.Supported() {
+		fmt.Println("\nA analise nao conseguiu tudo (veja os avisos). Ajuste depois com cais app spec/routes/db.")
+	}
+	if !yes {
+		fmt.Print("\nAplicar esse plano? [s/N] ")
+		var answer string
+		fmt.Scanln(&answer)
+		if answer != "s" && answer != "S" {
+			fmt.Println("Nada foi mudado.")
+			return nil
+		}
+	}
+	if err := c.ApplyApp(ctx, plan); err != nil {
+		return err
+	}
+	fmt.Printf("\n%s configurado.", name)
+	if len(plan.Spec.Secrets) > 0 {
+		fmt.Printf(" Informe os secrets antes do primeiro deploy:\n")
+		for _, s := range plan.Spec.Secrets {
+			fmt.Printf("  cais app secret %s %s\n", name, s)
+		}
+	} else {
+		fmt.Println()
+	}
+	fmt.Printf("Depois do build da imagem: cais app deploy %s --tag <tag>\n", name)
+	return nil
+}
+
+func printAppPlan(p apps.Plan) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Printf("Plano pra %s\n\n", p.App)
+	fmt.Fprintf(w, "  imagem\t%s:<tag do build>\n", p.Spec.Image)
+	if p.Spec.Port > 0 {
+		fmt.Fprintf(w, "  porta\t%d (%s)\n", p.Spec.Port, p.Analysis.PortSource)
+	} else {
+		fmt.Fprintf(w, "  porta\tnao descoberta\n")
+	}
+	for _, r := range p.Routes {
+		fmt.Fprintf(w, "  rota\thttps://%s%s -> %s:%d\n", r.Host, r.Path, r.Service, r.Port)
+	}
+	for _, v := range p.Spec.Volumes {
+		fmt.Fprintf(w, "  volume\t%s (persiste entre deploys)\n", v)
+	}
+	if p.Database != nil {
+		fmt.Fprintf(w, "  banco\t%s (%s)\n", p.Database.Engine, p.Analysis.Database.Why)
+		keys := make([]string, 0, len(p.Database.Env))
+		for k := range p.Database.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(w, "  \t  %s = %s\n", k, p.Database.Env[k])
+		}
+	} else {
+		fmt.Fprintf(w, "  banco\tnenhum (ligue depois com cais app db, se precisar)\n")
+	}
+	keys := make([]string, 0, len(p.Spec.Env))
+	for k := range p.Spec.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(w, "  env\t%s=%s\n", k, p.Spec.Env[k])
+	}
+	for _, s := range p.Spec.Secrets {
+		fmt.Fprintf(w, "  secret\t%s (/run/secrets/%s)\n", s, s)
+	}
+	w.Flush()
+	if len(p.Analysis.Notes) > 0 {
+		fmt.Println("\nAvisos:")
+		for _, n := range p.Analysis.Notes {
+			fmt.Printf("  - %s\n", n)
+		}
+	}
+}
+
+// parseInterspersed aceita flags em qualquer posicao (cais app deploy x
+// --tag v1): o pacote flag sozinho para no primeiro argumento posicional.
+func parseInterspersed(fs *flag.FlagSet, args []string) []string {
+	var pos []string
+	for {
+		fs.Parse(args)
+		if fs.NArg() == 0 {
+			return pos
+		}
+		pos = append(pos, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"fmt"
 
 	"github.com/trdSystemDev/cais/internal/apps"
+	"github.com/trdSystemDev/cais/internal/detect"
 )
 
 // Metodos aceitos pelo daemon.
@@ -31,14 +32,20 @@ const (
 	MethodRegistryUserAdd  = "registry.user.add"    // params: userParams
 	MethodRegistryUserDel  = "registry.user.remove" // params: userParams
 	MethodAppsCheck        = "apps.check"
-	MethodAppCreate        = "app.create"  // params: appParams
-	MethodAppRoutes        = "app.routes"  // params: routesParams
-	MethodAppDeploy        = "app.deploy"  // params: deployParams
-	MethodAppRestart       = "app.restart" // params: appParams (service opcional)
-	MethodAppStop          = "app.stop"    // params: appParams
-	MethodAppLogs          = "app.logs"    // params: appParams (container)
-	MethodAppDatabase      = "app.db"      // params: dbParams
-	MethodAppDatabaseOff   = "app.db.off"  // params: appParams
+	MethodAppCreate        = "app.create"     // params: appParams
+	MethodAppRoutes        = "app.routes"     // params: routesParams
+	MethodAppDeploy        = "app.deploy"     // params: deployParams
+	MethodAppRestart       = "app.restart"    // params: appParams (service opcional)
+	MethodAppStop          = "app.stop"       // params: appParams
+	MethodAppLogs          = "app.logs"       // params: appParams (container)
+	MethodAppDatabase      = "app.db"         // params: dbParams
+	MethodAppDatabaseOff   = "app.db.off"     // params: appParams
+	MethodAppPlan          = "app.plan"       // params: planParams
+	MethodAppApply         = "app.apply"      // params: apps.Plan
+	MethodAppSpec          = "app.spec"       // params: specParams
+	MethodAppDeployTag     = "app.deploy.tag" // params: tagParams
+	MethodAppSecrets       = "app.secrets"    // params: appParams
+	MethodAppSecretSet     = "app.secret.set" // params: appSecretParams
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -128,4 +135,25 @@ type dbParams struct {
 	Engine   string            `json:"engine"`
 	Services []string          `json:"services,omitempty"`
 	Env      map[string]string `json:"env,omitempty"`
+}
+
+type planParams struct {
+	Name  string       `json:"name"`
+	Files detect.Files `json:"files"`
+}
+
+type specParams struct {
+	Name string    `json:"name"`
+	Spec apps.Spec `json:"spec"`
+}
+
+type tagParams struct {
+	Name string `json:"name"`
+	Tag  string `json:"tag"`
+}
+
+type appSecretParams struct {
+	Name   string `json:"name"`
+	Secret string `json:"secret"`
+	Value  string `json:"value"`
 }

@@ -48,6 +48,7 @@ func (f *fakeDocker) PS(context.Context, docker.Project) ([]docker.Container, er
 	return []docker.Container{{Name: "meu-app-web-1", Service: "web", State: "running"}}, nil
 }
 func (f *fakeDocker) Restart(context.Context, docker.Project, string) error { return nil }
+func (f *fakeDocker) Recreate(ctx context.Context, p docker.Project) error  { return f.Up(ctx, p) }
 func (f *fakeDocker) Stop(context.Context, docker.Project) error            { return nil }
 
 func newManager(t *testing.T) (Manager, *fakeDocker) {

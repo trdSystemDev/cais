@@ -239,7 +239,23 @@ confiar nela (`/etc/docker/certs.d/<registry>/ca.crt` pro docker, `trust anchor`
 pro sistema). Use `CAIS_SOCKET`, `CAIS_CONFIG` e `CAIS_DATA_DIR` numa pasta
 persistente (nao `/tmp`: os volumes sobrevivem ao reboot e os secrets nao).
 
-Apps (cada um em `/var/lib/cais/apps/<app>`, projeto compose com o nome do app):
+Apps (cada um em `/var/lib/cais/apps/<app>`, projeto compose com o nome do app).
+O repositorio do app so precisa do Dockerfile:
+
+```sh
+cais app init meu-app ./meu-app        # analisa Dockerfile, .env.example e manifestos;
+                                       # mostra o plano (porta, rota, volumes, banco,
+                                       # variaveis, secrets) e configura com confirmacao
+cais app secret meu-app jwt_secret     # segredos detectados viram arquivo em /run/secrets
+cais app deploy meu-app --tag <sha>    # o CI chama isso depois do build: o compose sai da
+                                       # spec do app; o CI so escolhe a tag
+```
+
+A analise so sugere: porta, banco e variaveis podem ser trocados depois (`cais app
+db`, `routes`). Variavel com cara de segredo (`*_SECRET`, `*_TOKEN`, `*_PASSWORD`...)
+e recusada na spec: vira secret do app e o app recebe `X_FILE=/run/secrets/x`.
+
+Modo avancado (compose pronto, validado do mesmo jeito):
 
 ```sh
 cais app create meu-app
