@@ -46,6 +46,7 @@ const (
 	MethodAppDeployTag     = "app.deploy.tag" // params: tagParams
 	MethodAppSecrets       = "app.secrets"    // params: appParams
 	MethodAppSecretSet     = "app.secret.set" // params: appSecretParams
+	MethodCISetup          = "ci.setup"
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -57,7 +58,9 @@ const (
 	CodeParseError     = -32700
 	CodeMethodNotFound = -32601
 	CodeInvalidParams  = -32602
-	CodeActionFailed   = -32000
+	// CodeForbidden: o metodo existe, mas nao neste socket (o de deploy).
+	CodeForbidden    = -32003
+	CodeActionFailed = -32000
 )
 
 // ErrDisconnected e devolvido pelo cliente quando a conexao com o daemon

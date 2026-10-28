@@ -70,7 +70,8 @@ Regras:
 | `internal/github` | link do GitHub, deteccao de CI |
 | `internal/woodpecker` | cliente da API do Woodpecker |
 | `internal/config` | `/etc/cais/config.yaml` e os caminhos no disco |
-| `assets/` | CI de exemplo e unidade systemd |
+| `internal/ci` | pipeline do Woodpecker e chave de deploy do CI |
+| `assets/` | unidade systemd |
 
 ## Diretorios na VPS
 
@@ -102,10 +103,25 @@ registry tem um usuario por quem acessa: `ci` (push do Woodpecker) e `vps`
 mostrada uma vez). Todo usuario pode push/pull, entao revogar e por pessoa; o
 delete pela API fica desligado.
 
-Nao ha script de deploy no host: o CI faz `ssh deploy@vps <app> < docker-compose.yml`
-e o forced command da chave e o proprio `cais deploy` (fase 3), que manda o
-compose pro daemon pelo socket. O daemon valida, grava e roda `pull`/`up -d`,
-e o usuario `deploy` nao tem acesso a nenhum arquivo.
+## CI (Woodpecker)
+
+```
+push -> Woodpecker: build do Dockerfile (kaniko) -> push registry/<app>:<commit>
+     -> ssh cais-deploy@vps "<app> <commit>"
+     -> sshd forca: cais deploy -> /run/cais/deploy.sock -> deploy por tag
+```
+
+```sh
+cais ci pipeline > .woodpecker.yml   # em cada repositorio (igual pra todo app)
+cais ci setup                        # usuario cais-deploy, authorized_keys e secrets do Woodpecker
+```
+
+Nao ha script de deploy no host. A chave do CI tem `restrict` e o forced command
+`cais deploy`: sem shell, pty nem tunel, so o pedido de deploy de uma tag. Ela
+fala com um socket proprio (`deploy.sock`, so do usuario `cais-deploy`, aberto com
+`cais daemon --deploy-user cais-deploy`), onde o daemon confere quem conectou
+(`SO_PEERCRED`) e so aceita `app.deploy.tag`: o CI escolhe a tag, nunca a
+configuracao do app. Cada pedido fica no log do daemon.
 
 ## Configuracao
 

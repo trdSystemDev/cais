@@ -9,6 +9,10 @@
 # Pra liberar um usuario sem sudo, crie o grupo (groupadd cais), coloque
 # o usuario nele e adicione "--group cais" no ExecStart. Quem esta no
 # grupo controla a VPS inteira, igual ao grupo docker.
+#
+# Pro deploy pelo CI, adicione "--deploy-user cais-deploy": abre o
+# /run/cais/deploy.sock, que so aceita deploy por tag e so do usuario cais-deploy
+# (cais ci setup mostra como criar o usuario e a chave).
 [Unit]
 Description=cais daemon
 After=docker.service network-online.target

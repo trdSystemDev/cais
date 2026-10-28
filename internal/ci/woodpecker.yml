@@ -1,0 +1,41 @@
+# Pipeline do cais: build da imagem e deploy na VPS. E o mesmo pra qualquer
+# app -- copie pra raiz do repositorio como .woodpecker.yml (cais ci pipeline
+# > .woodpecker.yml). O repositorio so precisa do Dockerfile.
+#
+# - o nome do repositorio e o nome do app no cais (CI_REPO_NAME)
+# - CAIS_REGISTRY vem do proprio Woodpecker (variavel global que o cais
+#   configura): nada de dominio aqui
+# - os secrets registry_password e deploy_ssh_key sao cadastrados no
+#   Woodpecker (cais ci setup mostra os valores)
+# - o deploy so escolhe a tag: a configuracao do app (porta, banco, rotas,
+#   secrets) fica no cais e o CI nao consegue mudar
+
+when:
+  - event: push
+    branch: main
+
+steps:
+  - name: build
+    image: woodpeckerci/plugin-kaniko
+    settings:
+      registry: ${CAIS_REGISTRY}
+      repo: ${CAIS_REGISTRY}/${CI_REPO_NAME}
+      tags: ${CI_COMMIT_SHA}
+      username: ci
+      password:
+        from_secret: registry_password
+
+  - name: deploy
+    image: alpine:3.22
+    environment:
+      DEPLOY_KEY:
+        from_secret: deploy_ssh_key
+    commands:
+      - apk add --no-cache openssh-client >/dev/null
+      # o build roda num container na propria VPS: o gateway da rede docker
+      # e o host, onde esta o sshd
+      - HOST_IP=$(ip route | awk '/default/ {print $3}')
+      - mkdir -p ~/.ssh && printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+      - ssh-keyscan -H "$HOST_IP" >> ~/.ssh/known_hosts 2>/dev/null
+      # a chave so roda o cais deploy (forced command): sem shell na VPS
+      - ssh -i ~/.ssh/id_ed25519 cais-deploy@"$HOST_IP" "$CI_REPO_NAME $CI_COMMIT_SHA"

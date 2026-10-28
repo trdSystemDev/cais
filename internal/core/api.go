@@ -92,6 +92,10 @@ type API interface {
 	AppSecrets(ctx context.Context, name string) ([]apps.Secret, error)
 	// SetAppSecret grava um secret do app; com o app no ar, recria os containers.
 	SetAppSecret(ctx context.Context, name, secret, value string) error
+
+	// CISetup devolve o pipeline do Woodpecker, a linha do authorized_keys
+	// do usuario cais-deploy e os secrets a cadastrar (gera a chave na primeira vez).
+	CISetup(ctx context.Context) (CIInfo, error)
 }
 
 // ConfigInfo e o config.yaml atual.

@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"os/user"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -24,7 +26,8 @@ const usage = `cais -- painel da VPS
 
 Uso:
   cais [--socket caminho]            abre a interface (TUI)
-  cais daemon [--socket] [--group]   roda o daemon (dono do estado e das acoes)
+  cais daemon [--socket] [--group] [--deploy-user cais-deploy]
+                                     roda o daemon (dono do estado e das acoes)
   cais state [--socket]              imprime o estado atual em JSON
   cais check [--socket]              checa o ambiente e imprime o resultado em JSON
   cais version                       mostra a versao
@@ -64,6 +67,14 @@ Apps:
                                      (/run/secrets/cais_db_password ou cais_db_url)
   cais app db <nome> off             desliga o banco do app (os dados ficam)
 
+CI (Woodpecker):
+  cais ci pipeline                   imprime o .woodpecker.yml (igual pra todo app)
+  cais ci setup                      linha do authorized_keys do usuario cais-deploy e os
+                                     secrets a cadastrar no Woodpecker
+  cais deploy <app> <tag>            deploy por tag pelo socket de deploy; e o forced
+                                     command da chave do CI (le app e tag do
+                                     SSH_ORIGINAL_COMMAND)
+
 Registry de imagens:
   cais registry users                lista quem pode entrar
   cais registry add <usuario>        cria o acesso e mostra a senha (uma vez so)
@@ -96,6 +107,10 @@ func main() {
 		err = runApps(args)
 	case "app":
 		err = runApp(args)
+	case "deploy":
+		err = runDeploy(args)
+	case "ci":
+		err = runCI(args)
 	case "service":
 		err = runService(args)
 	case "version":
@@ -122,6 +137,7 @@ func newFlags(name string) (*flag.FlagSet, *string) {
 func runDaemon(args []string) error {
 	fs, socket := newFlags("daemon")
 	group := fs.String("group", "", "grupo que pode usar o cais (alem do root)")
+	deployUser := fs.String("deploy-user", "", "usuario do CI (ex: cais-deploy): abre o socket de deploy, que so aceita deploy por tag")
 	fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -134,8 +150,38 @@ func runDaemon(args []string) error {
 	c := core.New(core.Deps{})
 	go c.CheckEnvironment(ctx)
 
+	errs := make(chan error, 2)
+	if *deployUser != "" {
+		u, err := user.Lookup(*deployUser)
+		if err != nil {
+			return fmt.Errorf("usuario de deploy: %w", err)
+		}
+		uid, _ := strconv.Atoi(u.Uid)
+		path := rpc.DeploySocketPath()
+		dln, err := rpc.ListenDeploy(path, uid)
+		if err != nil {
+			return err
+		}
+		// so o usuario de deploy (ou root) e so o deploy por tag; cada
+		// pedido fica no log do daemon (journalctl -u cais)
+		go func() {
+			errs <- rpc.Serve(ctx, dln, c,
+				rpc.Allow(rpc.MethodAppDeployTag),
+				rpc.RequirePeer(func(p rpc.Peer) error {
+					if int(p.UID) != uid && p.UID != 0 {
+						return fmt.Errorf("so o usuario %s pode usar o socket de deploy", *deployUser)
+					}
+					return nil
+				}),
+				rpc.Log(func(f string, a ...any) { log.Printf("deploy: "+f, a...) }))
+		}()
+		log.Printf("socket de deploy em %s (usuario %s)", path, *deployUser)
+	}
+
 	log.Printf("cais daemon %s ouvindo em %s", version, *socket)
-	err = rpc.Serve(ctx, ln, c)
+	go func() { errs <- rpc.Serve(ctx, ln, c) }()
+	err = <-errs
+	stop()
 	log.Print("cais daemon encerrado")
 	return err
 }

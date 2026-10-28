@@ -349,3 +349,8 @@ func (c *Client) AppSecrets(ctx context.Context, name string) (list []apps.Secre
 func (c *Client) SetAppSecret(ctx context.Context, name, secret, value string) error {
 	return c.call(ctx, MethodAppSecretSet, appSecretParams{Name: name, Secret: secret, Value: value}, nil)
 }
+
+func (c *Client) CISetup(ctx context.Context) (info core.CIInfo, err error) {
+	err = c.call(ctx, MethodCISetup, nil, &info)
+	return
+}

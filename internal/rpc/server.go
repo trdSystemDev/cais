@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -20,8 +21,11 @@ import (
 // As acoes rodam com o ctx do daemon, nao com o da conexao: se a TUI cair
 // no meio de um deploy, o deploy termina mesmo assim em vez de ficar pela
 // metade no servidor.
-func Serve(ctx context.Context, ln net.Listener, api core.API) error {
+func Serve(ctx context.Context, ln net.Listener, api core.API, opts ...Option) error {
 	s := &server{api: api, ctx: ctx, conns: map[net.Conn]struct{}{}}
+	for _, o := range opts {
+		o(s)
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -38,6 +42,12 @@ func Serve(ctx context.Context, ln net.Listener, api core.API) error {
 			}
 			return err
 		}
+		peer, err := s.admit(conn)
+		if err != nil {
+			s.logf("conexao recusada: %v", err)
+			conn.Close()
+			continue
+		}
 		if !s.track(conn) {
 			conn.Close()
 			continue
@@ -46,9 +56,42 @@ func Serve(ctx context.Context, ln net.Listener, api core.API) error {
 		go func() {
 			defer s.wg.Done()
 			defer s.untrack(conn)
-			s.handle(conn)
+			s.handle(conn, peer)
 		}()
 	}
+}
+
+// Peer e quem conectou no socket, segundo o kernel.
+type Peer struct {
+	UID, GID uint32
+	PID      int32
+}
+
+// Option ajusta um Serve.
+type Option func(*server)
+
+// Allow restringe o socket a esses metodos: os outros sao recusados mesmo
+// pra quem conseguiu conectar. E o socket de deploy do CI, que so pode
+// pedir o deploy de uma tag.
+func Allow(methods ...string) Option {
+	return func(s *server) {
+		s.allow = map[string]bool{}
+		for _, m := range methods {
+			s.allow[m] = true
+		}
+	}
+}
+
+// RequirePeer recusa a conexao se check devolver erro. check recebe quem
+// conectou (SO_PEERCRED); sem como identificar, a conexao e recusada.
+func RequirePeer(check func(Peer) error) Option {
+	return func(s *server) { s.peerCheck = check }
+}
+
+// Log recebe o registro das conexoes recusadas e das chamadas num socket
+// restrito (quem pediu o que).
+func Log(fn func(format string, args ...any)) Option {
+	return func(s *server) { s.log = fn }
 }
 
 type server struct {
@@ -56,9 +99,35 @@ type server struct {
 	ctx context.Context
 	wg  sync.WaitGroup
 
+	allow     map[string]bool // nil = todos os metodos
+	peerCheck func(Peer) error
+	log       func(format string, args ...any)
+
 	mu       sync.Mutex
 	conns    map[net.Conn]struct{}
 	shutdown bool
+}
+
+func (s *server) logf(format string, args ...any) {
+	if s.log != nil {
+		s.log(format, args...)
+	}
+}
+
+// admit identifica quem conectou e aplica o RequirePeer.
+func (s *server) admit(c net.Conn) (Peer, error) {
+	if s.peerCheck == nil {
+		peer, _ := peerCred(c) // so pro registro; sem checagem, todos entram
+		return peer, nil
+	}
+	peer, err := peerCred(c)
+	if err != nil {
+		return peer, err
+	}
+	if err := s.peerCheck(peer); err != nil {
+		return peer, fmt.Errorf("uid %d: %w", peer.UID, err)
+	}
+	return peer, nil
 }
 
 func (s *server) track(c net.Conn) bool {
@@ -103,7 +172,7 @@ func (c *conn) send(m message) error {
 	return c.enc.Encode(m)
 }
 
-func (s *server) handle(nc net.Conn) {
+func (s *server) handle(nc net.Conn, peer Peer) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	c := &conn{Conn: nc, ctx: ctx, enc: json.NewEncoder(nc)}
@@ -124,6 +193,14 @@ func (s *server) handle(nc net.Conn) {
 			continue // cliente nao manda notificacoes; ignora
 		}
 		go func() {
+			if s.allow != nil {
+				if !s.allow[m.Method] {
+					s.logf("uid %d pediu %s: nao permitido neste socket", peer.UID, m.Method)
+					c.send(message{ID: m.ID, Error: &Error{Code: CodeForbidden, Message: "metodo " + m.Method + " nao permitido neste socket"}})
+					return
+				}
+				s.logf("uid %d: %s %s", peer.UID, m.Method, m.Params)
+			}
 			result, rerr := s.dispatch(c, m)
 			reply := message{ID: m.ID}
 			if rerr != nil {
@@ -244,6 +321,9 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 			return nil, err
 		}
 		return ok(s.api.SetAppSecret(s.ctx, p.Name, p.Secret, p.Value))
+
+	case MethodCISetup:
+		return wrap(s.api.CISetup(s.ctx))
 
 	case MethodAppLogs:
 		var p appParams

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -447,5 +448,90 @@ func TestAppPeloSocket(t *testing.T) {
 	list, err := c.CheckApps(ctx)
 	if err != nil || len(list.List) != 1 || len(list.List[0].Routes) != 1 || list.List[0].Last == nil {
 		t.Fatalf("apps: %+v %v", list, err)
+	}
+}
+
+// socket de deploy: so o metodo liberado, e so pra quem o kernel diz que e
+// o usuario certo
+func startRestricted(t *testing.T, opts ...Option) (string, *fakeAppDocker) {
+	t.Helper()
+	root := t.TempDir()
+	ad := &fakeAppDocker{}
+	c := core.New(core.Deps{CheckDocker: okStatus, ConfigPath: filepath.Join(root, "config.yaml"),
+		AppsDir: filepath.Join(root, "apps"), AppDocker: ad})
+	ctx := context.Background()
+	c.CreateApp(ctx, "meu-app")
+	c.SetAppSpec(ctx, "meu-app", apps.Spec{Image: "registry.exemplo.com.br/meu-app"})
+
+	path := filepath.Join(t.TempDir(), "deploy.sock")
+	ln, err := Listen(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- Serve(sctx, ln, c, opts...) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return path, ad
+}
+
+func TestSocketRestritoSoAceitaODeploy(t *testing.T) {
+	var logs []string
+	var mu sync.Mutex
+	path, ad := startRestricted(t, Allow(MethodAppDeployTag), Log(func(f string, a ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	}))
+	c := dial(t, path)
+	ctx := context.Background()
+
+	if _, err := c.DeployAppTag(ctx, "meu-app", "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if ad.ups.Load() != 1 {
+		t.Fatal("deploy nao subiu")
+	}
+	for name, call := range map[string]func() error{
+		"state.get":      func() error { _, err := c.Snapshot(ctx); return err },
+		"app.deploy":     func() error { _, err := c.DeployApp(ctx, "meu-app", "services: {}"); return err },
+		"app.secret.set": func() error { return c.SetAppSecret(ctx, "meu-app", "x", "y") },
+		"config.save":    func() error { return c.SaveConfig(ctx, config.Default()) },
+	} {
+		var rerr *Error
+		if err := call(); !errors.As(err, &rerr) || rerr.Code != CodeForbidden {
+			t.Errorf("%s no socket de deploy: %v", name, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, fmt.Sprintf("uid %d: app.deploy.tag", os.Getuid())) || !strings.Contains(joined, "nao permitido") {
+		t.Errorf("registro do socket de deploy:\n%s", joined)
+	}
+}
+
+func TestSocketRestritoConfereQuemConecta(t *testing.T) {
+	var seen atomic.Uint32
+	path, _ := startRestricted(t, Allow(MethodAppDeployTag), RequirePeer(func(p Peer) error {
+		seen.Store(p.UID + 1)
+		if p.UID != uint32(os.Getuid()) {
+			return errors.New("uid errado")
+		}
+		return nil
+	}))
+	c := dial(t, path)
+	if _, err := c.DeployAppTag(context.Background(), "meu-app", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if seen.Load() != uint32(os.Getuid())+1 {
+		t.Fatalf("o kernel nao informou o uid de quem conectou (%d)", seen.Load())
+	}
+
+	// quem o check recusa e desconectado antes de qualquer chamada
+	other, _ := startRestricted(t, RequirePeer(func(Peer) error { return errors.New("so o usuario deploy") }))
+	c2 := dial(t, other)
+	if _, err := c2.DeployAppTag(context.Background(), "meu-app", "v1"); !errors.Is(err, ErrDisconnected) {
+		t.Fatalf("conexao recusada devia cair: %v", err)
 	}
 }
