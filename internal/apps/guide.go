@@ -15,9 +15,10 @@ type GuideInput struct {
 	Port int
 	// Networks sao as redes das stacks ligadas que o app pode usar, alem
 	// da proxy_network (postgres_network, mysql_network, garage_network).
-	Networks []string
-	Env      []string // nomes das variaveis do app
-	Secrets  []string // nomes dos secrets do app
+	Networks  []string
+	Env       []string // nomes das variaveis do app
+	Secrets   []string // nomes dos secrets do app (fora os de banco)
+	Databases []DBLink // bancos da infra ligados
 }
 
 // Guide e o texto que o cais devolve pra escrever o compose de producao do
@@ -106,8 +107,13 @@ func Guide(in GuideInput) string {
 	if len(nets) == 0 {
 		w("#   nenhum ligado ainda\n")
 	}
-	w("# Database e usuario de cada app: aba Infra -> Novo banco (o cais gera a\n")
-	w("# senha e mostra a URL de conexao pra por nas variaveis ou num secret).\n")
+	for _, l := range in.Databases {
+		w("#   banco %s ligado: URL em %s (no .env) e em ${CAIS_SECRETS}/%s\n", l.ID(), l.Env, l.File())
+	}
+	if len(in.Databases) == 0 {
+		w("# Database do app: aba Infra -> Novo banco (com o app preenchido) ou\n")
+		w("# cais db create postgres <nome> -app %s: o deploy entrega a URL em DATABASE_URL.\n", in.App)
+	}
 	w("#\n")
 	w("# Variaveis do cais no .env: CAIS_APP, CAIS_COMMIT (commit no ar) e\n")
 	w("# CAIS_SECRETS (pasta dos secrets).\n")

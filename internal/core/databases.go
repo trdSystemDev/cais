@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/databases"
 	"github.com/trdSystemDev/cais/internal/secrets"
@@ -19,6 +20,10 @@ type DatabaseRequest struct {
 	Name string `json:"name"`
 	// Extensions sao extensoes do Postgres criadas no database (postgis).
 	Extensions []string `json:"extensions,omitempty"`
+	// App, se informado, ja fica ligado ao database: recebe a URL em Env
+	// (padrao DATABASE_URL) no proximo deploy.
+	App string `json:"app,omitempty"`
+	Env string `json:"env,omitempty"`
 }
 
 // DatabaseInfo e a credencial de um database criado pelo cais.
@@ -33,6 +38,55 @@ type DatabaseInfo struct {
 	Network string `json:"network"`
 	// URL e a URL de conexao completa (postgres://... ou mysql://...).
 	URL string `json:"url"`
+	// Apps sao os apps ligados ao database (variavel de cada um).
+	Apps []DatabaseUse `json:"apps,omitempty"`
+}
+
+// DatabaseUse e um app que usa o database, com a variavel da URL.
+type DatabaseUse struct {
+	App string `json:"app"`
+	Env string `json:"env"`
+}
+
+// dbURL e a URL de um database criado pelo cais (o que o app recebe).
+func (c *Core) dbURL(engine, name string) (string, error) {
+	e, err := databases.Get(engine)
+	if err != nil {
+		return "", err
+	}
+	pw, err := c.secretStore().Get(dbSecret(e.Name, name))
+	if errors.Is(err, secrets.ErrNotFound) {
+		return "", fmt.Errorf("o database %s/%s nao existe no cais (crie na aba Infra -> Novo banco)", engine, name)
+	}
+	if err != nil {
+		return "", err
+	}
+	return e.URL(name, pw), nil
+}
+
+// LinkAppDatabase liga o app a um database da infra: o deploy entrega a URL
+// em env (vazio = DATABASE_URL) e em ${CAIS_SECRETS}/<env em minusculas>.
+func (c *Core) LinkAppDatabase(ctx context.Context, app, engine, name, env string) error {
+	unlock, err := c.lockApp(app)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = c.appManager().LinkDB(app, apps.DBLink{Engine: engine, Name: name, Env: env})
+	c.CheckApps(ctx)
+	return err
+}
+
+// UnlinkAppDatabase desliga o app do database; o database e os dados ficam.
+func (c *Core) UnlinkAppDatabase(ctx context.Context, app, engine, name string) error {
+	unlock, err := c.lockApp(app)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = c.appManager().UnlinkDB(app, engine, name)
+	c.CheckApps(ctx)
+	return err
 }
 
 // a senha de cada database fica num secret central: db_<engine>_<nome>
@@ -47,6 +101,24 @@ func dbInfo(e databases.Engine, name string, pw []byte) DatabaseInfo {
 // acessa o proprio database). Nome que ja existe e recusado: nunca troca a
 // senha de um banco em uso sem pedir.
 func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (DatabaseInfo, error) {
+	if req.App != "" {
+		// o app tem que existir antes de criar o banco pra ele
+		if _, err := c.appManager().Get(req.App); err != nil {
+			return DatabaseInfo{}, err
+		}
+	}
+	info, err := c.createDatabase(ctx, req)
+	if err != nil || req.App == "" {
+		return info, err
+	}
+	if err := c.LinkAppDatabase(ctx, req.App, info.Engine, info.Name, req.Env); err != nil {
+		return info, fmt.Errorf("database criado, mas nao ligou no app %s: %w (ligue em Apps -> Secrets)", req.App, err)
+	}
+	info.Apps = []DatabaseUse{{App: req.App, Env: cmpOr(req.Env, apps.DefaultDBEnv)}}
+	return info, nil
+}
+
+func (c *Core) createDatabase(ctx context.Context, req DatabaseRequest) (DatabaseInfo, error) {
 	e, err := databases.Get(req.Engine)
 	if err != nil {
 		return DatabaseInfo{}, err
@@ -112,5 +184,25 @@ func (c *Core) Databases(context.Context) ([]DatabaseInfo, error) {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Engine+out[i].Name < out[j].Engine+out[j].Name })
+	list, err := c.appManager().List()
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		for _, a := range list {
+			for _, l := range a.Databases {
+				if l.Engine == out[i].Engine && l.Name == out[i].Name {
+					out[i].Apps = append(out[i].Apps, DatabaseUse{App: a.Name, Env: l.Env})
+				}
+			}
+		}
+	}
 	return out, nil
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

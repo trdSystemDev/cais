@@ -51,6 +51,9 @@ type App struct {
 	// Commit e o commit no ar (ultimo deploy que deu certo).
 	Commit string  `yaml:"commit,omitempty" json:"commit,omitempty"`
 	Last   *Deploy `yaml:"last_deploy,omitempty" json:"last_deploy,omitempty"`
+	// Databases sao os bancos da infra que o app usa (a credencial fica no
+	// cais; o deploy entrega a URL).
+	Databases []DBLink `yaml:"databases,omitempty" json:"databases,omitempty"`
 }
 
 // ComposeFile e o compose do app, com o padrao.
@@ -107,6 +110,8 @@ type Manager struct {
 	// Networks sao as redes da infra que os apps podem usar agora (as das
 	// stacks ligadas); a proxy_network vale sempre.
 	Networks []string
+	// DBCredentials da a URL dos bancos da infra ligados ao app.
+	DBCredentials DBCredentials
 	// Settle e quanto tempo o deploy observa os containers depois do up:
 	// sem healthcheck, "running" na hora do up nao garante que o app fica
 	// de pe (migracao que falha, crash na subida). Zero nao observa.
@@ -182,7 +187,7 @@ func (m Manager) Create(a App) (App, error) {
 	if err := os.MkdirAll(m.SecretsPath(a.Name), 0o700); err != nil {
 		return App{}, err
 	}
-	a.Commit, a.Last = "", nil
+	a.Commit, a.Last, a.Databases = "", nil, nil
 	return a, m.save(a)
 }
 
@@ -484,11 +489,15 @@ func (m Manager) requireDeployed(name string) (App, error) {
 // Secret e o estado de um secret do app: so o nome, nunca o valor.
 type Secret struct {
 	Name string `json:"name"`
+	// Database e o banco da infra cuja URL esta no arquivo (gerenciado pelo
+	// cais; desliga pelo banco, nao apagando o secret).
+	Database string `json:"database,omitempty"`
 }
 
 // Secrets lista os secrets do app.
 func (m Manager) Secrets(name string) ([]Secret, error) {
-	if _, err := m.Get(name); err != nil {
+	a, err := m.Get(name)
+	if err != nil {
 		return nil, err
 	}
 	names, err := m.secrets(name).List()
@@ -497,7 +506,13 @@ func (m Manager) Secrets(name string) ([]Secret, error) {
 	}
 	out := make([]Secret, 0, len(names))
 	for _, n := range names {
-		out = append(out, Secret{Name: n})
+		s := Secret{Name: n}
+		for _, l := range a.Databases {
+			if l.File() == n {
+				s.Database = l.ID()
+			}
+		}
+		out = append(out, s)
 	}
 	return out, nil
 }
@@ -505,8 +520,12 @@ func (m Manager) Secrets(name string) ([]Secret, error) {
 // SetSecret grava um secret do app. Vale a partir do proximo deploy (ou
 // Reiniciar recriando: o arquivo montado so muda num container novo).
 func (m Manager) SetSecret(name, secret string, value []byte) error {
-	if _, err := m.Get(name); err != nil {
+	a, err := m.Get(name)
+	if err != nil {
 		return err
+	}
+	if l, ok := linkByFile(a, secret); ok {
+		return fmt.Errorf("%s e a URL do banco %s, gravada pelo cais a cada deploy; pra trocar de banco, desligue esse e ligue outro", secret, l.ID())
 	}
 	if len(value) == 0 {
 		return errors.New("valor vazio")
@@ -516,8 +535,12 @@ func (m Manager) SetSecret(name, secret string, value []byte) error {
 
 // DeleteSecret apaga um secret do app.
 func (m Manager) DeleteSecret(name, secret string) error {
-	if _, err := m.Get(name); err != nil {
+	a, err := m.Get(name)
+	if err != nil {
 		return err
+	}
+	if l, ok := linkByFile(a, secret); ok {
+		return fmt.Errorf("%s e a URL do banco %s: desligue o banco do app em vez de apagar o secret", secret, l.ID())
 	}
 	if err := secrets.CheckName(secret); err != nil {
 		return err
@@ -542,8 +565,14 @@ func (m Manager) Env(name string) (map[string]string, error) {
 
 // SetEnv troca as variaveis do app (valem no proximo deploy).
 func (m Manager) SetEnv(name string, env map[string]string) error {
-	if _, err := m.Get(name); err != nil {
+	a, err := m.Get(name)
+	if err != nil {
 		return err
+	}
+	for _, l := range a.Databases {
+		if _, ok := env[l.Env]; ok {
+			return fmt.Errorf("%s e a URL do banco %s, preenchida pelo cais no deploy; use outro nome", l.Env, l.ID())
+		}
 	}
 	data, err := FormatEnv(env)
 	if err != nil {
@@ -566,6 +595,9 @@ func (m Manager) dotEnvPath(a App, src string) string {
 func (m Manager) writeDotEnv(a App, src, commit string) error {
 	env, err := m.Env(a.Name)
 	if err != nil {
+		return err
+	}
+	if err := m.dbEnv(a, env); err != nil {
 		return err
 	}
 	env["CAIS_APP"] = a.Name

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -345,7 +346,7 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	if err != nil || db.Password == "" || !strings.HasPrefix(db.URL, "postgres://meu_app:") {
 		t.Fatalf("CreateDatabase: %+v, %v", db, err)
 	}
-	if list, err := c.Databases(ctx); err != nil || len(list) != 1 || list[0] != db {
+	if list, err := c.Databases(ctx); err != nil || len(list) != 1 || !reflect.DeepEqual(list[0], db) {
 		t.Errorf("Databases: %+v, %v", list, err)
 	}
 

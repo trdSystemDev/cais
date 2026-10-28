@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -300,7 +301,7 @@ func TestCreateDatabase(t *testing.T) {
 	}
 
 	list, err := c.Databases(ctx)
-	if err != nil || len(list) != 1 || list[0] != info {
+	if err != nil || len(list) != 1 || !reflect.DeepEqual(list[0], info) {
 		t.Fatalf("lista %+v %v", list, err)
 	}
 
@@ -328,5 +329,32 @@ func TestDeleteAppSaiDoEstado(t *testing.T) {
 	// o nome fica livre pra criar de novo
 	if _, err := c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCreateDatabaseJaLigaNoApp(t *testing.T) {
+	c, _, _ := newAppsCore(t)
+	ctx := context.Background()
+	c.deps.ExecInput = func(context.Context, string, []byte, ...string) (string, error) { return "", nil }
+	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"})
+	if _, err := c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "outro", App: "nao-existe"}); err == nil {
+		t.Error("criou banco pra app que nao existe")
+	}
+	info, err := c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "meu_app", App: "meu-app"})
+	if err != nil || len(info.Apps) != 1 || info.Apps[0].Env != "DATABASE_URL" {
+		t.Fatalf("%+v %v", info, err)
+	}
+	s := snap(t, c).Apps.List[0]
+	if len(s.Databases) != 1 || s.Databases[0].ID() != "postgres/meu_app" || len(s.Secrets) != 1 || s.Secrets[0].Database == "" {
+		t.Fatalf("estado do app %+v %+v", s.Databases, s.Secrets)
+	}
+	list, _ := c.Databases(ctx)
+	if len(list) != 1 || len(list[0].Apps) != 1 || list[0].Apps[0].App != "meu-app" {
+		t.Errorf("lista %+v", list)
+	}
+	// excluir o app nao apaga o database
+	c.DeleteApp(ctx, "meu-app", false)
+	if list, _ := c.Databases(ctx); len(list) != 1 || len(list[0].Apps) != 0 {
+		t.Errorf("depois de excluir o app %+v", list)
 	}
 }

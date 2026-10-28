@@ -337,6 +337,14 @@ func (c *Client) CreateDatabase(ctx context.Context, req core.DatabaseRequest) (
 	return
 }
 
+func (c *Client) LinkAppDatabase(ctx context.Context, app, engine, name, env string) error {
+	return c.call(ctx, MethodAppDBLink, appDBParams{App: app, Engine: engine, Name: name, Env: env}, nil)
+}
+
+func (c *Client) UnlinkAppDatabase(ctx context.Context, app, engine, name string) error {
+	return c.call(ctx, MethodAppDBUnlink, appDBParams{App: app, Engine: engine, Name: name}, nil)
+}
+
 func (c *Client) Databases(ctx context.Context) (list []core.DatabaseInfo, err error) {
 	err = c.call(ctx, MethodDatabases, nil, &list)
 	return

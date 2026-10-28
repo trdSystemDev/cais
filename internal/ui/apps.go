@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -73,6 +74,9 @@ type appsPage struct {
 	secretValue *textinput.Model
 	guide       string
 	guideFor    string
+	dbs         []core.DatabaseInfo // bancos da infra (pra ligar no app)
+	dbPick      int
+	dbEnv       *textinput.Model
 	delConfirm  *textinput.Model // nome do app digitado pra excluir
 	delVolumes  bool             // excluir apaga tambem os volumes
 
@@ -107,6 +111,10 @@ type (
 		env map[string]string
 		err error
 	}
+	appDBsMsg struct {
+		list []core.DatabaseInfo
+		err  error
+	}
 	appGuideMsg struct {
 		app  string
 		text string
@@ -129,6 +137,7 @@ func newAppsPage(api core.API, zones *zone.Manager, th theme) *appsPage {
 	p.secretValue = p.input("valor", 30)
 	p.secretValue.EchoMode = textinput.EchoPassword
 	p.delConfirm = p.input("digite o nome do app", 24)
+	p.dbEnv = p.input(apps.DefaultDBEnv, 22)
 	p.newName = p.input("nome do app (minusculas)", 30)
 	p.newRepo = p.input("https://github.com/dono/repo", 40)
 	p.newBranch = p.input("a principal do repositorio", 28)
@@ -159,7 +168,7 @@ func (p *appsPage) style(ti *textinput.Model) {
 func (p *appsPage) setTheme(th theme) {
 	p.th = th
 	for _, ti := range []*textinput.Model{p.repo, p.branch, p.compose, p.ref, p.secretName, p.secretValue,
-		p.newName, p.newRepo, p.newBranch, p.newCompose, p.delConfirm} {
+		p.newName, p.newRepo, p.newBranch, p.newCompose, p.delConfirm, p.dbEnv} {
 		p.style(ti)
 	}
 	for _, r := range p.envRows {
@@ -231,9 +240,31 @@ func (p *appsPage) loadSelected(force bool) tea.Cmd {
 	p.secretValue.SetValue("")
 	p.delConfirm.SetValue("")
 	p.delVolumes = false
+	p.dbEnv.SetValue("")
+	p.dbPick = 0
 	p.envRows, p.envLoaded, p.guide, p.guideFor = nil, "", "", ""
 	p.rebuild()
-	return tea.Batch(p.envCmd(a.Name), p.guideCmd(a.Name))
+	return tea.Batch(p.envCmd(a.Name), p.guideCmd(a.Name), p.dbsCmd())
+}
+
+func (p *appsPage) dbsCmd() tea.Cmd {
+	return func() tea.Msg {
+		list, err := p.api.Databases(context.Background())
+		return appDBsMsg{list, err}
+	}
+}
+
+// bancos que ainda nao estao ligados no app selecionado
+func (p *appsPage) linkable() []core.DatabaseInfo {
+	a := p.selected()
+	var out []core.DatabaseInfo
+	for _, d := range p.dbs {
+		if a != nil && slices.ContainsFunc(a.Databases, func(l apps.DBLink) bool { return l.Engine == d.Engine && l.Name == d.Name }) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 func (p *appsPage) envCmd(name string) tea.Cmd {
@@ -314,9 +345,24 @@ func (p *appsPage) rebuild() {
 		add(btn("env-save", "Salvar", p.saveEnv))
 	case secSecrets:
 		for _, s := range a.Secrets {
+			if s.Database != "" {
+				continue // URL de banco: desliga pelo banco
+			}
 			name := s.Name
 			add(btn("secret-del:"+name, "apagar", func() tea.Cmd { return p.deleteSecret(name) }))
 		}
+		for _, l := range a.Databases {
+			l := l
+			add(btn("db-unlink:"+l.ID(), "desligar", func() tea.Cmd { return p.unlinkDB(l) }))
+		}
+		add(&field{id: "db-pick", label: "Banco", press: func() tea.Cmd {
+			if n := len(p.linkable()); n > 0 {
+				p.dbPick = (p.dbPick + 1) % n
+			}
+			return nil
+		}})
+		add(&field{id: "db-env", label: "Variavel", input: p.dbEnv})
+		add(btn("db-link", "Ligar banco", p.linkDB))
 		add(&field{id: "secret-name", label: "Secret", input: p.secretName})
 		add(&field{id: "secret-value", label: "Valor", input: p.secretValue})
 		add(btn("secret-save", "Gravar", p.saveSecret))
@@ -491,6 +537,38 @@ func (p *appsPage) saveSecret() tea.Cmd {
 	})
 }
 
+func (p *appsPage) linkDB() tea.Cmd {
+	a := p.selected()
+	list := p.linkable()
+	if a == nil || len(list) == 0 {
+		return nil
+	}
+	d := list[min(p.dbPick, len(list)-1)]
+	name, env := a.Name, strings.TrimSpace(p.dbEnv.Value())
+	shown := cmpOrStr(env, apps.DefaultDBEnv)
+	return p.do(name, "Ligando "+d.Engine+"/"+d.Name, name+" ligado a "+d.Engine+"/"+d.Name+": a URL vai em "+shown+" no proximo deploy.", func(ctx context.Context) error {
+		return p.api.LinkAppDatabase(ctx, name, d.Engine, d.Name, env)
+	})
+}
+
+func (p *appsPage) unlinkDB(l apps.DBLink) tea.Cmd {
+	a := p.selected()
+	if a == nil {
+		return nil
+	}
+	name := a.Name
+	return p.do(name, "Desligando "+l.ID(), name+" desligado de "+l.ID()+" (o database e os dados ficam).", func(ctx context.Context) error {
+		return p.api.UnlinkAppDatabase(ctx, name, l.Engine, l.Name)
+	})
+}
+
+func cmpOrStr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 func (p *appsPage) deleteSecret(secret string) tea.Cmd {
 	a := p.selected()
 	if a == nil {
@@ -562,8 +640,9 @@ func (p *appsPage) update(msg tea.Msg) (tea.Cmd, bool) {
 			p.secretName.SetValue("")
 			p.secretValue.SetValue("")
 		}
+		p.dbEnv.SetValue("")
 		p.rebuild()
-		return tea.Batch(p.checkCmd(), p.guideCmd(msg.app)), true
+		return tea.Batch(p.checkCmd(), p.guideCmd(msg.app), p.dbsCmd()), true
 	case appCreatedMsg:
 		p.busy = ""
 		if msg.err != nil {
@@ -597,6 +676,12 @@ func (p *appsPage) update(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		p.envLoaded = msg.app
 		p.rebuild()
+		return nil, true
+	case appDBsMsg:
+		if msg.err == nil {
+			p.dbs = msg.list
+			p.dbPick = 0
+		}
 		return nil, true
 	case appGuideMsg:
 		if msg.err != nil {
@@ -967,6 +1052,9 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 	muted := t.fg(t.muted)
 	fmt.Fprintf(b, "  %-14s github.com/%s\n", "repositorio", a.Repo)
 	fmt.Fprintf(b, "  %-14s %s\n", "compose", a.ComposeFile())
+	for _, l := range a.Databases {
+		fmt.Fprintf(b, "  %-14s %s em %s\n", "banco", l.ID(), l.Env)
+	}
 	if a.Commit != "" {
 		fmt.Fprintf(b, "  %-14s %s\n", "no ar", shortCommit(a.Commit))
 	}
@@ -1046,18 +1134,58 @@ func (p *appsPage) viewEnv(b *strings.Builder, w int) {
 func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
 	t := p.th
 	muted := t.fg(t.muted)
-	if len(a.Secrets) == 0 {
-		b.WriteString(muted.Render("  nenhum secret") + "\n")
-	}
-	for _, s := range a.Secrets {
-		fmt.Fprintf(b, "  %-26s %s ", s.Name, muted.Render("${CAIS_SECRETS}/"+s.Name))
+	// mark escreve o campo id na linha atual (botoes de cada item)
+	mark := func(id string) {
 		for i, f := range p.fields {
-			if f.id == "secret-del:"+s.Name {
+			if f.id == id {
 				if p.inForm && i == p.focus {
 					p.focusLine = strings.Count(b.String(), "\n")
 				}
 				b.WriteString(p.zones.Mark(f.id, p.render(f, i)))
 			}
+		}
+	}
+
+	b.WriteString(t.bold().Render("Bancos da infra") + "\n")
+	if len(a.Databases) == 0 {
+		b.WriteString(muted.Render("  nenhum banco ligado: o app nao usa o Postgres/MySQL da infra") + "\n")
+	}
+	for _, l := range a.Databases {
+		fmt.Fprintf(b, "  %-22s %-16s %s ", l.ID(), l.Env, muted.Render("e ${CAIS_SECRETS}/"+l.File()))
+		mark("db-unlink:" + l.ID())
+		b.WriteString("\n")
+	}
+	list := p.linkable()
+	pick := "nenhum banco criado (aba Infra -> Novo banco)"
+	if len(list) > 0 {
+		d := list[min(p.dbPick, len(list)-1)]
+		pick = "‹ " + d.Engine + "/" + d.Name + " ›"
+	}
+	for i, f := range p.fields {
+		if f.id == "db-pick" {
+			marker, ls := "  ", t.fg(t.text).Width(18)
+			if p.inForm && i == p.focus {
+				marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(18)
+				p.focusLine = strings.Count(b.String(), "\n")
+			}
+			b.WriteString(p.zones.Mark(f.id, marker+ls.Render("Banco")+p.render(&field{label: pick}, i)) + "\n")
+		}
+	}
+	p.row(b, "db-env")
+	p.inline(b, "db-link")
+	b.WriteString(muted.Width(w).Render("No deploy o cais le a credencial guardada e entrega a URL na variavel (padrao DATABASE_URL) "+
+		"e no arquivo ${CAIS_SECRETS}/<variavel em minusculas>. Desligar nao apaga o database.") + "\n")
+
+	b.WriteString("\n" + t.bold().Render("Secrets") + "\n")
+	if len(a.Secrets) == 0 {
+		b.WriteString(muted.Render("  nenhum secret") + "\n")
+	}
+	for _, s := range a.Secrets {
+		fmt.Fprintf(b, "  %-26s %s ", s.Name, muted.Render("${CAIS_SECRETS}/"+s.Name))
+		if s.Database != "" {
+			b.WriteString(t.fg(t.accent).Render("URL do banco " + s.Database))
+		} else {
+			mark("secret-del:" + s.Name)
 		}
 		b.WriteString("\n")
 	}

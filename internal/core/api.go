@@ -84,8 +84,14 @@ type API interface {
 	// CreateDatabase cria um database e um usuario com senha nova no
 	// Postgres ou MySQL da infra e devolve a credencial.
 	CreateDatabase(ctx context.Context, req DatabaseRequest) (DatabaseInfo, error)
-	// Databases lista os databases criados pelo cais, com a credencial.
+	// Databases lista os databases criados pelo cais, com a credencial e
+	// os apps que usam cada um.
 	Databases(ctx context.Context) ([]DatabaseInfo, error)
+	// LinkAppDatabase liga o app a um database da infra: o deploy entrega a
+	// URL em env (vazio = DATABASE_URL) e em ${CAIS_SECRETS}/<env minusculo>.
+	LinkAppDatabase(ctx context.Context, app, engine, name, env string) error
+	// UnlinkAppDatabase desliga o app do database (o database e os dados ficam).
+	UnlinkAppDatabase(ctx context.Context, app, engine, name string) error
 }
 
 // ConfigInfo e o config.yaml atual.

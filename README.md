@@ -160,7 +160,21 @@ O cais cria o database e um usuario de mesmo nome com senha nova, que so
 acessa esse database, e mostra a credencial: host (`postgres:5432` ou
 `mysql:3306`, pela rede `postgres_network`/`mysql_network`), usuario, senha e
 a URL completa, pra por nas variaveis ou num secret do app. A senha fica
-guardada no cais (`cais db list` mostra de novo).
+guardada no cais (`cais db list` mostra de novo, com os apps que usam cada
+database).
+
+Ligue o database ao app (na hora de criar, com `-app` ou o campo App do Novo
+banco, ou depois em Apps -> Secrets -> Bancos da infra):
+
+```sh
+cais db create postgres portal -extensions postgis -app portal   # cria e ja liga
+cais app db portal postgres/portal -env DATABASE_URL             # liga um existente
+cais app db portal off postgres/portal                           # desliga (o database fica)
+```
+
+A cada deploy o cais le a credencial guardada e entrega a URL na variavel
+(padrao `DATABASE_URL`, no `.env`) e no arquivo `${CAIS_SECRETS}/database_url`;
+ninguem cola senha a mao, e a aba Secrets mostra que o app usa o banco.
 
 O Garage publica a API S3 em `https://s3.<domain>` (ou `hosts.s3`), com
 regiao `garage` e enderecamento por caminho (path-style). O Setup prepara

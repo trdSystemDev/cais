@@ -87,6 +87,7 @@ func appsCore(t *testing.T) (*core.Core, *fakeApps, *githubtest.Server) {
 		GitHubURL:     gh.URL,
 		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil },
 		ContainerLogs: func(_ context.Context, name string) (string, error) { return "log do " + name, nil },
+		ExecInput:     func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 	})
 	cfg := config.Default()
 	cfg.Domain, cfg.Email, cfg.TLS = "trd.localhost", "a@trd.localhost", config.TLSSelfSigned
@@ -358,4 +359,33 @@ func TestAppsParadoEVariaveisEscondidas(t *testing.T) {
 	}
 	click(t, m, "env-value:0")
 	waitFor(t, m, "nao-pode-aparecer")
+}
+
+// o banco da infra ligado aparece em Secrets; outro banco liga pelo seletor
+func TestAppsBancoLigadoAparece(t *testing.T) {
+	m, _, _ := openApps(t)
+	ctx := context.Background()
+	c := m.api.(*core.Core)
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	if _, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "loja", App: "loja"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "relatorios"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "sem deploy")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Secrets")
+	waitFor(t, m, "postgres/loja")
+	waitFor(t, m, "URL do banco postgres/loja")
+	waitFor(t, m, "‹ postgres/relatorios ›")
+	typeIn(t, m, "db-env", "RELATORIOS_URL")
+	click(t, m, "db-link")
+	waitFor(t, m, "loja ligado a postgres/relatorios")
+	if a := appState(t, m, "loja"); len(a.Databases) != 2 {
+		t.Fatalf("bancos %+v", a.Databases)
+	}
+	waitFor(t, m, "e ${CAIS_SECRETS}/relatorios_url") // a lista chega pelo estado
+	click(t, m, "db-unlink:postgres/relatorios")
+	waitFor(t, m, "desligado de postgres/relatorios")
 }

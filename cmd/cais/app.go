@@ -84,6 +84,7 @@ func runApp(args []string) error {
 	unset := fs.String("unset", "", "variaveis a remover, separadas por virgula")
 	volumes := fs.Bool("volumes", false, "delete: apaga tambem os volumes do compose (os dados)")
 	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
+	dbEnv := fs.String("env", "", "db: variavel da URL do banco (padrao DATABASE_URL)")
 	pos := parseInterspersed(fs, args)
 	arg := func(i int) string {
 		if i < len(pos) {
@@ -93,7 +94,7 @@ func runApp(args []string) error {
 	}
 	need := map[string][2]int{ // minimo e maximo de argumentos
 		"create": {2, 2}, "deploy": {1, 1}, "guide": {1, 1}, "env": {1, -1},
-		"secrets": {1, 1}, "secret": {2, 2}, "restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "delete": {1, 1},
+		"secrets": {1, 1}, "secret": {2, 2}, "restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "delete": {1, 1}, "db": {1, 3},
 	}
 	lim, ok := need[sub]
 	if !ok {
@@ -152,7 +153,11 @@ func runApp(args []string) error {
 			fmt.Printf("%s sem secrets.\n", name)
 		}
 		for _, s := range list {
-			fmt.Printf("  %s  (${CAIS_SECRETS}/%s)\n", s.Name, s.Name)
+			extra := ""
+			if s.Database != "" {
+				extra = "  URL do banco " + s.Database + " (gerenciado pelo cais)"
+			}
+			fmt.Printf("  %s  (${CAIS_SECRETS}/%s)%s\n", s.Name, s.Name, extra)
 		}
 	case "secret":
 		value, err := readSecret("Valor de " + arg(1) + ": ")
@@ -173,6 +178,8 @@ func runApp(args []string) error {
 			return err
 		}
 		fmt.Printf("%s parado. Volta com: cais app restart %s\n", name, name)
+	case "db":
+		return appDB(ctx, c, name, pos[1:], *dbEnv)
 	case "delete":
 		what := "containers, imagens, codigo, variaveis e secrets"
 		if *volumes {
@@ -237,11 +244,69 @@ func appEnv(ctx context.Context, c *rpc.Client, name string, set, unset []string
 	return nil
 }
 
+// appDB mostra, liga ou desliga os bancos da infra do app:
+// cais app db <app> | <engine/nome> [-env VAR] | off <engine/nome>
+func appDB(ctx context.Context, c *rpc.Client, app string, args []string, env string) error {
+	parse := func(s string) (string, string, error) {
+		engine, name, ok := strings.Cut(s, "/")
+		if !ok || engine == "" || name == "" {
+			return "", "", fmt.Errorf("%q: use engine/nome, ex: postgres/%s", s, app)
+		}
+		return engine, name, nil
+	}
+	switch {
+	case len(args) == 0:
+		list, err := c.CheckApps(ctx)
+		if err != nil {
+			return err
+		}
+		for _, a := range list.List {
+			if a.Name != app {
+				continue
+			}
+			if len(a.Databases) == 0 {
+				fmt.Printf("%s nao usa banco da infra. Ligue com: cais app db %s postgres/<database>\n", app, app)
+			}
+			for _, l := range a.Databases {
+				fmt.Printf("  %-22s %s  (e ${CAIS_SECRETS}/%s)\n", l.ID(), l.Env, l.File())
+			}
+			return nil
+		}
+		return fmt.Errorf("app %s nao existe", app)
+	case args[0] == "off" && len(args) == 2:
+		engine, name, err := parse(args[1])
+		if err != nil {
+			return err
+		}
+		if err := c.UnlinkAppDatabase(ctx, app, engine, name); err != nil {
+			return err
+		}
+		fmt.Printf("%s desligado do banco %s (o database e os dados ficam); vale no proximo deploy.\n", app, args[1])
+	case len(args) == 1:
+		engine, name, err := parse(args[0])
+		if err != nil {
+			return err
+		}
+		if err := c.LinkAppDatabase(ctx, app, engine, name, env); err != nil {
+			return err
+		}
+		if env == "" {
+			env = apps.DefaultDBEnv
+		}
+		fmt.Printf("%s ligado ao banco %s: a URL vai em %s e em ${CAIS_SECRETS}/%s no proximo deploy.\n", app, args[0], env, strings.ToLower(env))
+	default:
+		return errors.New("uso: cais app db <app> [engine/nome [-env VAR] | off engine/nome]")
+	}
+	return nil
+}
+
 // runDB cria e lista bancos na infra.
 func runDB(args []string) error {
 	sub, args := subcommand(args)
 	fs, socket := newFlags("db " + sub)
 	exts := fs.String("extensions", "", "extensoes do Postgres, separadas por virgula (ex: postgis)")
+	app := fs.String("app", "", "liga o database a este app (a URL vai em -env no deploy)")
+	env := fs.String("env", "", "variavel da URL no app (padrao DATABASE_URL)")
 	pos := parseInterspersed(fs, args)
 	c, err := connect(*socket)
 	if err != nil {
@@ -255,9 +320,12 @@ func runDB(args []string) error {
 		if len(pos) != 2 {
 			return errors.New("uso: cais db create postgres|mysql <nome> [-extensions postgis]")
 		}
-		info, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: pos[0], Name: pos[1], Extensions: splitList(*exts)})
+		info, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: pos[0], Name: pos[1], Extensions: splitList(*exts), App: *app, Env: *env})
 		if err != nil {
 			return err
+		}
+		for _, u := range info.Apps {
+			defer fmt.Printf("Ligado ao app %s: a URL vai em %s no proximo deploy.\n", u.App, u.Env)
 		}
 		fmt.Printf("Database %s criado no %s.\n\n", info.Name, info.Engine)
 		printDB(info)
@@ -283,6 +351,11 @@ func runDB(args []string) error {
 }
 
 func printDB(info core.DatabaseInfo) {
+	defer func() {
+		for _, u := range info.Apps {
+			fmt.Printf("  app       %s (%s)\n", u.App, u.Env)
+		}
+	}()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(w, "  %s\t%s\n", "engine", info.Engine)
 	fmt.Fprintf(w, "  %s\t%s\n", "database", info.Name)

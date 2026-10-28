@@ -570,3 +570,62 @@ func TestDeleteApagaOAppEDerrubaOProjeto(t *testing.T) {
 		t.Errorf("excluir de novo: %v", err)
 	}
 }
+
+func TestBancoLigadoEntraNoDeploy(t *testing.T) {
+	m, _, d := newManager(t)
+	urls := map[string]string{"postgres/loja": "postgres://loja:s3nh4@postgres:5432/loja"}
+	m.DBCredentials = func(engine, name string) (string, error) {
+		if u, ok := urls[engine+"/"+name]; ok {
+			return u, nil
+		}
+		return "", fmt.Errorf("o database %s/%s nao existe", engine, name)
+	}
+	m.Create(App{Name: "web", Repo: "o/web"})
+	m.SetEnv("web", map[string]string{"DATABASE_URL": "colada a mao"})
+
+	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "nao"}); err == nil {
+		t.Error("ligou banco que nao existe")
+	}
+	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "loja"}); err == nil || !strings.Contains(err.Error(), "ja e uma variavel do app") {
+		t.Fatalf("variavel repetida: %v", err)
+	}
+	m.SetEnv("web", map[string]string{"NODE_ENV": "production"})
+	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "loja"}); err != nil {
+		t.Fatal(err)
+	}
+	// o secret aparece na hora, marcado como do banco
+	list, _ := m.Secrets("web")
+	if len(list) != 1 || list[0].Name != "database_url" || list[0].Database != "postgres/loja" {
+		t.Fatalf("secrets %+v", list)
+	}
+	if err := m.DeleteSecret("web", "database_url"); err == nil {
+		t.Error("apagou a URL do banco como secret comum")
+	}
+	if err := m.SetEnv("web", map[string]string{"DATABASE_URL": "x"}); err == nil {
+		t.Error("deixou criar variavel com o nome da URL do banco")
+	}
+
+	if _, err := m.Deploy(context.Background(), "web", ""); err != nil {
+		t.Fatal(err)
+	}
+	if d.envSeen["DATABASE_URL"] != urls["postgres/loja"] || d.envSeen["NODE_ENV"] != "production" {
+		t.Errorf(".env %v", d.envSeen)
+	}
+	// a senha mudou no cais: o proximo deploy ja leva a nova
+	urls["postgres/loja"] = "postgres://loja:nova@postgres:5432/loja"
+	m.Deploy(context.Background(), "web", "")
+	data, _ := os.ReadFile(filepath.Join(m.SecretsPath("web"), "database_url"))
+	if d.envSeen["DATABASE_URL"] != urls["postgres/loja"] || string(data) != urls["postgres/loja"] {
+		t.Errorf("nao atualizou: .env %q arquivo %q", d.envSeen["DATABASE_URL"], data)
+	}
+
+	if err := m.UnlinkDB("web", "postgres", "loja"); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := m.Secrets("web"); len(list) != 0 {
+		t.Errorf("o arquivo da URL ficou: %+v", list)
+	}
+	if a, _ := m.Get("web"); len(a.Databases) != 0 {
+		t.Errorf("continua ligado: %+v", a.Databases)
+	}
+}

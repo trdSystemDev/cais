@@ -24,6 +24,8 @@ type dbPanel struct {
 	engine  string // aberto quando nao vazio
 	name    *textinput.Model
 	exts    *textinput.Model
+	app     *textinput.Model // opcional: ja liga no app
+	env     *textinput.Model
 	focus   int
 	busy    bool
 	err     string
@@ -53,13 +55,15 @@ func newDBPanel(api core.API, zones *zone.Manager, th theme) *dbPanel {
 	}
 	p.name = mk("nome (ex: meu_app)")
 	p.exts = mk("ex: postgis (opcional)")
+	p.app = mk("opcional: ja liga no app")
+	p.env = mk("DATABASE_URL")
 	p.setTheme(th)
 	return p
 }
 
 func (p *dbPanel) setTheme(th theme) {
 	p.th = th
-	for _, ti := range []*textinput.Model{p.name, p.exts} {
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.app, p.env} {
 		s := textinput.DefaultStyles(true)
 		for _, st := range []*textinput.StyleState{&s.Focused, &s.Blurred} {
 			st.Text = lipgloss.NewStyle().Foreground(th.fieldFg).Background(th.fieldBg)
@@ -75,9 +79,9 @@ func (p *dbPanel) open() bool { return p.engine != "" }
 // ids na ordem do Tab; extensoes so no Postgres
 func (p *dbPanel) ids() []string {
 	if p.engine == "postgres" {
-		return []string{"db-name", "db-exts", "db-create", "db-close"}
+		return []string{"db-name", "db-exts", "db-app", "db-env", "db-create", "db-close"}
 	}
-	return []string{"db-name", "db-create", "db-close"}
+	return []string{"db-name", "db-app", "db-env", "db-create", "db-close"}
 }
 
 func (p *dbPanel) input(id string) *textinput.Model {
@@ -86,6 +90,10 @@ func (p *dbPanel) input(id string) *textinput.Model {
 		return p.name
 	case "db-exts":
 		return p.exts
+	case "db-app":
+		return p.app
+	case "db-env":
+		return p.env
 	}
 	return nil
 }
@@ -110,15 +118,17 @@ func (p *dbPanel) setFocus(i int) tea.Cmd {
 
 func (p *dbPanel) show(engine string) tea.Cmd {
 	p.engine, p.err, p.created, p.busy, p.list = engine, "", nil, false, nil
-	p.name.SetValue("")
-	p.exts.SetValue("")
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.app, p.env} {
+		ti.SetValue("")
+	}
 	return tea.Batch(p.setFocus(0), p.listCmd())
 }
 
 func (p *dbPanel) close() {
 	p.engine = ""
-	p.name.Blur()
-	p.exts.Blur()
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.app, p.env} {
+		ti.Blur()
+	}
 }
 
 func (p *dbPanel) listCmd() tea.Cmd {
@@ -132,7 +142,8 @@ func (p *dbPanel) create() tea.Cmd {
 	if p.busy {
 		return nil
 	}
-	req := core.DatabaseRequest{Engine: p.engine, Name: strings.TrimSpace(p.name.Value())}
+	req := core.DatabaseRequest{Engine: p.engine, Name: strings.TrimSpace(p.name.Value()),
+		App: strings.TrimSpace(p.app.Value()), Env: strings.TrimSpace(p.env.Value())}
 	if p.engine == "postgres" {
 		req.Extensions = splitComma(p.exts.Value())
 	}
@@ -176,8 +187,9 @@ func (p *dbPanel) update(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		p.created = &msg.info
-		p.name.SetValue("")
-		p.exts.SetValue("")
+		for _, ti := range []*textinput.Model{p.name, p.exts, p.app, p.env} {
+			ti.SetValue("")
+		}
 		return p.listCmd(), true
 	case dbListMsg:
 		if msg.err == nil {
@@ -251,7 +263,7 @@ func (p *dbPanel) view(w, h int) string {
 	for i, id := range p.ids() {
 		focused := i == p.focus
 		if ti := p.input(id); ti != nil {
-			label := map[string]string{"db-name": "Database", "db-exts": "Extensoes"}[id]
+			label := map[string]string{"db-name": "Database", "db-exts": "Extensoes", "db-app": "App", "db-env": "Variavel"}[id]
 			marker, ls := "  ", t.fg(t.text).Width(12)
 			if focused {
 				marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(12)
@@ -271,7 +283,11 @@ func (p *dbPanel) view(w, h int) string {
 		b.WriteString("\n" + wrap.Foreground(t.danger).Render(p.err) + "\n")
 	}
 	if c := p.created; c != nil {
-		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render("Database "+c.Name+" criado. A senha fica guardada; copie pro app:") + "\n")
+		msg := "Database " + c.Name + " criado. A senha fica guardada; copie pro app:"
+		for _, u := range c.Apps {
+			msg = "Database " + c.Name + " criado e ligado ao app " + u.App + " (" + u.Env + " no proximo deploy):"
+		}
+		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render(msg) + "\n")
 		writeDB(&b, *c, t, w)
 	}
 	var mine []core.DatabaseInfo
@@ -292,5 +308,8 @@ func (p *dbPanel) view(w, h int) string {
 func writeDB(b *strings.Builder, d core.DatabaseInfo, t theme, w int) {
 	wrap := lipgloss.NewStyle().Width(w - 6)
 	fmt.Fprintf(b, "  %-9s %s  usuario %s  senha %s\n", d.Name, t.fg(t.muted).Render(fmt.Sprintf("%s:%d", d.Host, d.Port)), d.User, d.Password)
+	for _, u := range d.Apps {
+		fmt.Fprintf(b, "  %-9s app %s (%s)\n", "", u.App, u.Env)
+	}
 	b.WriteString(wrap.Foreground(t.accent).Render("  "+d.URL) + "\n")
 }

@@ -41,6 +41,8 @@ const (
 	MethodAppGuide         = "app.guide"         // params: appParams
 	MethodDatabaseCreate   = "db.create"         // params: core.DatabaseRequest
 	MethodDatabases        = "db.list"
+	MethodAppDBLink        = "app.db.link"   // params: appDBParams
+	MethodAppDBUnlink      = "app.db.unlink" // params: appDBParams
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -131,6 +133,13 @@ type appSecretParams struct {
 	Name   string `json:"name"`
 	Secret string `json:"secret"`
 	Value  string `json:"value,omitempty"`
+}
+
+type appDBParams struct {
+	App    string `json:"app"`
+	Engine string `json:"engine"`
+	Name   string `json:"name"`
+	Env    string `json:"env,omitempty"`
 }
 
 type textResult struct {

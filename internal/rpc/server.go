@@ -257,6 +257,20 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodDatabases:
 		return wrap(s.api.Databases(s.ctx))
 
+	case MethodAppDBLink:
+		var p appDBParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.LinkAppDatabase(s.ctx, p.App, p.Engine, p.Name, p.Env))
+
+	case MethodAppDBUnlink:
+		var p appDBParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.UnlinkAppDatabase(s.ctx, p.App, p.Engine, p.Name))
+
 	case MethodInfraCheck:
 		return wrap(s.api.CheckStacks(s.ctx))
 
