@@ -64,7 +64,9 @@ type Deploy struct {
 
 // App e o que o cais guarda de um app (app.yaml).
 type App struct {
-	Name     string    `yaml:"-" json:"name"`
+	Name string `yaml:"-" json:"name"`
+	// Repo e o repositorio no GitHub (dono/nome), quando veio do import.
+	Repo     string    `yaml:"repo,omitempty" json:"repo,omitempty"`
 	Routes   []Route   `yaml:"routes,omitempty" json:"routes,omitempty"`
 	Database *Database `yaml:"database,omitempty" json:"database,omitempty"`
 	// Spec e a configuracao de onde o compose sai no deploy por tag. Sem

@@ -145,6 +145,16 @@ func Render(s Spec, tag string) ([]byte, error) {
 	return append([]byte("# gerado pelo cais a partir da spec do app -- nao edite\n"), data...), nil
 }
 
+// SetRepo grava o repositorio do GitHub de onde o app veio.
+func (m Manager) SetRepo(name, repo string) error {
+	a, err := m.Get(name)
+	if err != nil {
+		return err
+	}
+	a.Repo = repo
+	return m.save(a)
+}
+
 // SetSpec grava a spec do app. Nao faz deploy: a proxima tag usa a spec nova.
 func (m Manager) SetSpec(name string, s Spec) error {
 	a, err := m.Get(name)
@@ -324,7 +334,9 @@ func (m Manager) SetSecret(ctx context.Context, name, secret string, value []byt
 // repositorio. E so sugestao: quem aplica e o usuario, editando o que
 // quiser (banco, porta, variaveis) antes.
 type Plan struct {
-	App      string        `json:"app"`
+	App string `json:"app"`
+	// Repo e o repositorio no GitHub (dono/nome), quando o plano veio de la.
+	Repo     string        `json:"repo,omitempty"`
 	Spec     Spec          `json:"spec"`
 	Routes   []Route       `json:"routes,omitempty"`
 	Database *Database     `json:"database,omitempty"`

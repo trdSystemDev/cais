@@ -209,6 +209,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.click(msg)
 	case tea.KeyPressMsg:
 		return m, m.key(msg)
+	case tea.PasteMsg:
+		// colar chega como mensagem propria, nao como teclas: vai pro campo
+		// com foco (chave do GitHub, link do repositorio, secrets)
+		if m.disconnected {
+			return m, nil
+		}
+		switch m.tab {
+		case tabSetup:
+			return m, m.setup.paste(msg)
+		case tabApps:
+			return m, m.apps.paste(msg)
+		}
+		return m, nil
 	case infraLogsMsg:
 		if msg.generation != m.logsGeneration || m.tab != tabInfra || m.disconnected {
 			return m, nil

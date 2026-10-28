@@ -21,6 +21,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/detect"
+	"github.com/trdSystemDev/cais/internal/github"
 )
 
 // secoes do detalhe de um app
@@ -142,8 +143,8 @@ func newAppsPage(api core.API, zones *zone.Manager, th theme) *appsPage {
 	p.secretName = p.input("nome (ex: jwt_secret)", 24)
 	p.secretValue = p.input("valor", 24)
 	p.secretValue.EchoMode = textinput.EchoPassword
-	p.impName = p.input("nome do repositorio", 28)
-	p.impDir = p.input("pasta com Dockerfile", 28)
+	p.impName = p.input("vazio = nome do repositorio", 28)
+	p.impDir = p.input("https://github.com/dono/repo ou pasta", 40)
 	p.impPort = p.input("8080", 8)
 	p.impHost = p.input("vazio = sem rota", 28)
 	p.impVolumes = p.input("/app/uploads, /data", 28)
@@ -374,7 +375,7 @@ func (p *appsPage) rebuild() {
 	if p.importing {
 		add(&field{id: "imp-name", label: "Nome do app", input: p.impName})
 		if p.plan == nil {
-			add(&field{id: "imp-dir", label: "Pasta do repositorio", input: p.impDir})
+			add(&field{id: "imp-dir", label: "Repositorio", input: p.impDir})
 			add(btn("imp-analyze", "Analisar", p.analyze))
 			add(btn("imp-cancel", "Cancelar", p.cancelImport))
 		} else {
@@ -409,6 +410,9 @@ func (p *appsPage) rebuild() {
 		add(&field{id: "deploy", label: "Deploy", press: p.deploy, disabled: noSpec})
 		add(btn("restart", "Reiniciar", p.restart))
 		add(btn("stop", "Parar", p.stop))
+		if a.Repo != "" {
+			add(btn("ci-pr", "Abrir PR do CI", p.proposeCI))
+		}
 	case secRoutes:
 		for i, r := range p.routes {
 			i := i
@@ -675,19 +679,40 @@ func (p *appsPage) cancelImport() tea.Cmd {
 	return tea.Batch(p.loadSelected(true), p.setFocus(0))
 }
 
-// analyze le da pasta so os arquivos da analise e pede o plano ao core.
+// analyze pede o plano ao core: pelo GitHub App quando e um link (o app
+// tem o nome do repositorio) ou lendo da pasta local so os arquivos da
+// analise.
 func (p *appsPage) analyze() tea.Cmd {
-	name, dir := strings.TrimSpace(p.impName.Value()), strings.TrimSpace(p.impDir.Value())
-	if name == "" || dir == "" {
-		p.setStatus("danger", "Informe o nome do app e a pasta do repositorio.")
+	name, src := strings.TrimSpace(p.impName.Value()), strings.TrimSpace(p.impDir.Value())
+	if src == "" {
+		p.setStatus("danger", "Informe o link do repositorio no GitHub (ou uma pasta local).")
+		return nil
+	}
+	fromGitHub := false
+	if _, err := os.Stat(src); err != nil {
+		if _, err := github.ParseRepo(src); err == nil {
+			fromGitHub = true
+		}
+	}
+	if !fromGitHub && name == "" {
+		p.setStatus("danger", "Pasta local: informe o nome do app (o nome do repositorio no GitHub).")
 		return nil
 	}
 	p.busy = "Analisando"
+	p.detailErr = ""
 	p.setStatus("warn", "Analisando o repositorio...")
 	return func() tea.Msg {
+		ctx := context.Background()
+		if fromGitHub {
+			plan, err := p.api.PlanAppFromGitHub(ctx, src)
+			if err == nil && name != "" && name != plan.App {
+				err = fmt.Errorf("o app precisa ter o nome do repositorio (%s): o CI usa esse nome; deixe o nome vazio", plan.App)
+			}
+			return appPlanMsg{plan, err}
+		}
 		files := detect.Files{}
 		for _, path := range detect.Wanted {
-			data, err := os.ReadFile(filepath.Join(dir, path))
+			data, err := os.ReadFile(filepath.Join(src, path))
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
@@ -697,16 +722,41 @@ func (p *appsPage) analyze() tea.Cmd {
 			files[path] = data
 		}
 		if len(files) == 0 {
-			return appPlanMsg{err: fmt.Errorf("nenhum arquivo do app em %s (Dockerfile, .env.example...)", dir)}
+			return appPlanMsg{err: fmt.Errorf("nenhum arquivo do app em %s (Dockerfile, .env.example...)", src)}
 		}
-		plan, err := p.api.PlanApp(context.Background(), name, files)
+		plan, err := p.api.PlanApp(ctx, name, files)
 		return appPlanMsg{plan, err}
+	}
+}
+
+func (p *appsPage) proposeCI() tea.Cmd {
+	a := p.selected()
+	if a == nil || a.Repo == "" {
+		return nil
+	}
+	name := a.Name
+	var link string
+	cmd := p.do(name, "Abrindo o PR com o .woodpecker.yml", "", false, func(ctx context.Context) error {
+		var err error
+		link, err = p.api.ProposeAppCI(ctx, name)
+		return err
+	})
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg := cmd().(appActionMsg)
+		if msg.err == nil {
+			msg.ok = "PR aberto: " + link + " -- revise e faca o merge."
+		}
+		return msg
 	}
 }
 
 // fillPlan leva o plano pros campos editaveis.
 func (p *appsPage) fillPlan(pl apps.Plan) {
 	p.plan = &pl
+	p.impName.SetValue(pl.App)
 	p.impPort.SetValue("")
 	if pl.Spec.Port > 0 {
 		p.impPort.SetValue(strconv.Itoa(pl.Spec.Port))
@@ -963,7 +1013,7 @@ func (p *appsPage) viewList(w, h int) string {
 	}
 	b.WriteString(p.zones.Mark("app-new", newBtn.Render("+ Novo app")) + "\n\n")
 	if len(p.list) == 0 {
-		b.WriteString(t.fg(t.muted).Render(lipgloss.NewStyle().Width(w - 4).Render("Nenhum app ainda. Crie com + Novo app a partir da pasta do repositorio.")))
+		b.WriteString(t.fg(t.muted).Render(lipgloss.NewStyle().Width(w - 4).Render("Nenhum app ainda. Crie com + Novo app a partir do link do repositorio no GitHub.")))
 	}
 	for i, a := range p.list {
 		mark, status, c := appStatus(a, t)
@@ -1112,7 +1162,7 @@ func (p *appsPage) viewDetail(w, h int) string {
 	case p.importing:
 		p.viewImport(&body, inner)
 	case a == nil:
-		body.WriteString(muted.Width(inner).Render(("Um app precisa so do Dockerfile no repositorio. Clique em + Novo app, informe a pasta do repositorio " +
+		body.WriteString(muted.Width(inner).Render(("Um app precisa so do Dockerfile no repositorio. Clique em + Novo app, cole o link do repositorio no GitHub " +
 			"e o cais propoe a configuracao: porta, dominio, volumes, variaveis, secrets e banco. " +
 			"Voce revisa tudo antes de aplicar.")))
 	default:
@@ -1185,6 +1235,9 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 	} else {
 		b.WriteString(muted.Render("  app sem spec (modo compose): o deploy vem pelo CLI com o compose pronto") + "\n")
 	}
+	if a.Repo != "" {
+		b.WriteString(fmt.Sprintf("  %-12s github.com/%s\n", "repositorio", a.Repo))
+	}
 	for _, r := range a.Routes {
 		b.WriteString(fmt.Sprintf("  %-12s https://%s%s -> %s:%d\n", "rota", r.Host, r.Path, r.Service, r.Port))
 	}
@@ -1217,7 +1270,7 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 	b.WriteString("\n")
 	p.row(b, "tag")
 	b.WriteString("\n")
-	p.inline(b, "deploy", "restart", "stop")
+	p.inline(b, "deploy", "restart", "stop", "ci-pr")
 	if a.Spec != nil {
 		b.WriteString("\n" + muted.Width(w).Render(("O CI faz o build e pede o deploy da tag sozinho; aqui e pra subir uma tag na mao ou voltar pra uma anterior. Se o deploy falhar, a versao anterior volta.")) + "\n")
 	}
@@ -1300,7 +1353,7 @@ func (p *appsPage) viewImport(b *strings.Builder, w int) {
 		p.row(b, "imp-dir")
 		b.WriteString("\n")
 		p.inline(b, "imp-analyze", "imp-cancel")
-		b.WriteString("\n" + muted.Width(w).Render(("Le so Dockerfile, .env.example e os manifestos (package.json, requirements.txt, composer.json...). O link do GitHub entra aqui quando o GitHub App estiver ligado.")) + "\n")
+		b.WriteString("\n" + muted.Width(w).Render(("Cole o link do repositorio no GitHub (privado, pelo GitHub App do cais) ou o caminho de uma pasta local. O cais le so Dockerfile, .env.example e os manifestos (package.json, requirements.txt, composer.json...). O app tem o nome do repositorio: o CI usa esse nome.")) + "\n")
 		return
 	}
 	a := p.plan.Analysis
@@ -1471,4 +1524,18 @@ func (m *model) viewAppLogs(a core.AppStatus, w, h int) string {
 	}
 	m.writeLogs(&b, empty, w, h)
 	return t.panel(p.inForm, w-2, h).MaxHeight(h + 2).Render(b.String())
+}
+
+// paste entrega o texto colado ao campo de texto com foco.
+func (p *appsPage) paste(msg tea.PasteMsg) tea.Cmd {
+	if !p.typing() {
+		return nil
+	}
+	f := p.fields[p.focus]
+	if f.off() {
+		return nil
+	}
+	ti, cmd := f.input.Update(msg)
+	*f.input = ti
+	return cmd
 }

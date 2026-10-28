@@ -2,9 +2,15 @@ package ui
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/github/githubtest"
 )
 
 // openSetup abre a TUI ja na aba Setup.
@@ -112,4 +118,63 @@ func TestSetupDisparadoPorForaApareceNaAba(t *testing.T) {
 	}
 	waitFor(t, m, "Execucao")
 	waitFor(t, m, "✓ Subir woodpecker")
+}
+
+func openSetupGitHub(t *testing.T) (*model, *githubtest.Server) {
+	t.Helper()
+	gh := githubtest.New(t, 5512022, map[string]map[string]string{
+		"trdSystemDev/loja": {"Dockerfile": "FROM nginx\nEXPOSE 80\n"},
+	})
+	root := t.TempDir()
+	c := core.New(core.Deps{CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
+		SecretsDir: filepath.Join(root, "secrets"), AppsDir: filepath.Join(root, "apps"), GitHubURL: gh.URL,
+		ComposePS: func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
+	m := open(t, c)
+	click(t, m, "tab:Setup")
+	waitFor(t, m, "Ainda sem configuracao")
+	fill(t, m, "trd.localhost")
+	m.setup.get("ghAppID").input.SetValue("5512022")
+	return m, gh
+}
+
+// a chave colada no campo de uma linha (quebras viram espaco) e refeita e
+// gravada; o import pelo GitHub passa a funcionar
+func TestSetupGravaAChaveDoGitHubColada(t *testing.T) {
+	m, gh := openSetupGitHub(t)
+	m.setup.get("ghKey").input.SetValue(strings.ReplaceAll(string(gh.Key), "\n", " "))
+	click(t, m, "save")
+	waitFor(t, m, "chave do GitHub App gravada")
+	if v := m.setup.get("ghKey").input.Value(); v != "" {
+		t.Error("o campo da chave nao foi limpo depois de gravar")
+	}
+	if strings.Contains(screen(m), "PRIVATE KEY") {
+		t.Fatal("a chave apareceu na tela")
+	}
+	plan, err := m.api.PlanAppFromGitHub(context.Background(), "trdSystemDev/loja")
+	if err != nil || plan.App != "loja" {
+		t.Fatalf("import com a chave gravada pela TUI: %+v %v", plan, err)
+	}
+}
+
+func TestSetupGravaAChaveDoGitHubPeloCaminho(t *testing.T) {
+	m, gh := openSetupGitHub(t)
+	file := filepath.Join(t.TempDir(), "cais.private-key.pem")
+	os.WriteFile(file, gh.Key, 0o600)
+	m.setup.get("ghKey").input.SetValue(file)
+	click(t, m, "save")
+	waitFor(t, m, "chave do GitHub App gravada")
+	if _, err := m.api.PlanAppFromGitHub(context.Background(), "trdSystemDev/loja"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetupRecusaChaveInvalida(t *testing.T) {
+	m, _ := openSetupGitHub(t)
+	m.setup.get("ghKey").input.SetValue("-----BEGIN RSA PRIVATE KEY----- nao e base64 -----END RSA PRIVATE KEY-----")
+	click(t, m, "save")
+	waitFor(t, m, "chave do GitHub App invalida")
+	// nada foi gravado: nem a config
+	if info, _ := m.api.LoadConfig(context.Background()); info.Exists {
+		t.Fatal("gravou a config com a chave invalida")
+	}
 }

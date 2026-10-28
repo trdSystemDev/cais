@@ -28,6 +28,9 @@ type Deps struct {
 	ContainerLogs func(context.Context, string) (string, error)
 	ComposePS     func(ctx context.Context, file string) ([]docker.Container, error)
 
+	// GitHubURL troca a API do GitHub (testes); vazio e o GitHub.
+	GitHubURL string
+
 	// Apps: pasta dos apps e as operacoes de projeto compose deles.
 	AppsDir   string
 	AppDocker apps.Docker

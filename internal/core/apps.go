@@ -161,6 +161,15 @@ func (c *Core) ApplyApp(ctx context.Context, p apps.Plan) error {
 		if err := apps.CheckDatabase(*p.Database); err != nil {
 			return err
 		}
+		// confere antes de mudar qualquer coisa: senao o app ficaria
+		// criado pela metade (spec e rotas sim, banco nao)
+		cfg, err := config.Load(c.deps.ConfigPath)
+		if err != nil {
+			return err
+		}
+		if !cfg.HasStack(p.Database.Engine) {
+			return fmt.Errorf("o app usa %s, mas a stack %s esta desligada: ligue na aba Infra (ou tire o banco do plano)", p.Database.Engine, p.Database.Engine)
+		}
 	}
 	c.routes.Lock()
 	defer c.routes.Unlock()
@@ -181,6 +190,18 @@ func (c *Core) ApplyApp(ctx context.Context, p apps.Plan) error {
 	}
 	if err := m.SetSpec(p.App, p.Spec); err != nil {
 		return err
+	}
+	if p.Repo != "" {
+		repo, err := repoApp(p.Repo)
+		if err != nil {
+			return err
+		}
+		if repo.Name != p.App {
+			return fmt.Errorf("o app precisa ter o nome do repositorio (%s): o CI usa esse nome", repo.Name)
+		}
+		if err := m.SetRepo(p.App, repo.String()); err != nil {
+			return err
+		}
 	}
 	if err := m.SetRoutes(ctx, p.App, p.Routes, c.reservedHosts()); err != nil {
 		return err

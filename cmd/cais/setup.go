@@ -174,6 +174,7 @@ func setupConfig(args []string) error {
 	httpsPort := fs.Int("https-port", 0, "porta https do proxy no host")
 	ghClient := fs.String("github-client", "", "Client ID do OAuth app do GitHub")
 	ghAdmin := fs.String("github-admin", "", "usuario do GitHub que administra o Woodpecker")
+	ghAppID := fs.Int64("github-app-id", 0, "App ID do GitHub App do cais (le os repositorios privados)")
 	hostCI := fs.String("host-ci", "", "nome do Woodpecker (padrao ci.<dominio>)")
 	hostReg := fs.String("host-registry", "", "nome do registry (padrao registry.<dominio>)")
 	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (padrao s3.<dominio>)")
@@ -208,6 +209,8 @@ func setupConfig(args []string) error {
 			cfg.Woodpecker.GitHubClient = *ghClient
 		case "github-admin":
 			cfg.Woodpecker.Admin = *ghAdmin
+		case "github-app-id":
+			cfg.GitHub.AppID = *ghAppID
 		case "host-ci":
 			cfg.Hosts.CI = *hostCI
 		case "host-registry":

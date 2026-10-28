@@ -97,6 +97,13 @@ type API interface {
 	// montado); com o app no ar, os containers sao atualizados.
 	SetAppSecret(ctx context.Context, name, secret, value string) error
 
+	// PlanAppFromGitHub le o repositorio privado pelo GitHub App (so os
+	// arquivos da analise) e propoe a configuracao; o app tem o nome do
+	// repositorio. Nao grava nada.
+	PlanAppFromGitHub(ctx context.Context, link string) (apps.Plan, error)
+	// ProposeAppCI abre um PR no repositorio do app com o .woodpecker.yml.
+	ProposeAppCI(ctx context.Context, name string) (string, error)
+
 	// CISetup devolve o pipeline do Woodpecker, a linha do authorized_keys
 	// do usuario cais-deploy e os secrets a cadastrar (gera a chave na primeira vez).
 	CISetup(ctx context.Context) (CIInfo, error)

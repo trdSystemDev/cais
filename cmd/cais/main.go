@@ -36,7 +36,7 @@ Setup da VPS:
   cais setup                         mostra o plano: o que falta e o que vai mudar
   cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
       --domain --email --tls letsencrypt|selfsigned --http-port --https-port
-      --github-client --github-admin --host-ci --host-registry --host-s3
+      --github-client --github-admin --github-app-id --host-ci --host-registry --host-s3
   cais setup secret <nome>           grava um secret informado (le do stdin)
   cais setup run                     executa o Setup e mostra o progresso
 
@@ -45,8 +45,10 @@ Servicos opcionais (proxy, registry e woodpecker sobem sempre):
 
 Apps:
   cais apps                          lista os apps e o estado dos containers
-  cais app init <nome> <pasta>       analisa o repositorio (Dockerfile, .env.example...),
-                                     mostra o plano e configura o app (spec, rota, banco)
+  cais app import <link do GitHub>   le o repositorio privado pelo GitHub App, mostra o
+                                     plano e configura o app (o nome e o do repositorio)
+  cais app init <nome> <pasta>       o mesmo, a partir de uma pasta local
+  cais app ci <app>                  abre um PR no repositorio com o .woodpecker.yml
   cais app create <nome>             cria um app vazio (o nome do repositorio no GitHub)
   cais app routes <nome> [rota...]   mostra ou troca as rotas; rota: dominio[/caminho]=service:porta
                                      ex: app.exemplo.com.br=web:3000 app.exemplo.com.br/api=api:8080

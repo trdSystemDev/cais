@@ -137,6 +137,10 @@ func waitFor(t *testing.T, m *model, text string) {
 func click(t *testing.T, m *model, id string) tea.Msg {
 	t.Helper()
 	m.View()
+	// as zonas desta tela sao registradas numa goroutine: sem esperar, o
+	// clique pode usar a posicao da tela anterior (layout mudou) e acertar
+	// o vizinho
+	time.Sleep(15 * time.Millisecond)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if z := m.zones.Get(id); z != nil && !z.IsZero() {

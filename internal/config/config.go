@@ -36,6 +36,7 @@ type Config struct {
 	Proxy      Proxy      `yaml:"proxy" json:"proxy"`
 	Hosts      Hosts      `yaml:"hosts,omitempty" json:"hosts"`
 	Woodpecker Woodpecker `yaml:"woodpecker,omitempty" json:"woodpecker"`
+	GitHub     GitHub     `yaml:"github,omitempty" json:"github"`
 }
 
 // Proxy sao as portas do host publicadas pelo Traefik. Fora de 80/443 so
@@ -53,6 +54,12 @@ type Hosts struct {
 	Registry string `yaml:"registry,omitempty" json:"registry,omitempty"`
 	// S3 e o endpoint S3 do Garage (padrao s3.<domain>).
 	S3 string `yaml:"s3,omitempty" json:"s3,omitempty"`
+}
+
+// GitHub e o GitHub App do cais, que le os repositorios privados no import
+// e abre o PR do CI. A chave privada fica no secret github_app_key.
+type GitHub struct {
+	AppID int64 `yaml:"app_id,omitempty" json:"app_id,omitempty"`
 }
 
 // Woodpecker e o que o CI precisa e nao e secret. O client secret do app
@@ -174,6 +181,9 @@ func (c Config) Validate() error {
 	}
 	if c.Proxy.HTTPPort == c.Proxy.HTTPSPort {
 		errs = append(errs, errors.New("proxy: http_port e https_port nao podem ser iguais"))
+	}
+	if c.GitHub.AppID < 0 {
+		errs = append(errs, fmt.Errorf("github.app_id: id invalido %d", c.GitHub.AppID))
 	}
 	if v := c.Woodpecker.GitHubClient; v != "" && !githubClient.MatchString(v) {
 		errs = append(errs, fmt.Errorf("woodpecker.github_client: client id invalido %q", v))

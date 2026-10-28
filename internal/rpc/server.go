@@ -329,6 +329,21 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		}
 		return ok(s.api.SetAppEnv(s.ctx, p.Name, p.Env, p.Apply))
 
+	case MethodAppPlanGitHub:
+		var p repoParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.PlanAppFromGitHub(s.ctx, p.Repo))
+
+	case MethodAppCIPR:
+		var p appParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		link, err := s.api.ProposeAppCI(s.ctx, p.Name)
+		return wrap(linkResult{URL: link}, err)
+
 	case MethodCISetup:
 		return wrap(s.api.CISetup(s.ctx))
 

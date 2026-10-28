@@ -259,7 +259,10 @@ Apps (cada um em `/var/lib/cais/apps/<app>`, projeto compose com o nome do app).
 O repositorio do app so precisa do Dockerfile:
 
 ```sh
-cais app init meu-app ./meu-app        # analisa Dockerfile, .env.example e manifestos;
+cais app import https://github.com/dono/meu-app   # le o repositorio privado pelo GitHub App
+cais app ci meu-app                    # abre um PR com o .woodpecker.yml
+cais app init meu-app ./meu-app        # o mesmo do import, a partir de uma pasta local:
+                                       # analisa Dockerfile, .env.example e manifestos;
                                        # mostra o plano (porta, rota, volumes, banco,
                                        # variaveis, secrets) e configura com confirmacao
 cais app secret meu-app jwt_secret     # segredos detectados viram arquivo em /run/secrets
@@ -273,6 +276,13 @@ Onde fica a configuracao do app: variaveis comuns na spec (`app.yaml`), segredos
 em `secrets/` do app (montados em `/run/secrets`), tudo na VPS. O `.env.example`
 do repositorio so e lido na analise, e o Woodpecker so tem a senha do registry e
 a chave de deploy: o CI nunca ve a configuracao nem os segredos do app.
+
+O import le o repositorio como **GitHub App** do cais (App ID e chave na aba
+Setup -- cole o .pem ou o caminho do arquivo --, ou `cais setup config
+--github-app-id <id>` e `cais setup secret github_app_key < chave.pem`): cada
+acesso pede um token de uma hora restrito ao repositorio importado e le so os
+arquivos da analise. O app tem o nome do repositorio, porque o CI usa esse nome
+pro app e pra imagem.
 
 A analise so sugere: porta, banco e variaveis podem ser trocados depois (`cais app
 db`, `routes`). Variavel com cara de segredo (`*_SECRET`, `*_TOKEN`, `*_PASSWORD`...)

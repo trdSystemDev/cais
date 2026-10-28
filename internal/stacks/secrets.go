@@ -20,6 +20,7 @@ type Provided struct {
 
 // provided sao os secrets que vem de fora, com o que mostrar no Setup.
 var provided = map[string]string{
+	"github_app_key":       "Chave privada (.pem) do GitHub App do cais: le os repositorios privados no import",
 	"github_client_secret": "Client secret do OAuth app do GitHub (o mesmo app do woodpecker.github_client)",
 }
 

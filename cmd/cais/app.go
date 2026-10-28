@@ -91,6 +91,7 @@ func runApp(args []string) error {
 		"create": {1, 1}, "routes": {1, -1}, "deploy": {1, 1},
 		"restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "db": {2, -1},
 		"init": {2, 2}, "secrets": {1, 1}, "secret": {2, 2}, "env": {1, -1},
+		"import": {1, 1}, "ci": {1, 1},
 	}
 	lim, ok := need[sub]
 	if !ok {
@@ -141,6 +142,15 @@ func runApp(args []string) error {
 		return printRoutes(ctx, c, name)
 	case "init":
 		return appInit(ctx, c, name, arg(1), *yes)
+	case "import":
+		return appImport(ctx, c, name, *yes)
+	case "ci":
+		fmt.Printf("Abrindo o PR com o .woodpecker.yml em %s...\n", name)
+		link, err := c.ProposeAppCI(ctx, name)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("PR: %s\nRevise e faca o merge: cada push na branch principal passa a fazer build e deploy.\n", link)
 	case "env":
 		return appEnv(ctx, c, name, pos[1:], splitList(*unset), *apply)
 	case "secrets":
@@ -276,6 +286,48 @@ func parseEnvMap(args []string) (map[string]string, error) {
 		env[k] = v
 	}
 	return env, nil
+}
+
+// appImport le o repositorio pelo GitHub App (no daemon), mostra o plano e
+// aplica com confirmacao; depois oferece o PR com o pipeline.
+func appImport(ctx context.Context, c *rpc.Client, link string, yes bool) error {
+	fmt.Printf("Lendo %s pelo GitHub App...\n\n", link)
+	plan, err := c.PlanAppFromGitHub(ctx, link)
+	if err != nil {
+		return err
+	}
+	printAppPlan(plan)
+	if !confirm(yes, "\nAplicar esse plano? [s/N] ") {
+		fmt.Println("Nada foi mudado.")
+		return nil
+	}
+	if err := c.ApplyApp(ctx, plan); err != nil {
+		return err
+	}
+	fmt.Printf("\n%s configurado (repositorio %s).\n", plan.App, plan.Repo)
+	for _, s := range plan.Spec.Secrets {
+		fmt.Printf("  falta o secret: cais app secret %s %s\n", plan.App, s)
+	}
+	if !yes && confirm(false, "\nAbrir um PR no repositorio com o .woodpecker.yml? [s/N] ") {
+		pr, err := c.ProposeAppCI(ctx, plan.App)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("PR: %s\n", pr)
+	} else {
+		fmt.Printf("Pipeline: cais app ci %s (abre o PR) ou cais ci pipeline > .woodpecker.yml\n", plan.App)
+	}
+	return nil
+}
+
+func confirm(yes bool, prompt string) bool {
+	if yes {
+		return true
+	}
+	fmt.Print(prompt)
+	var answer string
+	fmt.Scanln(&answer)
+	return answer == "s" || answer == "S"
 }
 
 // appInit le da pasta so os arquivos da analise, pede o plano ao daemon,

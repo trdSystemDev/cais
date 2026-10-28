@@ -359,3 +359,14 @@ func (c *Client) CISetup(ctx context.Context) (info core.CIInfo, err error) {
 func (c *Client) SetAppEnv(ctx context.Context, name string, env map[string]string, apply bool) error {
 	return c.call(ctx, MethodAppEnv, envParams{Name: name, Env: env, Apply: apply}, nil)
 }
+
+func (c *Client) PlanAppFromGitHub(ctx context.Context, link string) (p apps.Plan, err error) {
+	err = c.call(ctx, MethodAppPlanGitHub, repoParams{Repo: link}, &p)
+	return
+}
+
+func (c *Client) ProposeAppCI(ctx context.Context, name string) (string, error) {
+	var r linkResult
+	err := c.call(ctx, MethodAppCIPR, appParams{Name: name}, &r)
+	return r.URL, err
+}

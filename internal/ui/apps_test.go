@@ -18,6 +18,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/github/githubtest"
 )
 
 // fakeApps e o docker dos apps nos testes: todo projeto que subiu aparece
@@ -378,5 +379,44 @@ func TestAppsSecretNovoPelaTelaEntraNaSpec(t *testing.T) {
 	waitFor(t, m, "stripe_key gravado")
 	if a := appState(t, m, "loja"); !slices.Contains(a.Spec.Secrets, "stripe_key") {
 		t.Fatalf("secret fora da spec: %+v", a.Spec)
+	}
+}
+
+func TestAppsImportPeloLinkDoGitHub(t *testing.T) {
+	gh := githubtest.New(t, 5512022, map[string]map[string]string{
+		"trdSystemDev/loja": {"Dockerfile": "FROM node:22\nEXPOSE 3000\n", ".env.example": "NODE_ENV=production\n"},
+	})
+	root := t.TempDir()
+	c := core.New(core.Deps{CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
+		SecretsDir: filepath.Join(root, "secrets"), AppsDir: filepath.Join(root, "apps"),
+		AppDocker: &fakeApps{up: map[string]bool{}}, GitHubURL: gh.URL,
+		ComposePS: func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
+	cfg := config.Default()
+	cfg.Domain, cfg.Email, cfg.TLS = "trd.localhost", "a@trd.localhost", config.TLSSelfSigned
+	cfg.GitHub.AppID = 5512022
+	config.Save(filepath.Join(root, "config.yaml"), cfg)
+	c.SetSecret(context.Background(), core.GitHubKeySecret, string(gh.Key))
+
+	m := open(t, c)
+	run(t, m, m.setTab(tabApps))
+	click(t, m, "app-new")
+	typeIn(t, m, "imp-dir", "https://github.com/trdSystemDev/loja")
+	click(t, m, "imp-analyze")
+	waitFor(t, m, "Revise o plano e aplique.")
+	if m.apps.impName.Value() != "loja" || m.apps.plan.Repo != "trdSystemDev/loja" {
+		t.Fatalf("nome %q repo %q", m.apps.impName.Value(), m.apps.plan.Repo)
+	}
+	reach(t, m, "imp-apply")
+	click(t, m, "imp-apply")
+	waitFor(t, m, "loja configurado.")
+
+	waitFor(t, m, "sem deploy") // o card do app novo na lista
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Geral")
+	waitFor(t, m, "github.com/trdSystemDev/loja")
+	click(t, m, "ci-pr")
+	waitFor(t, m, "PR aberto: https://github.com/trdSystemDev/loja/pull/1")
+	if gh.PR("trdSystemDev/loja", ".woodpecker.yml") == "" {
+		t.Fatal("o PR nao tem o .woodpecker.yml")
 	}
 }

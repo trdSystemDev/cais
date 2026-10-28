@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,16 +18,26 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/github"
 )
 
 const formWidth = 50
 
 // item e cada coisa focavel do formulario, na ordem do Tab.
 type item struct {
-	id    string
-	label string
-	kind  int
-	input *textinput.Model
+	id      string
+	label   string
+	kind    int
+	input   *textinput.Model
+	section int // indice em setupSections
+}
+
+// setupSections separam o formulario: o que cada grupo de campos configura.
+var setupSections = []struct{ title, hint string }{
+	{"Geral", "o dominio de onde saem os nomes dos servicos"},
+	{"Woodpecker (CI)", "OAuth app do GitHub: login das pessoas no CI"},
+	{"GitHub App do cais", "le repositorios privados e abre o PR do CI"},
+	{"Hosts", "opcional: vazio usa o padrao"},
 }
 
 const (
@@ -78,32 +91,44 @@ type (
 	savedMsg struct {
 		cfg config.Config
 		err error
+		key bool // gravou a chave do GitHub App
 	}
 	runDoneMsg struct{ err error }
 )
 
 func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	p := &setupPage{api: api, zones: zones}
+	section := 0
 	input := func(id, label, placeholder string) {
 		ti := textinput.New()
 		ti.Prompt = ""
 		ti.Placeholder = placeholder
 		ti.SetWidth(28)
-		p.items = append(p.items, &item{id: id, label: label, kind: kindInput, input: &ti})
+		p.items = append(p.items, &item{id: id, label: label, kind: kindInput, input: &ti, section: section})
 	}
 	input("domain", "Dominio", "exemplo.com.br")
-	input("email", "E-mail", "voce@exemplo.com.br")
+	input("email", "E-mail", "avisos do Let's Encrypt")
 	p.items = append(p.items, &item{id: "tls", label: "Certificados", kind: kindSelect})
-	input("ghClient", "GitHub client ID", "do OAuth app do CI")
-	input("ghAdmin", "GitHub admin", "seu usuario")
-	input("ghSecret", "GitHub secret", "so pra gravar ou trocar")
+
+	section = 1
+	input("ghClient", "Client ID", "do OAuth app")
+	input("ghSecret", "Client secret", "so pra gravar ou trocar")
 	p.get("ghSecret").input.EchoMode = textinput.EchoPassword
-	input("hostCI", "Host do CI", "padrao ci.<dominio>")
-	input("hostReg", "Host do registry", "padrao registry.<dominio>")
-	input("hostS3", "Host do S3", "padrao s3.<dominio>")
+	input("ghAdmin", "Usuario admin", "seu usuario do GitHub")
+
+	section = 2
+	input("ghAppID", "App ID", "numero na pagina do app")
+	input("ghKey", "Chave privada", "cole o .pem ou o caminho")
+	p.get("ghKey").input.EchoMode = textinput.EchoPassword
+	p.get("ghKey").input.CharLimit = 16384 // o .pem inteiro colado
+
+	section = 3
+	input("hostCI", "CI", "")
+	input("hostReg", "Registry", "")
+	input("hostS3", "S3", "")
 	p.items = append(p.items,
-		&item{id: "save", label: "Salvar", kind: kindButton},
-		&item{id: "run", label: "Executar setup", kind: kindButton})
+		&item{id: "save", label: "Salvar", kind: kindButton, section: section},
+		&item{id: "run", label: "Executar setup", kind: kindButton, section: section})
 	p.setTheme(th)
 	p.setFocus(0)
 	return p
@@ -195,7 +220,12 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		p.saveErr = ""
 		p.cfg = msg.cfg
 		p.get("ghSecret").input.SetValue("")
-		p.setStatus("ok", "Config salva.")
+		p.get("ghKey").input.SetValue("")
+		if msg.key {
+			p.setStatus("ok", "Config salva e chave do GitHub App gravada.")
+		} else {
+			p.setStatus("ok", "Config salva.")
+		}
 		return p.planCmd()
 	case runDoneMsg:
 		p.running = false
@@ -220,6 +250,10 @@ func (p *setupPage) fill(c config.Config) {
 	}
 	p.get("ghClient").input.SetValue(c.Woodpecker.GitHubClient)
 	p.get("ghAdmin").input.SetValue(c.Woodpecker.Admin)
+	p.get("ghAppID").input.SetValue("")
+	if c.GitHub.AppID > 0 {
+		p.get("ghAppID").input.SetValue(strconv.FormatInt(c.GitHub.AppID, 10))
+	}
 	p.get("hostCI").input.SetValue(c.Hosts.CI)
 	p.get("hostReg").input.SetValue(c.Hosts.Registry)
 	p.get("hostS3").input.SetValue(c.Hosts.S3)
@@ -236,6 +270,12 @@ func (p *setupPage) formConfig() config.Config {
 		c.TLS = config.TLSSelfSigned
 	}
 	c.Woodpecker.GitHubClient, c.Woodpecker.Admin = val("ghClient"), val("ghAdmin")
+	c.GitHub.AppID = 0
+	if id, err := strconv.ParseInt(val("ghAppID"), 10, 64); err == nil {
+		c.GitHub.AppID = id
+	} else if val("ghAppID") != "" {
+		c.GitHub.AppID = -1 // a validacao da config explica
+	}
 	c.Hosts.CI, c.Hosts.Registry, c.Hosts.S3 = val("hostCI"), val("hostReg"), val("hostS3")
 	return c
 }
@@ -243,6 +283,15 @@ func (p *setupPage) formConfig() config.Config {
 func (p *setupPage) save() tea.Cmd {
 	c := p.formConfig()
 	secret := p.get("ghSecret").input.Value()
+	var key []byte
+	if text := strings.TrimSpace(p.get("ghKey").input.Value()); text != "" {
+		var err error
+		if key, err = readGitHubKey(text); err != nil {
+			p.saveErr = err.Error()
+			p.setStatus("danger", "Nao salvou: veja o motivo ao lado.")
+			return nil
+		}
+	}
 	p.setStatus("warn", "Salvando...")
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -250,7 +299,10 @@ func (p *setupPage) save() tea.Cmd {
 		if err == nil && secret != "" {
 			err = p.api.SetSecret(ctx, "github_client_secret", secret)
 		}
-		return savedMsg{c, err}
+		if err == nil && key != nil {
+			err = p.api.SetSecret(ctx, "github_app_key", string(key))
+		}
+		return savedMsg{c, err, err == nil && key != nil}
 	}
 }
 
@@ -366,28 +418,47 @@ func (p *setupPage) view(w, h int) string {
 func (p *setupPage) viewForm() string {
 	t := p.th
 	field := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(30)
+
+	// o padrao dos hosts aparece no campo vazio, ja com o dominio digitado
+	domain := strings.TrimSpace(p.get("domain").input.Value())
+	if domain == "" {
+		domain = "<dominio>"
+	}
+	p.get("hostCI").input.Placeholder = "ci." + domain
+	p.get("hostReg").input.Placeholder = "registry." + domain
+	p.get("hostS3").input.Placeholder = "s3." + domain
+
 	var rows, buttons []string
+	last := -1
 	for i, it := range p.items {
+		if it.kind == kindButton {
+			st := t.pill(i == p.focus)
+			if it.id == "run" && !p.canRun() {
+				st = t.disabledPill()
+			}
+			buttons = append(buttons, p.zones.Mark(it.id, st.Render(it.label)))
+			continue
+		}
+		if it.section != last {
+			sec := setupSections[it.section]
+			if last >= 0 {
+				rows = append(rows, "")
+			}
+			rows = append(rows, t.bold().Render(sec.title), t.fg(t.muted).Width(formWidth).Render(sec.hint))
+			last = it.section
+		}
 		focused := i == p.focus
-		marker, label := "  ", t.fg(t.text).Width(18).Render(it.label)
+		marker, label := "  ", t.fg(t.text).Width(16).Render(it.label)
 		if focused {
 			marker = t.fg(t.accent).Bold(true).Render("› ")
-			label = t.fg(t.accent).Bold(true).Width(18).Render(it.label)
+			label = t.fg(t.accent).Bold(true).Width(16).Render(it.label)
 		}
-
 		var value string
 		switch it.kind {
 		case kindInput:
 			value = field.Render(it.input.View())
 		case kindSelect:
 			value = field.Render("‹ " + []string{"Let's Encrypt", "CA local (teste)"}[p.tls] + " ›")
-		case kindButton:
-			st := t.pill(focused)
-			if it.id == "run" && !p.canRun() {
-				st = t.disabledPill()
-			}
-			buttons = append(buttons, p.zones.Mark(it.id, st.Render(it.label)))
-			continue
 		}
 		rows = append(rows, p.zones.Mark(it.id, marker+label+value))
 	}
@@ -509,4 +580,36 @@ func (p *setupPage) viewAccess(w int) string {
 		b.WriteString(wrap.Render("  sudo trust anchor --store "+pl.CAFile) + "\n")
 	}
 	return b.String()
+}
+
+// readGitHubKey aceita o .pem colado no campo (as quebras de linha viram
+// espaco e sao refeitas) ou o caminho do arquivo nesta maquina.
+func readGitHubKey(text string) ([]byte, error) {
+	if !strings.Contains(text, "-----BEGIN") {
+		path := text
+		if strings.HasPrefix(path, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, err
+			}
+			path = filepath.Join(home, path[2:])
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("chave do GitHub App: %w (cole o conteudo do .pem ou o caminho do arquivo)", err)
+		}
+		text = string(data)
+	}
+	return github.NormalizeKey(text)
+}
+
+// paste entrega o texto colado ao campo de texto com foco.
+func (p *setupPage) paste(msg tea.PasteMsg) tea.Cmd {
+	it := p.items[p.focus]
+	if it.kind != kindInput {
+		return nil
+	}
+	ti, cmd := it.input.Update(msg)
+	*it.input = ti
+	return cmd
 }

@@ -47,7 +47,9 @@ const (
 	MethodAppSecrets       = "app.secrets"    // params: appParams
 	MethodAppSecretSet     = "app.secret.set" // params: appSecretParams
 	MethodCISetup          = "ci.setup"
-	MethodAppEnv           = "app.env" // params: envParams
+	MethodAppEnv           = "app.env"         // params: envParams
+	MethodAppPlanGitHub    = "app.plan.github" // params: repoParams
+	MethodAppCIPR          = "app.ci.pr"       // params: appParams
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -166,4 +168,12 @@ type envParams struct {
 	Name  string            `json:"name"`
 	Env   map[string]string `json:"env"`
 	Apply bool              `json:"apply,omitempty"`
+}
+
+type repoParams struct {
+	Repo string `json:"repo"`
+}
+
+type linkResult struct {
+	URL string `json:"url"`
 }
