@@ -24,7 +24,7 @@ services:
       - --entrypoints.websecure.http.tls=true
       - --entrypoints.websecure.http3=true
       - --entrypoints.websecure.http.middlewares=cais-headers@docker
-      # o padrao de 60s corta o push de uma camada grande no registry
+      # o padrao de 60s corta upload grande (arquivos, S3)
       - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=30m
 {{- if .LetsEncrypt}}
       - --entrypoints.websecure.http.tls.certresolver=le

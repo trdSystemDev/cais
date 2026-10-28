@@ -1,0 +1,115 @@
+package apps
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// GuideInput e o que o texto de ajuda de um app precisa saber.
+type GuideInput struct {
+	App string
+	// Host e o dominio sugerido pro app (<app>.<dominio>).
+	Host string
+	// Port e a porta HTTP do service web; 0 vira um exemplo.
+	Port int
+	// Networks sao as redes das stacks ligadas que o app pode usar, alem
+	// da proxy_network (postgres_network, mysql_network, garage_network).
+	Networks []string
+	Env      []string // nomes das variaveis do app
+	Secrets  []string // nomes dos secrets do app
+}
+
+// Guide e o texto que o cais devolve pra escrever o compose de producao do
+// app: labels do Traefik, redes, variaveis e secrets. O compose e do app; o
+// cais so le e roda.
+func Guide(in GuideInput) string {
+	port := in.Port
+	if port == 0 {
+		port = 3000
+	}
+	router := in.App
+	var b strings.Builder
+	w := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
+
+	w("# Compose de producao de %s -- modelo do cais\n", in.App)
+	w("#\n")
+	w("# No deploy o cais baixa o commit, grava um .env na pasta do projeto com as\n")
+	w("# variaveis do app e roda: docker compose -p %s build && up -d --wait\n", in.App)
+	w("# Nada aqui e reescrito pelo cais: este arquivo e do repositorio.\n")
+	w("#\n")
+	w("# - acesso pelo dominio: labels do Traefik + proxy_network. Sem ports:\n")
+	w("#   o Traefik faz HTTPS e entrega pra porta do container.\n")
+	w("# - healthcheck: o deploy espera ficar healthy; sem healthcheck, \"rodando\" basta.\n")
+	w("# - se o up falhar, o cais volta o commit anterior.\n")
+	w("# - o .env fica ao lado deste arquivo: ponha .env no .dockerignore pra as\n")
+	w("#   variaveis nao entrarem na imagem num COPY . .\n\n")
+
+	w("services:\n")
+	w("  web:\n")
+	w("    build: .                 # ou build: {context: ./app, dockerfile: Dockerfile}\n")
+	w("    restart: unless-stopped\n")
+	w("    env_file: .env           # todas as variaveis do app (gravadas pelo cais)\n")
+	if len(in.Env) > 0 {
+		w("    # ou so algumas: environment: [\"%s=${%s}\"]\n", in.Env[0], in.Env[0])
+	}
+	if len(in.Secrets) > 0 {
+		w("    secrets:\n")
+		for _, s := range in.Secrets {
+			w("      - %s\n", s)
+		}
+	}
+	w("    labels:\n")
+	w("      traefik.enable: \"true\"\n")
+	w("      traefik.http.routers.%s.rule: Host(`%s`)\n", router, in.Host)
+	w("      traefik.http.routers.%s.entrypoints: websecure\n", router)
+	w("      traefik.http.services.%s.loadbalancer.server.port: \"%d\"\n", router, port)
+	w("      # outro service no mesmo dominio por caminho (ex: API em /api):\n")
+	w("      #   traefik.http.routers.%s-api.rule: Host(`%s`) && PathPrefix(`/api`)\n", router, in.Host)
+	w("    networks:\n")
+	w("      - default\n")
+	w("      - proxy_network\n")
+	for _, n := range in.Networks {
+		w("      - %s\n", n)
+	}
+	w("    logging:                 # sem limite o log enche o disco\n")
+	w("      driver: json-file\n")
+	w("      options: {max-size: \"20m\", max-file: \"5\"}\n\n")
+
+	w("networks:\n")
+	w("  proxy_network:\n    external: true\n")
+	for _, n := range in.Networks {
+		w("  %s:\n    external: true\n", n)
+	}
+	if len(in.Secrets) > 0 {
+		w("\n# secrets do app: arquivos gravados pelo cais em ${CAIS_SECRETS}; dentro\n")
+		w("# do container ficam em /run/secrets/<nome> (o app le o arquivo)\n")
+		w("secrets:\n")
+		for _, s := range in.Secrets {
+			w("  %s:\n    file: ${CAIS_SECRETS}/%s\n", s, s)
+		}
+	}
+
+	w("\n# Bancos e storage da infra (ligados na aba Infra):\n")
+	hosts := map[string]string{
+		"postgres_network": "postgres:5432 (Postgres)",
+		"mysql_network":    "mysql:3306 (MySQL)",
+		"garage_network":   "http://garage:3900 (S3 do Garage; regiao garage)",
+	}
+	nets := append([]string(nil), in.Networks...)
+	sort.Strings(nets)
+	for _, n := range nets {
+		if h, ok := hosts[n]; ok {
+			w("#   %s -> %s\n", n, h)
+		}
+	}
+	if len(nets) == 0 {
+		w("#   nenhum ligado ainda\n")
+	}
+	w("# Database e usuario de cada app: aba Infra -> Novo banco (o cais gera a\n")
+	w("# senha e mostra a URL de conexao pra por nas variaveis ou num secret).\n")
+	w("#\n")
+	w("# Variaveis do cais no .env: CAIS_APP, CAIS_COMMIT (commit no ar) e\n")
+	w("# CAIS_SECRETS (pasta dos secrets).\n")
+	return b.String()
+}

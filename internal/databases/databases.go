@@ -87,6 +87,9 @@ func Provision(ctx context.Context, exec Exec, e Engine, name string, password [
 	return nil
 }
 
+// CheckIdentifier confere o nome de um database/usuario.
+func CheckIdentifier(name string) error { return checkIdentifier(name) }
+
 func checkIdentifier(name string) error {
 	if name == "" || len(name) > 32 {
 		return fmt.Errorf("nome de database invalido %q", name)

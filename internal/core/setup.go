@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
@@ -16,7 +14,7 @@ import (
 )
 
 // ErrBusy indica que outra acao que mexe na VPS esta em andamento.
-var ErrBusy = errors.New("outra acao esta mexendo na VPS agora (Setup ou registry); tente de novo quando ela terminar")
+var ErrBusy = errors.New("outra acao esta mexendo na VPS agora (Setup ou banco); tente de novo quando ela terminar")
 
 func (c *Core) setupDeps() bootstrap.Deps {
 	return bootstrap.Deps{
@@ -30,12 +28,9 @@ func (c *Core) setupDeps() bootstrap.Deps {
 			}
 			return nil
 		},
-		ComposeUp:     c.deps.ComposeUp,
-		ComposeDown:   c.deps.ComposeDown,
-		Exec:          c.deps.Exec,
-		Login:         c.deps.Login,
-		LoginAttempts: 18,
-		LoginDelay:    10 * time.Second,
+		ComposeUp:   c.deps.ComposeUp,
+		ComposeDown: c.deps.ComposeDown,
+		Exec:        c.deps.Exec,
 	}
 }
 
@@ -155,50 +150,4 @@ func (c *Core) runSetupLocked(ctx context.Context, service string, on bool) (Set
 		}
 	})
 	return st.Setup, err
-}
-
-func (c *Core) RegistryUsers(context.Context) ([]string, error) {
-	return secrets.RegistryUsers(c.secretStore())
-}
-
-func (c *Core) AddRegistryUser(ctx context.Context, user string) (string, error) {
-	if !c.infra.TryLock() {
-		return "", ErrBusy
-	}
-	defer c.infra.Unlock()
-
-	pw, err := secrets.AddRegistryUser(c.secretStore(), user)
-	if err != nil {
-		return "", err
-	}
-	if err := c.reloadRegistry(ctx); err != nil {
-		return "", fmt.Errorf("usuario criado, mas o registry nao recarregou (rode o Setup de novo): %w", err)
-	}
-	return pw, nil
-}
-
-func (c *Core) RemoveRegistryUser(ctx context.Context, user string) error {
-	if !c.infra.TryLock() {
-		return ErrBusy
-	}
-	defer c.infra.Unlock()
-
-	if err := secrets.RemoveRegistryUser(c.secretStore(), user); err != nil {
-		return err
-	}
-	if err := c.reloadRegistry(ctx); err != nil {
-		// o usuario ainda entra ate o container ser recriado: isso e erro
-		return fmt.Errorf("usuario removido do htpasswd, mas o registry ainda nao recarregou e o acesso continua: %w", err)
-	}
-	return nil
-}
-
-// reloadRegistry recria o container do registry pra ele ler o htpasswd
-// novo. Antes do primeiro Setup nao ha registry rodando: nada a fazer.
-func (c *Core) reloadRegistry(ctx context.Context) error {
-	file := c.setupDeps().ComposeFile("registry")
-	if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return c.deps.ComposeUp(ctx, file, true)
 }

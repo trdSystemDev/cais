@@ -3,494 +3,405 @@ package apps
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"go.yaml.in/yaml/v3"
-
-	"github.com/trdSystemDev/cais/internal/compose"
-	"github.com/trdSystemDev/cais/internal/databases"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
 
-var now = time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
-
-// fakeDocker registra os ups e guarda o compose que estava no disco em
-// cada um (pra conferir o rollback).
-type fakeDocker struct {
-	mu      sync.Mutex
-	ups     []string // conteudo do compose a cada up
-	files   [][]string
-	failFor string // up falha se o compose contem esse texto
+// fakeSource e o GitHub: cada commit e um conjunto de arquivos.
+type fakeSource struct {
+	head    string                       // commit da branch
+	commits map[string]map[string]string // commit -> caminho -> conteudo
+	refs    []string                     // refs pedidos no Resolve
 }
 
-func (f *fakeDocker) Up(_ context.Context, p docker.Project) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	data, err := os.ReadFile(p.Files[0])
-	if err != nil {
+func (f *fakeSource) Resolve(_ context.Context, repo, ref string) (string, error) {
+	f.refs = append(f.refs, ref)
+	if _, ok := f.commits[ref]; ok {
+		return ref, nil
+	}
+	if ref == "" || ref == "main" {
+		return f.head, nil
+	}
+	return "", fmt.Errorf("%s nao existe em %s", ref, repo)
+}
+
+func (f *fakeSource) Download(_ context.Context, _, commit, dir string) error {
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		return err
 	}
-	f.ups = append(f.ups, string(data))
-	f.files = append(f.files, p.Files)
-	if f.failFor != "" && strings.Contains(string(data), f.failFor) {
-		return errors.New("container meu-app-web-1 is unhealthy")
+	for p, c := range f.commits[commit] {
+		full := filepath.Join(dir, p)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			return err
+		}
 	}
 	return nil
 }
+
+// fakeDocker registra o que o deploy pediu, com o compose de cada chamada
+// (pra saber de qual pasta subiu).
+type fakeDocker struct {
+	calls   []string
+	config  string            // json do compose resolvido
+	failUp  map[string]bool   // compose (conteudo) cujo up falha
+	envSeen map[string]string // .env lido no Config
+}
+
+func (f *fakeDocker) compose(p docker.Project) string {
+	data, _ := os.ReadFile(p.Files[0])
+	return strings.TrimSpace(string(data))
+}
+
+func (f *fakeDocker) Config(_ context.Context, p docker.Project) ([]byte, error) {
+	f.calls = append(f.calls, "config "+f.compose(p))
+	env, _ := os.ReadFile(filepath.Join(filepath.Dir(p.Files[0]), ".env"))
+	f.envSeen, _ = ParseEnv(env)
+	if f.config == "" {
+		return []byte(`{"services": {}}`), nil
+	}
+	return []byte(f.config), nil
+}
+
+func (f *fakeDocker) Build(_ context.Context, p docker.Project) error {
+	f.calls = append(f.calls, "build "+f.compose(p))
+	return nil
+}
+
+func (f *fakeDocker) Up(_ context.Context, p docker.Project) error {
+	c := f.compose(p)
+	f.calls = append(f.calls, "up "+c)
+	if f.failUp[c] {
+		return errors.New("container web is unhealthy")
+	}
+	return nil
+}
+
 func (f *fakeDocker) PS(context.Context, docker.Project) ([]docker.Container, error) {
-	return []docker.Container{{Name: "meu-app-web-1", Service: "web", State: "running"}}, nil
-}
-func (f *fakeDocker) Restart(context.Context, docker.Project, string) error { return nil }
-func (f *fakeDocker) Recreate(ctx context.Context, p docker.Project) error  { return f.Up(ctx, p) }
-func (f *fakeDocker) Stop(context.Context, docker.Project) error            { return nil }
-
-func newManager(t *testing.T) (Manager, *fakeDocker) {
-	f := &fakeDocker{}
-	return Manager{Root: filepath.Join(t.TempDir(), "apps"), Docker: f, Now: func() time.Time { return now }}, f
+	return []docker.Container{{Name: "x-web-1", State: "running"}}, nil
 }
 
-func composeV(tag string) []byte {
-	return []byte(`services:
-  web:
-    image: registry.exemplo.com.br/meu-app:` + tag + `
-  worker:
-    image: registry.exemplo.com.br/meu-app:` + tag + `
-    networks: [default, postgres_network]
-networks:
-  postgres_network:
-    external: true
-`)
+func (f *fakeDocker) Restart(_ context.Context, p docker.Project, service string) error {
+	f.calls = append(f.calls, "restart "+service)
+	return nil
 }
 
-var reserved = []string{"ci.exemplo.com.br", "registry.exemplo.com.br", "s3.exemplo.com.br"}
+func (f *fakeDocker) Stop(context.Context, docker.Project) error {
+	f.calls = append(f.calls, "stop")
+	return nil
+}
 
-func TestNomesReservadosEInvalidos(t *testing.T) {
-	m, _ := newManager(t)
-	for _, name := range []string{"registry", "proxy", "postgres", "woodpecker", "cais", "Meu-App", "-x", "a_b", ""} {
-		if _, err := m.Create(name); err == nil {
-			t.Errorf("criou app %q", name)
+func newManager(t *testing.T) (Manager, *fakeSource, *fakeDocker) {
+	src := &fakeSource{head: "c1", commits: map[string]map[string]string{
+		"c1": {"docker-compose.yml": "v1"},
+		"c2": {"docker-compose.yml": "v2"},
+	}}
+	d := &fakeDocker{failUp: map[string]bool{}}
+	now := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
+	return Manager{Root: filepath.Join(t.TempDir(), "apps"), Source: src, Docker: d, Now: func() time.Time { return now }}, src, d
+}
+
+func TestCheckRecusa(t *testing.T) {
+	ok := App{Name: "meu-app", Repo: "trdSystemDev/meu-app"}
+	if err := Check(ok); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(*App){
+		"nome de stack":       func(a *App) { a.Name = "proxy" },
+		"nome maiusculo":      func(a *App) { a.Name = "MeuApp" },
+		"repo sem dono":       func(a *App) { a.Repo = "meu-app" },
+		"repo url":            func(a *App) { a.Repo = "https://github.com/a/b" },
+		"branch com ..":       func(a *App) { a.Branch = "a/../b" },
+		"compose fora":        func(a *App) { a.Compose = "../x.yml" },
+		"compose absoluto":    func(a *App) { a.Compose = "/etc/x.yml" },
+		"compose sem yml":     func(a *App) { a.Compose = "Dockerfile" },
+		"compose com espaco":  func(a *App) { a.Compose = "a b.yml" },
+		"compose com ./ sujo": func(a *App) { a.Compose = "./x.yml" },
+	}
+	for name, mutate := range cases {
+		a := ok
+		mutate(&a)
+		if Check(a) == nil {
+			t.Errorf("%s: aceitou %+v", name, a)
 		}
 	}
-	if _, err := m.Create("meu-app"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.Create("meu-app"); err == nil {
-		t.Error("criou app repetido")
-	}
-	info, err := os.Stat(filepath.Join(m.Root, "meu-app", "secrets"))
-	if err != nil || info.Mode().Perm() != 0o700 {
-		t.Errorf("pasta secrets: %v %v", info, err)
+	a := ok
+	a.Compose = "deploy/docker-compose.producao.yaml"
+	if err := Check(a); err != nil {
+		t.Errorf("recusou compose numa subpasta: %v", err)
 	}
 }
 
-func TestDeployGravaOverrideESobe(t *testing.T) {
-	m, f := newManager(t)
-	m.Create("meu-app")
-	routes := []Route{
-		{Host: "app.exemplo.com.br", Service: "web", Port: 3000},
-		{Host: "app.exemplo.com.br", Path: "/api", Service: "worker", Port: 8080},
-	}
-	if err := m.SetRoutes(context.Background(), "meu-app", routes, reserved); err != nil {
+func TestCreateGetList(t *testing.T) {
+	m, _, _ := newManager(t)
+	if _, err := m.Create(App{Name: "b", Repo: "o/b", Commit: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.ups) != 0 {
-		t.Fatal("subiu antes do primeiro deploy")
+	if _, err := m.Create(App{Name: "a", Repo: "o/a", Branch: "prod", Compose: "prod.yml"}); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := m.Create(App{Name: "a", Repo: "o/a"}); err == nil {
+		t.Error("criou app repetido")
+	}
+	list, err := m.List()
+	if err != nil || len(list) != 2 || list[0].Name != "a" || list[1].Commit != "" {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+	if list[0].ComposeFile() != "prod.yml" || list[1].ComposeFile() != DefaultCompose {
+		t.Errorf("compose: %s %s", list[0].ComposeFile(), list[1].ComposeFile())
+	}
+	info, _ := os.Stat(m.SecretsPath("a"))
+	if info == nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("pasta de secrets %v", info)
+	}
+	if _, err := m.Get("c"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get de app que nao existe: %v", err)
+	}
+}
 
-	res, err := m.Deploy(context.Background(), "meu-app", composeV("v1"))
+func TestDeployGravaEnvESobe(t *testing.T) {
+	m, src, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web", Branch: "main"})
+	if err := m.SetEnv("web", map[string]string{"NODE_ENV": "production", "TOKEN": "a$b'c"}); err == nil {
+		t.Error("aceitou valor com $ e aspa simples juntos")
+	}
+	if err := m.SetEnv("web", map[string]string{"NODE_ENV": "production", "PRECO": "R$10"}); err != nil {
+		t.Fatal(err)
+	}
+	m.SetSecret("web", "jwt", []byte("segredo"))
+
+	res, err := m.Deploy(context.Background(), "web", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(res.Images, []string{"registry.exemplo.com.br/meu-app:v1"}) {
-		t.Errorf("imagens %v", res.Images)
+	if res.Commit != "c1" || src.refs[0] != "main" {
+		t.Errorf("commit %s, refs %v", res.Commit, src.refs)
 	}
-	if len(f.files) != 1 || len(f.files[0]) != 2 || !strings.HasSuffix(f.files[0][1], OverrideFile) {
-		t.Fatalf("up sem o override: %v", f.files)
+	// build antes da troca, up do codigo novo
+	if !slices.Equal(d.calls, []string{"config v1", "build v1", "up v1"}) {
+		t.Errorf("chamadas %v", d.calls)
 	}
-
-	var ov struct {
-		Services map[string]struct {
-			Labels   map[string]string
-			Networks []string
-		}
+	if d.envSeen["NODE_ENV"] != "production" || d.envSeen["PRECO"] != "R$10" || d.envSeen["CAIS_COMMIT"] != "c1" ||
+		d.envSeen["CAIS_APP"] != "web" || d.envSeen["CAIS_SECRETS"] != m.SecretsPath("web") {
+		t.Errorf(".env do projeto %v", d.envSeen)
 	}
-	data, _ := os.ReadFile(filepath.Join(m.Root, "meu-app", OverrideFile))
-	if err := yaml.Unmarshal(data, &ov); err != nil {
-		t.Fatal(err)
+	info, err := os.Stat(filepath.Join(m.Root, "web", SrcDir, ".env"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf(".env %v %v", info, err)
 	}
-	web := ov.Services["web"]
-	if web.Labels["traefik.http.routers.meu-app-web-1.rule"] != "Host(`app.exemplo.com.br`)" {
-		t.Errorf("labels do web %v", web.Labels)
+	a, _ := m.Get("web")
+	if a.Commit != "c1" || a.Last == nil || a.Last.Error != "" {
+		t.Errorf("app depois do deploy %+v", a)
 	}
-	if web.Labels["traefik.http.services.meu-app-web-3000.loadbalancer.server.port"] != "3000" {
-		t.Errorf("porta do web %v", web.Labels)
-	}
-	// web nao declarou redes: o override tem que manter a default
-	if !slices.Equal(web.Networks, []string{"default", "proxy_network"}) {
-		t.Errorf("redes do web %v", web.Networks)
-	}
-	worker := ov.Services["worker"]
-	if worker.Labels["traefik.http.routers.meu-app-worker-2.rule"] != "Host(`app.exemplo.com.br`) && PathPrefix(`/api`)" {
-		t.Errorf("labels do worker %v", worker.Labels)
-	}
-	if !slices.Equal(worker.Networks, []string{"proxy_network"}) {
-		t.Errorf("redes do worker %v (ja declarou as dele)", worker.Networks)
-	}
-
-	a, _ := m.Get("meu-app")
-	if a.Last == nil || a.Last.Error != "" || !a.Last.At.Equal(now) {
-		t.Errorf("registro do deploy %+v", a.Last)
+	if _, err := os.Stat(filepath.Join(m.Root, "web", "src.next")); !os.IsNotExist(err) {
+		t.Error("sobrou src.next")
 	}
 }
 
-func TestDeployRecusaComposeERotaSemService(t *testing.T) {
-	m, f := newManager(t)
-	m.Create("meu-app")
-	if _, err := m.Deploy(context.Background(), "meu-app", []byte("services:\n  web:\n    image: x\n    privileged: true\n")); err == nil || !strings.Contains(err.Error(), "privileged") {
-		t.Fatalf("aceitou privileged: %v", err)
+func TestDeployComposeNumaSubpasta(t *testing.T) {
+	m, src, d := newManager(t)
+	src.commits["c1"] = map[string]string{"deploy/prod.yml": "sub"}
+	m.Create(App{Name: "web", Repo: "o/web", Compose: "deploy/prod.yml"})
+	m.SetEnv("web", map[string]string{"A": "1"})
+	if _, err := m.Deploy(context.Background(), "web", ""); err != nil {
+		t.Fatal(err)
 	}
-
-	m.SetRoutes(context.Background(), "meu-app", []Route{{Host: "app.exemplo.com.br", Service: "api", Port: 80}}, reserved)
-	if _, err := m.Deploy(context.Background(), "meu-app", composeV("v1")); err == nil || !strings.Contains(err.Error(), `"api"`) {
-		t.Fatalf("aceitou rota pra service que nao existe: %v", err)
-	}
-	if len(f.ups) != 0 {
-		t.Fatal("subiu compose recusado")
-	}
-	if _, err := os.Stat(filepath.Join(m.Root, "meu-app", ComposeFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("gravou compose recusado")
+	// o compose le o .env da pasta do arquivo
+	if d.envSeen["A"] != "1" {
+		t.Errorf(".env nao ficou ao lado do compose: %v", d.envSeen)
 	}
 }
 
-func TestDeployQueFalhaVoltaAVersaoAnterior(t *testing.T) {
-	m, f := newManager(t)
-	m.Create("meu-app")
-	if _, err := m.Deploy(context.Background(), "meu-app", composeV("v1")); err != nil {
+func TestDeploySemComposeNaoMexeNoNoAr(t *testing.T) {
+	m, src, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	m.Deploy(context.Background(), "web", "")
+	src.commits["c3"] = map[string]string{"README.md": "sem compose"}
+	d.calls = nil
+
+	_, err := m.Deploy(context.Background(), "web", "c3")
+	if err == nil || !strings.Contains(err.Error(), "nao tem o compose") {
+		t.Fatalf("erro %v", err)
+	}
+	if len(d.calls) != 0 {
+		t.Errorf("chamou o docker: %v", d.calls)
+	}
+	a, _ := m.Get("web")
+	if a.Commit != "c1" || a.Last.Error == "" || a.Last.Commit != "c3" {
+		t.Errorf("app %+v / %+v", a, a.Last)
+	}
+	if data, _ := os.ReadFile(filepath.Join(m.Root, "web", SrcDir, DefaultCompose)); string(data) != "v1" {
+		t.Error("o codigo no ar mudou")
+	}
+}
+
+func TestDeployFalhoVoltaAAnterior(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
 		t.Fatal(err)
 	}
+	d.calls = nil
+	d.failUp["v2"] = true
 
-	f.failFor = ":v2"
-	_, err := m.Deploy(context.Background(), "meu-app", composeV("v2"))
+	_, err := m.Deploy(context.Background(), "web", "c2")
 	if err == nil || !strings.Contains(err.Error(), "unhealthy") || !strings.Contains(err.Error(), "restaurada") {
 		t.Fatalf("erro %v", err)
 	}
-	// subiu v2 (falhou) e depois v1 de novo
-	if len(f.ups) != 3 || !strings.Contains(f.ups[2], ":v1") {
-		t.Fatalf("ups %d, ultimo com v1? %v", len(f.ups), f.ups[len(f.ups)-1])
+	if !slices.Equal(d.calls, []string{"config v2", "build v2", "up v2", "build v1", "up v1"}) {
+		t.Errorf("chamadas %v", d.calls)
 	}
-	cur, _ := os.ReadFile(filepath.Join(m.Root, "meu-app", ComposeFile))
-	if !strings.Contains(string(cur), ":v1") {
-		t.Error("compose no disco nao voltou pra v1")
+	a, _ := m.Get("web")
+	if a.Commit != "c1" || !a.Last.RolledBack || a.Last.Commit != "c2" {
+		t.Errorf("app %+v / %+v", a, a.Last)
 	}
-	a, _ := m.Get("meu-app")
-	if a.Last == nil || !a.Last.RolledBack || a.Last.Error == "" {
-		t.Errorf("registro do deploy %+v", a.Last)
+	if data, _ := os.ReadFile(filepath.Join(m.Root, "web", SrcDir, DefaultCompose)); string(data) != "v1" {
+		t.Error("src nao voltou pro commit anterior")
+	}
+
+	// o proximo deploy que da certo segue normal
+	d.failUp["v2"] = false
+	if _, err := m.Deploy(context.Background(), "web", "c2"); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := m.Get("web"); a.Commit != "c2" {
+		t.Errorf("commit %s", a.Commit)
 	}
 }
 
-func TestPrimeiroDeployQueFalhaNaoTemPraOndeVoltar(t *testing.T) {
-	m, f := newManager(t)
-	m.Create("meu-app")
-	f.failFor = ":v1"
-	_, err := m.Deploy(context.Background(), "meu-app", composeV("v1"))
+func TestPrimeiroDeployFalhoNaoTemPraOndeVoltar(t *testing.T) {
+	m, _, d := newManager(t)
+	d.failUp["v1"] = true
+	m.Create(App{Name: "web", Repo: "o/web"})
+	_, err := m.Deploy(context.Background(), "web", "")
 	if err == nil || strings.Contains(err.Error(), "restaurada") {
 		t.Fatalf("erro %v", err)
 	}
-	if len(f.ups) != 1 {
-		t.Errorf("tentou restaurar sem versao anterior: %d ups", len(f.ups))
+	a, _ := m.Get("web")
+	if a.Commit != "" || a.Last.RolledBack {
+		t.Errorf("app %+v", a)
 	}
 }
 
-func TestRotasSaoDeUmAppSo(t *testing.T) {
-	m, _ := newManager(t)
-	m.Create("app-a")
-	m.Create("app-b")
-	ctx := context.Background()
-	if err := m.SetRoutes(ctx, "app-a", []Route{{Host: "a.exemplo.com.br", Service: "web", Port: 80}}, reserved); err != nil {
+func TestRestartEStopPedemDeploy(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	if err := m.Restart(context.Background(), "web", ""); err == nil {
+		t.Error("reiniciou app sem deploy")
+	}
+	if cs, err := m.Status(context.Background(), "web"); err != nil || len(cs) != 0 {
+		t.Errorf("status antes do deploy %v %v", cs, err)
+	}
+	m.Deploy(context.Background(), "web", "")
+	if err := m.Restart(context.Background(), "web", "worker"); err != nil {
 		t.Fatal(err)
 	}
-
-	cases := map[string]Route{
-		"dominio de outro app": {Host: "a.exemplo.com.br", Path: "/admin", Service: "web", Port: 80},
-		"dominio do registry":  {Host: "registry.exemplo.com.br", Service: "web", Port: 80},
-		"dominio invalido":     {Host: "sem-ponto", Service: "web", Port: 80},
-		"dominio .local":       {Host: "b.local", Service: "web", Port: 80},
-		"caminho sem barra":    {Host: "b.exemplo.com.br", Path: "api", Service: "web", Port: 80},
-		"porta invalida":       {Host: "b.exemplo.com.br", Service: "web", Port: 0},
-		"service com crase":    {Host: "b.exemplo.com.br", Service: "web`", Port: 80},
-		"caminho com crase":    {Host: "b.exemplo.com.br", Path: "/a`) || Host(`x", Service: "web", Port: 80},
-	}
-	for name, r := range cases {
-		if err := m.SetRoutes(ctx, "app-b", []Route{r}, reserved); err == nil {
-			t.Errorf("%s: aceitou %s", name, r)
-		}
-	}
-	dup := []Route{{Host: "b.exemplo.com.br", Service: "web", Port: 80}, {Host: "b.exemplo.com.br", Service: "api", Port: 81}}
-	if err := m.SetRoutes(ctx, "app-b", dup, reserved); err == nil {
-		t.Error("aceitou a mesma rota duas vezes")
-	}
-	// o proprio app pode regravar as rotas dele
-	if err := m.SetRoutes(ctx, "app-a", []Route{{Host: "a.exemplo.com.br", Path: "/v2", Service: "web", Port: 80}}, reserved); err != nil {
-		t.Errorf("app nao conseguiu trocar a propria rota: %v", err)
-	}
-}
-
-func TestSetRoutesEmAppNoArSobeDeNovo(t *testing.T) {
-	m, f := newManager(t)
-	m.Create("meu-app")
-	m.Deploy(context.Background(), "meu-app", composeV("v1"))
-	if len(f.files[0]) != 1 {
-		t.Fatalf("sem rotas nao devia ter override: %v", f.files[0])
-	}
-	if err := m.SetRoutes(context.Background(), "meu-app", []Route{{Host: "app.exemplo.com.br", Service: "web", Port: 3000}}, reserved); err != nil {
+	if err := m.Stop(context.Background(), "web"); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.ups) != 2 || len(f.files[1]) != 2 {
-		t.Fatalf("trocar rota de app no ar tem que subir com o override: %v", f.files)
-	}
-	if err := m.SetRoutes(context.Background(), "meu-app", []Route{{Host: "app.exemplo.com.br", Service: "nao-existe", Port: 1}}, reserved); err == nil {
-		t.Error("aceitou rota pra service que nao existe em app no ar")
-	}
-	m.SetRoutes(context.Background(), "meu-app", nil, reserved)
-	if _, err := os.Stat(filepath.Join(m.Root, "meu-app", OverrideFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Error("sem rotas o override tem que sumir")
+	if !slices.Contains(d.calls, "restart worker") || !slices.Contains(d.calls, "stop") {
+		t.Errorf("chamadas %v", d.calls)
 	}
 }
 
-func TestListIgnoraPastaQueNaoEApp(t *testing.T) {
-	m, _ := newManager(t)
-	m.Create("b-app")
-	m.Create("a-app")
-	os.MkdirAll(filepath.Join(m.Root, "lixo"), 0o700)
-	list, err := m.List()
-	if err != nil || len(list) != 2 || list[0].Name != "a-app" {
-		t.Fatalf("List = %+v, %v", list, err)
+func TestSecrets(t *testing.T) {
+	m, _, _ := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	if err := m.SetSecret("web", "../fora", []byte("x")); err == nil {
+		t.Error("aceitou nome de secret com caminho")
+	}
+	if err := m.SetSecret("web", "jwt", nil); err == nil {
+		t.Error("aceitou secret vazio")
+	}
+	m.SetSecret("web", "jwt", []byte("a"))
+	m.SetSecret("web", "db_url", []byte("b"))
+	list, _ := m.Secrets("web")
+	if len(list) != 2 || list[0].Name != "db_url" {
+		t.Errorf("secrets %v", list)
+	}
+	m.DeleteSecret("web", "jwt")
+	if list, _ := m.Secrets("web"); len(list) != 1 {
+		t.Errorf("depois de apagar %v", list)
 	}
 }
 
-// o compose do app + o override gerado precisam ser aceitos pelo docker
-// compose, com a rede default mantida e os labels juntos
-func TestOverrideJuntaComOComposeNoDocker(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker nao instalado")
-	}
-	dir := t.TempDir()
-	data := composeV("v1")
-	os.WriteFile(filepath.Join(dir, ComposeFile), data, 0o644)
-	services, _ := compose.Services(data)
-	ov, err := Override(App{Name: "meu-app", Routes: []Route{
-		{Host: "app.exemplo.com.br", Service: "web", Port: 3000},
-		{Host: "app.exemplo.com.br", Path: "/api", Service: "worker", Port: 8080},
-	}}, services, nil)
+func TestEnvIdaEVolta(t *testing.T) {
+	in := map[string]string{"A": "simples", "B": "com $ e espaco", "C": `aspa ' "dupla" \ barra`, "D": ""}
+	data, err := FormatEnv(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(dir, OverrideFile), ov, 0o644)
-
-	out, err := exec.Command("docker", "compose", "-p", "meu-app", "-f", filepath.Join(dir, ComposeFile),
-		"-f", filepath.Join(dir, OverrideFile), "config", "--format", "json").CombinedOutput()
-	if err != nil {
-		t.Fatalf("docker compose recusou: %v\n%s", err, out)
-	}
-	var merged struct {
-		Name     string
-		Services map[string]struct {
-			Labels   map[string]string
-			Networks map[string]any
-		}
-	}
-	if err := yaml.Unmarshal(out, &merged); err != nil {
-		t.Fatal(err)
-	}
-	web := merged.Services["web"]
-	if _, ok := web.Networks["default"]; !ok {
-		t.Errorf("web saiu da rede default: %v", web.Networks)
-	}
-	if _, ok := web.Networks["proxy_network"]; !ok {
-		t.Errorf("web sem proxy_network: %v", web.Networks)
-	}
-	worker := merged.Services["worker"]
-	for _, n := range []string{"default", "postgres_network", "proxy_network"} {
-		if _, ok := worker.Networks[n]; !ok {
-			t.Errorf("worker sem %s: %v", n, worker.Networks)
-		}
-	}
-	if worker.Labels["traefik.http.routers.meu-app-worker-2.rule"] == "" {
-		t.Errorf("labels do worker nao chegaram: %v", worker.Labels)
-	}
-}
-
-func TestBancoNoOverride(t *testing.T) {
-	m, f := newManager(t)
-	ctx := context.Background()
-	m.Create("meu-app")
-	m.Deploy(ctx, "meu-app", composeV("v1"))
-	if _, err := m.EnsureDBPassword("meu-app"); err != nil {
-		t.Fatal(err)
-	}
-	pw, _ := m.secrets("meu-app").Get(DBSecret)
-
-	env := DefaultDBEnv()
-	env["DATABASE_URL_FILE"] = "url_file"
-	db := &Database{Engine: "postgres", Services: []string{"web"}, Env: env}
-	if err := m.SetDatabase(ctx, "meu-app", db); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.ups) != 2 {
-		t.Fatal("ligar o banco em app no ar tem que subir de novo")
-	}
-
-	file := filepath.Join(m.Root, "meu-app", OverrideFile)
-	data0, _ := os.ReadFile(file)
-	if strings.Contains(string(data0), string(pw)) {
-		t.Fatal("a senha do banco foi parar no override")
-	}
-	url, err := m.secrets("meu-app").Get(DBURLSecret)
-	if err != nil || string(url) != "postgres://meu_app:"+string(pw)+"@postgres:5432/meu_app" {
-		t.Errorf("secret da URL: %q %v", url, err)
-	}
-	var ov struct {
-		Services map[string]struct {
-			Environment map[string]string
-			Secrets     []string
-			Networks    []string
-		}
-		Secrets map[string]struct{ File string }
-	}
-	data, _ := os.ReadFile(file)
-	yaml.Unmarshal(data, &ov)
-	web := ov.Services["web"]
-	want := map[string]string{
-		"DB_HOST": "postgres", "DB_PORT": "5432", "DB_NAME": "meu_app", "DB_USER": "meu_app",
-		"DB_PASSWORD_FILE":  "/run/secrets/" + DBSecret,
-		"DATABASE_URL_FILE": "/run/secrets/" + DBURLSecret,
-	}
-	for k, v := range want {
-		if web.Environment[k] != v {
-			t.Errorf("%s = %q, esperava %q", k, web.Environment[k], v)
-		}
-	}
-	if !slices.Equal(web.Networks, []string{"default", "postgres_network"}) {
-		t.Errorf("redes do web %v", web.Networks)
-	}
-	if !slices.Equal(web.Secrets, []string{DBSecret, DBURLSecret}) || ov.Secrets[DBURLSecret].File != "./secrets/"+DBURLSecret {
-		t.Errorf("secret do banco: %v %v", web.Secrets, ov.Secrets)
-	}
-	if _, ok := ov.Services["worker"]; ok {
-		t.Error("worker nao foi pedido e recebeu o banco")
-	}
-
-	// desligar o banco tira tudo do override (sem rotas, o arquivo some)
-	if err := m.SetDatabase(ctx, "meu-app", nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
-		t.Error("sem rotas nem banco o override tem que sumir")
-	}
-}
-
-func TestCheckDatabaseRecusa(t *testing.T) {
-	cases := map[string]Database{
-		"engine desconhecido": {Engine: "mongo", Env: DefaultDBEnv()},
-		"sem variaveis":       {Engine: "postgres"},
-		"valor invalido":      {Engine: "postgres", Env: map[string]string{"X": "senha"}},
-		"senha em variavel":   {Engine: "postgres", Env: map[string]string{"DB_PASSWORD": "password"}},
-		"url em variavel":     {Engine: "postgres", Env: map[string]string{"DATABASE_URL": "url"}},
-		"variavel invalida":   {Engine: "postgres", Env: map[string]string{"1X": "host"}},
-		"service invalido":    {Engine: "postgres", Env: DefaultDBEnv(), Services: []string{"a b"}},
-	}
-	for name, db := range cases {
-		if err := CheckDatabase(db); err == nil {
-			t.Errorf("%s: aceitou %+v", name, db)
-		}
-	}
-	m, _ := newManager(t)
-	m.Create("meu-app")
-	m.Deploy(context.Background(), "meu-app", composeV("v1"))
-	m.EnsureDBPassword("meu-app")
-	err := m.SetDatabase(context.Background(), "meu-app", &Database{Engine: "postgres", Services: []string{"api"}, Env: DefaultDBEnv()})
-	if err == nil || !strings.Contains(err.Error(), `"api"`) {
-		t.Errorf("aceitou banco pra service que nao existe: %v", err)
-	}
-}
-
-// rotas + banco no mesmo service: o docker compose aceita e junta tudo
-func TestOverrideComBancoNoDocker(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker nao instalado")
-	}
-	dir := t.TempDir()
-	data := composeV("v1")
-	os.WriteFile(filepath.Join(dir, ComposeFile), data, 0o644)
-	os.Mkdir(filepath.Join(dir, "secrets"), 0o700)
-	os.WriteFile(filepath.Join(dir, "secrets", DBSecret), []byte("SENHA"), 0o444)
-	os.WriteFile(filepath.Join(dir, "secrets", DBURLSecret), []byte("postgres://x"), 0o444)
-	services, _ := compose.Services(data)
-	e, _ := databases.Get("postgres")
-	a := App{Name: "meu-app",
-		Routes:   []Route{{Host: "app.exemplo.com.br", Service: "web", Port: 3000}},
-		Database: &Database{Engine: "postgres", Env: DefaultDBEnv()}}
-	ov, err := Override(a, services, &DBConn{Engine: e, Name: "meu_app"})
+	out, err := ParseEnv(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(dir, OverrideFile), ov, 0o600)
-	out, err := exec.Command("docker", "compose", "-p", "meu-app", "-f", filepath.Join(dir, ComposeFile),
-		"-f", filepath.Join(dir, OverrideFile), "config", "--format", "json").CombinedOutput()
-	if err != nil {
-		t.Fatalf("docker compose recusou: %v\n%s", err, out)
-	}
-	var merged struct {
-		Services map[string]struct {
-			Environment map[string]string
-			Networks    map[string]any
-			Secrets     []struct{ Source string }
+	for k, v := range in {
+		if out[k] != v {
+			t.Errorf("%s: %q virou %q", k, v, out[k])
 		}
 	}
-	yaml.Unmarshal(out, &merged)
-	for _, svc := range []string{"web", "worker"} {
-		s := merged.Services[svc]
-		if s.Environment["DB_HOST"] != "postgres" {
-			t.Errorf("%s sem DB_HOST: %v", svc, s.Environment)
-		}
-		if _, ok := s.Networks["postgres_network"]; !ok {
-			t.Errorf("%s sem postgres_network: %v", svc, s.Networks)
-		}
-		if _, ok := s.Networks["default"]; !ok {
-			t.Errorf("%s saiu da default: %v", svc, s.Networks)
-		}
-		if len(s.Secrets) != 2 || s.Secrets[0].Source != DBSecret || s.Secrets[1].Source != DBURLSecret {
-			t.Errorf("%s secrets %v", svc, s.Secrets)
-		}
+	if _, err := FormatEnv(map[string]string{"A": "linha\nquebrada"}); err == nil {
+		t.Error("aceitou quebra de linha")
 	}
-	if _, ok := merged.Services["web"].Networks["proxy_network"]; !ok {
-		t.Error("web perdeu a proxy_network da rota")
+	if _, err := FormatEnv(map[string]string{"1A": "x"}); err == nil {
+		t.Error("aceitou nome invalido")
 	}
 }
 
-func TestNameFromRepo(t *testing.T) {
-	cases := map[string]string{
-		"meu-app":                       "meu-app",
-		"TRDSmartPodCast":               "trdsmartpodcast",
-		"Meu_App":                       "meu-app",
-		"meu_app.web":                   "meu-app-web",
-		"__x--y..z__":                   "x-y-z",
-		"-.-":                           "",
-		strings.Repeat("a", 39) + "_bc": strings.Repeat("a", 39),
-	}
-	for in, want := range cases {
-		if got := NameFromRepo(in); got != want {
-			t.Errorf("NameFromRepo(%q) = %q, esperava %q", in, got, want)
+func TestWarnings(t *testing.T) {
+	src, secretsDir := "/var/lib/cais/apps/web/src.next", "/var/lib/cais/apps/web/secrets"
+	ctx := t.TempDir() // contexto de build sem .dockerignore
+	cfg := `{"services": {
+		"web": {"labels": {"traefik.enable": "true"}, "networks": {"default": null},
+			"ports": [{"published": "8080", "target": 3000}],
+			"build": {"context": "` + ctx + `"},
+			"volumes": [{"type": "bind", "source": "/var/run/docker.sock"}, {"type": "bind", "source": "/etc"},
+				{"type": "bind", "source": "` + src + `/worker"}, {"type": "bind", "source": "` + secretsDir + `/jwt"}]},
+		"db": {"privileged": true, "container_name": "postgres", "network_mode": "host"}
+	}}`
+	got := strings.Join(Warnings([]byte(cfg), src, secretsDir, filepath.Join(ctx, ".env")), "\n")
+	for _, want := range []string{"privileged", "stack do cais", "rede ou os processos", "8080:3000 em todas",
+		"docker.sock", "monta /etc", "proxy_network", ".dockerignore"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("faltou aviso sobre %q:\n%s", want, got)
 		}
 	}
-	if got := ImageFromRepo("registry.exemplo.com.br", "TRDSmartPodCast"); got != "registry.exemplo.com.br/trdsmartpodcast" {
-		t.Errorf("imagem %s", got)
+	for _, bad := range []string{"/worker", "/jwt"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("avisou de bind esperado %s:\n%s", bad, got)
+		}
+	}
+
+	os.WriteFile(filepath.Join(ctx, ".dockerignore"), []byte("node_modules\n.env\n"), 0o644)
+	if got := Warnings([]byte(cfg), src, secretsDir, filepath.Join(ctx, ".env")); slices.ContainsFunc(got, func(w string) bool { return strings.Contains(w, ".dockerignore") }) {
+		t.Errorf("avisou com .env no .dockerignore: %v", got)
+	}
+	if got := Warnings([]byte(`{"services": {"web": {}}}`), src, secretsDir, ""); len(got) != 0 {
+		t.Errorf("compose limpo com avisos: %v", got)
+	}
+}
+
+func TestGuide(t *testing.T) {
+	g := Guide(GuideInput{App: "web", Host: "web.exemplo.com.br", Networks: []string{"postgres_network"},
+		Env: []string{"DATABASE_URL"}, Secrets: []string{"jwt"}})
+	for _, want := range []string{
+		"traefik.http.routers.web.rule: Host(`web.exemplo.com.br`)",
+		"traefik.http.routers.web.entrypoints: websecure",
+		"proxy_network:\n    external: true",
+		"postgres_network:\n    external: true",
+		"file: ${CAIS_SECRETS}/jwt",
+		"postgres:5432",
+		"env_file: .env",
+	} {
+		if !strings.Contains(g, want) {
+			t.Errorf("guia sem %q:\n%s", want, g)
+		}
 	}
 }

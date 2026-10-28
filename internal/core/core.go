@@ -22,7 +22,7 @@ type Deps struct {
 	SecretsDir string
 	StackDir   func(name string) string
 
-	// Comandos do docker usados pelo Setup e pelo registry.
+	// Comandos do docker usados pelo Setup.
 	ComposeUp     func(ctx context.Context, file string, recreate bool) error
 	ComposeDown   func(ctx context.Context, file string) error
 	ContainerLogs func(context.Context, string) (string, error)
@@ -31,13 +31,14 @@ type Deps struct {
 	// GitHubURL troca a API do GitHub (testes); vazio e o GitHub.
 	GitHubURL string
 
-	// Apps: pasta dos apps e as operacoes de projeto compose deles.
+	// Apps: pasta dos apps, de onde vem o codigo (padrao: o GitHub App) e
+	// as operacoes de projeto compose deles.
 	AppsDir   string
+	AppSource apps.Source
 	AppDocker apps.Docker
 	Exec      func(ctx context.Context, container string, args ...string) (string, error)
 	// ExecInput e o Exec com stdin: SQL com senha nunca vai na linha de comando.
 	ExecInput func(ctx context.Context, container string, input []byte, args ...string) (string, error)
-	Login     func(ctx context.Context, host, user string, password []byte) error
 }
 
 // Core guarda o estado e executa as acoes. E seguro pra uso concorrente:
@@ -45,8 +46,8 @@ type Deps struct {
 type Core struct {
 	deps Deps
 
-	// infra serializa as acoes que mexem na VPS (Setup, usuarios do
-	// registry): uma segunda chamada falha na hora em vez de esperar.
+	// infra serializa as acoes que mexem na VPS (Setup, bancos): uma
+	// segunda chamada falha na hora em vez de esperar.
 	infra sync.Mutex
 
 	mu          sync.Mutex
@@ -58,11 +59,8 @@ type Core struct {
 	appChecks   int // checagens dos apps em andamento
 
 	// appLocks tem uma trava por app: dois deploys do mesmo app nunca rodam
-	// juntos, mas apps diferentes sim (o CI pode publicar varios ao mesmo
-	// tempo). routes serializa a troca de rotas, que confere dominios entre
-	// todos os apps.
+	// juntos, mas apps diferentes sim.
 	appLocks sync.Map // nome -> *sync.Mutex
-	routes   sync.Mutex
 	// appsCheck serializa o CheckApps: duas checagens juntas (fim de dois
 	// deploys) publicariam fora de ordem e a mais velha apagaria a nova
 	appsCheck sync.Mutex
@@ -109,9 +107,6 @@ func New(d Deps) *Core {
 	}
 	if d.ExecInput == nil {
 		d.ExecInput = docker.ExecInput
-	}
-	if d.Login == nil {
-		d.Login = docker.Login
 	}
 	return &Core{deps: d, subs: map[int]chan State{}}
 }

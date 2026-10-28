@@ -1,8 +1,9 @@
 # cais
 
 Painel TUI (Go + Bubble Tea/Lip Gloss, com suporte a mouse) para preparar e administrar uma VPS
-que so tem Docker instalado: Traefik, registry, bancos Postgres/MySQL,
-storage S3 com Garage, secrets por app e CI com Woodpecker.
+que so tem Docker instalado: Traefik, bancos Postgres/MySQL compartilhados,
+storage S3 com Garage e os apps -- cada um e um repositorio do GitHub com o
+compose de producao pronto, que o cais baixa, builda e sobe.
 
 Roda direto no host, pela sessao SSH: nao abre porta e nao tem login proprio.
 
@@ -24,7 +25,7 @@ enxergam o mesmo estado ao mesmo tempo.
                             |
    cais daemon:  rpc.Serve -> internal/core (estado + acoes)
                             |
-     docker / secrets / databases / apps / github / woodpecker
+          docker / secrets / databases / apps / github
 ```
 
 Regras:
@@ -63,14 +64,11 @@ Regras:
 | `internal/bootstrap` | assistente da VPS vazia |
 | `internal/stacks` | stacks base + `templates/` embutidos |
 | `internal/docker` | checagem, SDK do Docker e `docker compose` |
-| `internal/compose` | parse e validacao do compose (recusa escalada pro host) |
 | `internal/secrets` | secrets centrais e por app |
 | `internal/databases` | databases/usuarios Postgres e MySQL |
-| `internal/apps` | apps em `/var/lib/cais/apps/<app>` |
-| `internal/github` | link do GitHub, deteccao de CI |
-| `internal/woodpecker` | cliente da API do Woodpecker |
+| `internal/apps` | apps em `/var/lib/cais/apps/<app>`: deploy, `.env`, secrets, avisos e ajuda do compose |
+| `internal/github` | GitHub App: token por repositorio, commit e tarball do codigo |
 | `internal/config` | `/etc/cais/config.yaml` e os caminhos no disco |
-| `internal/ci` | pipeline do Woodpecker e chave de deploy do CI |
 | `assets/` | unidade systemd |
 
 ## Diretorios na VPS
@@ -78,8 +76,8 @@ Regras:
 | Caminho | Conteudo |
 |---|---|
 | `/etc/cais/config.yaml` | configuracao: dominio base, e-mail, servicos opcionais ativos |
-| `/var/lib/cais/stacks/<stack>/` | compose das stacks base (proxy, registry, woodpecker, postgres, mysql, garage) |
-| `/var/lib/cais/apps/<app>/` | compose do app e `secrets/` dele |
+| `/var/lib/cais/stacks/<stack>/` | compose das stacks (proxy, postgres, mysql, garage) |
+| `/var/lib/cais/apps/<app>/` | `app.yaml`, `env` (variaveis), `secrets/` e o codigo: `src/` (no ar) e `src.prev` (anterior) |
 | `/var/lib/cais/secrets/` | secrets centrais (senhas das instancias de banco etc.) |
 | `/var/lib/cais/backups/` | backups |
 | `/run/cais/cais.sock` | socket do daemon |
@@ -90,57 +88,29 @@ caminhos ficam em `internal/config/paths.go` e podem ser trocados por
 `CAIS_CONFIG` e `CAIS_DATA_DIR` (ex: pra testar no PC).
 
 Secrets ficam em texto puro em `/var/lib/cais` (pasta root `0700`, arquivos
-`0444`) e chegam ao container por `secrets: file: ./secrets/<nome>`. Nunca em
-`environment:`; o valor nunca aparece no estado, em log ou na TUI; backups saem
+`0444`); o valor nunca aparece no estado nem em log. Backups saem
 criptografados com [age](https://age-encryption.org) para uma chave publica
 cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
 
-O cais gera sozinho todos os secrets das stacks (senhas dos bancos, agent
-secret do Woodpecker, RPC secret e token de admin do Garage) e nunca troca
-um que ja existe; so o client secret do GitHub e informado. O
-registry tem um usuario por quem acessa: `ci` (push do Woodpecker) e `vps`
-(pull do daemon) com senha guardada, e um por pessoa so com o hash (a senha e
-mostrada uma vez). Todo usuario pode push/pull, entao revogar e por pessoa; o
-delete pela API fica desligado.
-
-## CI (Woodpecker)
-
-```
-push -> Woodpecker: build do Dockerfile (kaniko) -> push registry/<app>:<commit>
-     -> ssh cais-deploy@vps "<app> <commit>"
-     -> sshd forca: cais deploy -> /run/cais/deploy.sock -> deploy por tag
-```
-
-```sh
-cais ci pipeline > .woodpecker.yml   # em cada repositorio (igual pra todo app)
-cais ci setup                        # usuario cais-deploy, authorized_keys e secrets do Woodpecker
-```
-
-Nao ha script de deploy no host. A chave do CI tem `restrict` e o forced command
-`cais deploy`: sem shell, pty nem tunel, so o pedido de deploy de uma tag. Ela
-fala com um socket proprio (`deploy.sock`, so do usuario `cais-deploy`, aberto com
-`cais daemon --deploy-user cais-deploy`), onde o daemon confere quem conectou
-(`SO_PEERCRED`) e so aceita `app.deploy.tag`: o CI escolhe a tag, nunca a
-configuracao do app. Cada pedido fica no log do daemon.
+O cais gera sozinho os secrets das stacks (senhas root dos bancos, RPC
+secret e token de admin do Garage) e nunca troca um que ja existe; so a chave
+do GitHub App e informada.
 
 ## Configuracao
 
 `/etc/cais/config.yaml` guarda so o que um humano decide (secrets nunca):
 
 ```yaml
-domain: exemplo.com.br          # ci., registry. e s3.<domain> saem daqui
+domain: exemplo.com.br          # s3.<domain> e <app>.<domain> saem daqui
 email: admin@exemplo.com.br     # avisos do Let's Encrypt
 stacks: [postgres, mysql, garage] # opcionais: so os que usar
 proxy:
   http_port: 80                 # outra porta so numa migracao
   https_port: 443
 hosts:                          # opcional: troca o nome padrao
-  ci: build.exemplo.com.br
-  registry: imagens.exemplo.com.br
   s3: arquivos.exemplo.com.br
-woodpecker:
-  github_client: Ov23li...      # Client ID do OAuth app do GitHub
-  admin: seu-usuario-github
+github:
+  app_id: 123456                # GitHub App do cais (baixa o codigo dos apps)
 ```
 
 Campo desconhecido e erro (pega erro de digitacao). Os compose das stacks sao
@@ -153,9 +123,8 @@ Sem WAF no proxy, de proposito: pra apps proprios ele gera mais falso positivo
 que protecao. A protecao vem de TLS, login forte e bancos fora da rede publica.
 WAF e DDoS, se precisar, ficam melhor na borda (ex: Cloudflare).
 
-Proxy, registry e Woodpecker sao fixos e sobem sempre. O Setup exige o
-Client ID, o usuario administrador e o client secret do OAuth app do GitHub.
-O campo `stacks` lista apenas os opcionais: Postgres, MySQL e Garage.
+O proxy e fixo e sobe sempre. O campo `stacks` lista apenas os opcionais:
+Postgres, MySQL e Garage.
 Ative cada um pela aba **Infra** ou com `cais service <nome> on`; para desligar,
 use `off`. So os secrets dos servicos ativos sao gerados. Cada banco fica
 na propria rede (`postgres_network`, `mysql_network`),
@@ -176,7 +145,22 @@ ssh -N -L 5432:127.0.0.1:5432 -L 3306:127.0.0.1:3306 voce@vps
 # e conecte em localhost:5432 (postgres) e localhost:3306 (root)
 ```
 
-O `cais setup` mostra esse comando e onde ler as senhas.
+O `cais setup` mostra esse comando e onde ler as senhas root.
+
+Cada app usa um database proprio no banco compartilhado (o compose de
+producao nao declara banco; o de desenvolvimento pode). Crie na aba **Infra**
+(botao **Novo banco** no card do Postgres/MySQL, ou tecla `b`) ou pelo CLI:
+
+```sh
+cais db create postgres meu_app -extensions postgis
+cais db list
+```
+
+O cais cria o database e um usuario de mesmo nome com senha nova, que so
+acessa esse database, e mostra a credencial: host (`postgres:5432` ou
+`mysql:3306`, pela rede `postgres_network`/`mysql_network`), usuario, senha e
+a URL completa, pra por nas variaveis ou num secret do app. A senha fica
+guardada no cais (`cais db list` mostra de novo).
 
 O Garage publica a API S3 em `https://s3.<domain>` (ou `hosts.s3`), com
 regiao `garage` e enderecamento por caminho (path-style). O Setup prepara
@@ -197,18 +181,15 @@ Guarde a chave retornada em local seguro. Configure seu cliente S3 com o
 endpoint HTTPS, regiao `garage` e path-style; no teste local, use a CA gerada
 pelo cais. O secret RPC e o token de admin sao internos, nao sao chaves S3.
 
-O registry de imagens e publico em `https://registry.<domain>` (TLS do Let's
-Encrypt + login), numa stack propria: CI e VPS fazem push/pull pelo mesmo nome,
-sem `insecure-registries`. Os bancos nunca entram na `proxy_network`,
-e os builds do CI rodam fora da rede deles.
+Os bancos nunca entram na `proxy_network`.
 
 ## Roadmap
 
 1. Esqueleto: TUI com abas clicaveis, checagem de Docker/Compose
 2. Bootstrap: templates das stacks + assistente da VPS vazia
-3. Apps e secrets: logs ao vivo, restart, propagar secret
-4. Bancos
-5. GitHub + Woodpecker: criar app pelo link, detectar/gerar CI
+3. Apps: repositorio do GitHub com compose de producao, deploy com volta, logs, restart
+4. Bancos: database e usuario por app no Postgres/MySQL compartilhado
+5. Deploy automatico no push (webhook do GitHub App)
 6. Backups, releases e `install.sh`
 
 ## Uso
@@ -222,7 +203,7 @@ cais service postgres on # liga o Postgres e aplica a configuracao
 cais service garage off  # desliga o S3 e preserva os volumes
 ```
 
-A aba **Setup** concentra dominio, e-mail, certificados, GitHub e hosts.
+A aba **Setup** concentra dominio, e-mail, certificados, o GitHub App e hosts.
 A aba **Infra** mostra o estado das stacks fixas, os botoes Ligar/Desligar
 dos servicos opcionais, o passo em andamento e as instrucoes do S3.
 Os cards ficam a esquerda; a direita aparecem os logs do container selecionado
@@ -234,113 +215,95 @@ Pode rodar de novo a qualquer momento: nada que existe e regenerado e stacks sem
 Um Setup disparado pelo CLI aparece ao vivo na TUI aberta, e vice-versa.
 
 ```sh
-cais setup config --domain exemplo.com.br --email voce@exemplo.com.br \
-    --github-client <client id> --github-admin <usuario>
-cais setup secret github_client_secret   # le sem eco, ou do stdin
+cais setup config --domain exemplo.com.br --email voce@exemplo.com.br --github-app-id <id>
+cais setup secret github_app_key < chave.pem
 cais setup                               # plano: o que falta e o que muda
 cais setup run                           # gera secrets, grava os compose, sobe tudo
 ```
 
 O `run` sobe as stacks em ordem com `docker compose up -d --wait` (cada uma
-saudavel antes da proxima) e termina com o `docker login` da VPS no registry.
-Antes, o DNS de `ci.` e `registry.<dominio>` precisa apontar pra VPS,
-assim como `s3.<dominio>` quando o Garage estiver ativo.
+saudavel antes da proxima). O DNS de cada app (`<app>.<dominio>` ou o que o
+compose dele usar) precisa apontar pra VPS, assim como `s3.<dominio>` quando o
+Garage estiver ativo.
 
 Pra testar num PC, sem DNS publico: use um dominio `.localhost` (o
 systemd-resolved e os navegadores ja resolvem `*.localhost` pra 127.0.0.1; `.local`
 e recusado porque e do mDNS) e `--tls selfsigned`. O cais cria uma CA local
 restrita ao dominio do teste (name constraints: nao assina nada fora dele) e um
 certificado com SAN pra todos os nomes; o `setup run` termina mostrando como
-confiar nela (`/etc/docker/certs.d/<registry>/ca.crt` pro docker, `trust anchor`
-pro sistema). Use `CAIS_SOCKET`, `CAIS_CONFIG` e `CAIS_DATA_DIR` numa pasta
+confiar nela (`trust anchor`). Use `CAIS_SOCKET`, `CAIS_CONFIG` e `CAIS_DATA_DIR` numa pasta
 persistente (nao `/tmp`: os volumes sobrevivem ao reboot e os secrets nao).
 
-Apps (cada um em `/var/lib/cais/apps/<app>`, projeto compose com o nome do app).
-O repositorio do app so precisa do Dockerfile:
+## Apps
+
+Um app e um repositorio do GitHub (privado) com o **compose de producao
+pronto**. O cais nao analisa nem reescreve nada: baixa o commit, grava o `.env`
+com as variaveis do app, faz o build e sobe. O que sobe e como e decisao do
+repositorio.
 
 ```sh
-cais app import https://github.com/dono/meu-app   # le o repositorio privado pelo GitHub App
-cais app ci meu-app                    # abre um PR com o .woodpecker.yml
-cais app init meu-app ./meu-app        # o mesmo do import, a partir de uma pasta local:
-                                       # analisa Dockerfile, .env.example e manifestos;
-                                       # mostra o plano (porta, rota, volumes, banco,
-                                       # variaveis, secrets) e configura com confirmacao
-cais app secret meu-app jwt_secret     # segredos detectados viram arquivo em /run/secrets
-cais app deploy meu-app --tag <sha>    # o CI chama isso depois do build: o compose sai da
-                                       # spec do app; o CI so escolhe a tag
-cais app env meu-app APP_URL=https://x -apply   # muda variaveis; -apply refaz o deploy
-                                                # da tag no ar pra valer agora
-```
-
-Onde fica a configuracao do app: variaveis comuns na spec (`app.yaml`), segredos
-em `secrets/` do app (montados em `/run/secrets`), tudo na VPS. O `.env.example`
-do repositorio so e lido na analise, e o Woodpecker so tem a senha do registry e
-a chave de deploy: o CI nunca ve a configuracao nem os segredos do app.
-
-O import le o repositorio como **GitHub App** do cais (App ID e chave na aba
-Setup -- cole o .pem ou o caminho do arquivo --, ou `cais setup config
---github-app-id <id>` e `cais setup secret github_app_key < chave.pem`): cada
-acesso pede um token de uma hora restrito ao repositorio importado e le so os
-arquivos da analise. O app tem o nome do repositorio, porque o CI usa esse nome
-pro app e pra imagem.
-
-Quando o repositorio tem compose de producao (`docker-compose.producao.yml`,
-`docker-compose-prod.yml`, `.prod.yml`...), a analise parte dele: o service com
-`build` e o app (pasta, Dockerfile, build args, comando, porta do container,
-volumes e variaveis do `environment`/`env_file`); o service de banco vira o
-Postgres/MySQL da infra (imagem PostGIS cria a extensao `postgis` no database do
-app); o resto (init de permissao, codigo montado do repositorio) vira aviso. O
-Dockerfile e os manifestos sao lidos da pasta de build.
-
-Build args so pra valores publicos (`NEXT_PUBLIC_*`, `VITE_*`...): ficam gravados
-na imagem. O `.woodpecker.yml` do PR (`cais app ci`) sai com a pasta, o
-Dockerfile e os build args do app. Todo app sai com rotacao de log (20 MB x 5).
-
-A analise so sugere: porta, banco e variaveis podem ser trocados depois (`cais app
-db`, `routes`). Variavel com cara de segredo (`*_SECRET`, `*_TOKEN`, `*_PASSWORD`...)
-e recusada na spec: vira secret do app e o app recebe `X_FILE=/run/secrets/x`.
-
-Modo avancado (compose pronto, validado do mesmo jeito):
-
-```sh
-cais app create meu-app
-cais app deploy meu-app < docker-compose.yml       # valida, sobe e espera os healthchecks
-cais app routes meu-app app.exemplo.com.br=web:3000 app.exemplo.com.br/api=api:8080
-cais apps                                          # estado de todos
+cais app create meu-app dono/meu-app -compose docker-compose.producao.yml   # -branch opcional
+cais app guide meu-app                       # modelo de compose: labels, redes, secrets
+cais app env meu-app NODE_ENV=production DATABASE_URL=postgres://...
+cais app secret meu-app jwt_secret           # le sem eco, ou do stdin
+cais app deploy meu-app                      # o commit mais novo da branch
+cais app deploy meu-app -ref 3f2a1c9         # ou um commit/branch
+cais apps                                    # estado de todos
 cais app logs meu-app meu-app-web-1
-cais app db meu-app postgres                       # database + usuario do app no Postgres da infra
-cais app db meu-app postgres DATABASE_URL_FILE=url_file   # caminho do arquivo com a URL completa
+cais app restart meu-app [service]
+cais app stop meu-app
 ```
 
-O app nao declara o banco no compose: `cais app db` cria database e usuario com o
-nome do app e injeta a conexao pelo override -- rede do banco, os secrets e as
-variaveis (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD_FILE` por
-padrao; `VAR=host|port|name|user|password_file|url_file` pra outros nomes). O
-usuario de um app nao conecta no database de outro.
+Na TUI, aba **Apps**: **+ Novo app** com o link do repositorio; cada app tem
+Geral (deploy, reiniciar, parar, repositorio/branch/compose), Variaveis,
+Secrets, Ajuda (o modelo de compose) e Logs.
 
-**A senha nunca vai em variavel de ambiente** (apareceria no `docker inspect`):
-fica so nos arquivos `/run/secrets/cais_db_password` e `/run/secrets/cais_db_url`
-(a URL completa), e o app le de la. Pra framework que so aceita `DATABASE_URL`,
-leia o arquivo no codigo antes de conectar, ou num entrypoint:
+O deploy:
 
-```sh
-export DATABASE_URL="$(cat /run/secrets/cais_db_url)"   # so dentro do processo
-exec "$@"
+1. pergunta ao GitHub o commit da branch (ou do `-ref`);
+2. baixa o tarball desse commit pelo GitHub App em `src.next` (token de uma
+   hora so pro repositorio; caminhos e symlinks que saem da pasta sao recusados);
+3. grava o `.env` ao lado do compose: as variaveis do app mais `CAIS_APP`,
+   `CAIS_COMMIT` e `CAIS_SECRETS` (a pasta dos secrets);
+4. `docker compose config`: confere o compose resolvido e **avisa** (nao
+   bloqueia) de privileged, porta publicada, `docker.sock`, bind fora da pasta,
+   labels do Traefik sem `proxy_network`, `.env` fora do `.dockerignore`...;
+5. `docker compose -p <app> build --pull` com a versao atual ainda no ar;
+6. troca `src` por `src.next` e `up -d --wait`;
+7. se o `up` falhar, volta o commit anterior (`src.prev`) e sobe ele de novo.
+
+O compose do app publica o dominio pelo Traefik e usa as redes da infra; a
+**Ajuda** (`cais app guide`) gera o trecho pronto pra colar:
+
+```yaml
+services:
+  web:
+    build: .
+    env_file: .env
+    secrets: [jwt_secret]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.meu-app.rule: Host(`meu-app.exemplo.com.br`)
+      traefik.http.routers.meu-app.entrypoints: websecure
+      traefik.http.services.meu-app.loadbalancer.server.port: "3000"
+    networks: [default, proxy_network, postgres_network]
+networks:
+  proxy_network: {external: true}
+  postgres_network: {external: true}
+secrets:
+  jwt_secret:
+    file: ${CAIS_SECRETS}/jwt_secret   # no container: /run/secrets/jwt_secret
 ```
 
-O compose do app vem do repositorio e passa pela validacao de `internal/compose`
-(lista de permitidos: nada de privilegiado, caminho do host, rede ou volume de
-outra stack, porta publicada nem label do Traefik). O roteamento e do cais: as
-rotas viram um `cais.override.yml` com os labels, e um dominio pertence a um app
-so. Se o deploy falha e havia versao no ar, ela volta sozinha.
+Variaveis vao no `.env` (`env_file: .env` ou `${VAR}` no compose) e valem no
+proximo deploy. Secret em arquivo e opcional, pra quem nao quer o valor no
+`docker inspect`. Ponha `.env` no `.dockerignore` pra as variaveis nao entrarem
+na imagem num `COPY . .` (o deploy avisa).
 
-Acesso ao registry de imagens:
-
-```sh
-cais registry add patrick      # mostra a senha uma vez
-cais registry users
-cais registry remove patrick
-```
+O GitHub App do cais e configurado uma vez na aba **Setup** (App ID e a chave:
+cole o .pem ou o caminho do arquivo) ou com `cais setup config --github-app-id`
+e `cais setup secret github_app_key < chave.pem`. O app precisa da permissao
+*Contents: read* e estar instalado nos repositorios.
 
 Em desenvolvimento (Windows/macOS) o socket padrao fica na pasta temporaria;
 rode `cais daemon` num terminal e `cais` em outro.

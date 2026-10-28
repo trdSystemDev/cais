@@ -29,16 +29,11 @@ func newSetupCore(t *testing.T, release <-chan struct{}) *Core {
 			}
 		},
 		ComposeDown: func(context.Context, string) error { return nil },
-		Login:       func(context.Context, string, string, []byte) error { return nil },
 	})
 	cfg := config.Default()
 	cfg.Domain = "exemplo.com.br"
 	cfg.Email = "admin@exemplo.com.br"
-	cfg.Woodpecker = config.Woodpecker{GitHubClient: "Ov23li", Admin: "fulano"}
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.SetSecret(context.Background(), "github_client_secret", "x"); err != nil {
 		t.Fatal(err)
 	}
 	return c
@@ -65,9 +60,6 @@ func TestRunSetupPublicaProgressoERecusaSegundaAcao(t *testing.T) {
 	}
 	if _, err := c.RunSetup(context.Background()); !errors.Is(err, ErrBusy) {
 		t.Errorf("segundo Setup: %v, esperava ErrBusy", err)
-	}
-	if _, err := c.AddRegistryUser(context.Background(), "patrick"); !errors.Is(err, ErrBusy) {
-		t.Errorf("usuario do registry durante o Setup: %v, esperava ErrBusy", err)
 	}
 
 	close(release)
@@ -132,7 +124,7 @@ func TestSetServiceLigaEDesligaEAplica(t *testing.T) {
 		t.Fatal("postgres continua ligado")
 	}
 
-	for _, bad := range []string{"proxy", "woodpecker", "redis"} {
+	for _, bad := range []string{"proxy", "registry", "redis"} {
 		if _, err := c.SetService(ctx, bad, false); err == nil {
 			t.Errorf("deixou mexer em %q", bad)
 		}

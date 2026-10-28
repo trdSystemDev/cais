@@ -12,15 +12,14 @@ func validConfig() Config {
 	c := Default()
 	c.Domain = "exemplo.com.br"
 	c.Email = "admin@exemplo.com.br"
-	c.Woodpecker = Woodpecker{GitHubClient: "Ov23liAbc123", Admin: "fulano"}
 	return c
 }
 
 func TestSaveLoadIdaEVolta(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "etc", "config.yaml")
 	want := validConfig()
-	want.Hosts.CI = "build.exemplo.com.br"
-	want.Hosts.Registry = "imagens.exemplo.com.br"
+	want.Hosts.S3 = "arquivos.exemplo.com.br"
+	want.GitHub.AppID = 42
 
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
@@ -30,7 +29,7 @@ func TestSaveLoadIdaEVolta(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Domain != want.Domain || got.Email != want.Email || got.Hosts != want.Hosts ||
-		got.Proxy != want.Proxy || got.Woodpecker != want.Woodpecker ||
+		got.Proxy != want.Proxy || got.GitHub != want.GitHub ||
 		strings.Join(got.Stacks, ",") != strings.Join(want.Stacks, ",") {
 		t.Fatalf("lido diferente do gravado:\n got %+v\nwant %+v", got, want)
 	}
@@ -70,8 +69,30 @@ func TestLoadAplicaPadroes(t *testing.T) {
 	if strings.Join(c.Stacks, ",") != "proxy,postgres" {
 		t.Errorf("a lista do arquivo tem que substituir a padrao, veio %v", c.Stacks)
 	}
-	if c.CIHost() != "ci.exemplo.com" || c.RegistryHost() != "registry.exemplo.com" {
-		t.Errorf("hosts padrao errados: %s %s", c.CIHost(), c.RegistryHost())
+	if c.S3Host() != "s3.exemplo.com" {
+		t.Errorf("host padrao errado: %s", c.S3Host())
+	}
+}
+
+// config de antes da simplificacao (com CI e registry) ainda abre, e o
+// Save tira o que nao existe mais
+func TestLoadConfigAntiga(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	old := "domain: exemplo.com\nemail: a@exemplo.com\nstacks: [proxy, registry, woodpecker]\n" +
+		"woodpecker: {github_client: abc, admin: fulano}\nhosts: {ci: build.exemplo.com, registry: img.exemplo.com}\n"
+	os.WriteFile(path, []byte(old), 0o644)
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	for _, gone := range []string{"woodpecker", "registry", "ci:", "github_client"} {
+		if strings.Contains(string(data), gone) {
+			t.Errorf("%q continuou no config gravado:\n%s", gone, data)
+		}
 	}
 }
 
@@ -95,15 +116,12 @@ func TestValidateRecusa(t *testing.T) {
 		"email sem arroba":       func(c *Config) { c.Email = "admin.exemplo.com" },
 		"email dominio invalido": func(c *Config) { c.Email = "a@b" },
 		"email com aspas":        func(c *Config) { c.Email = `a"b@exemplo.com` },
-		"host ci invalido":       func(c *Config) { c.Hosts.CI = "ci_x.exemplo.com" },
-		"host registry invalido": func(c *Config) { c.Hosts.Registry = "registry" },
+		"host s3 invalido":       func(c *Config) { c.Hosts.S3 = "s3_x.exemplo.com" },
 		"dominio .local":         func(c *Config) { c.Domain = "trd.local" },
 		"tls desconhecido":       func(c *Config) { c.TLS = "acme" },
 		"porta zero":             func(c *Config) { c.Proxy.HTTPPort = 0 },
 		"porta alta":             func(c *Config) { c.Proxy.HTTPSPort = 70000 },
 		"portas iguais":          func(c *Config) { c.Proxy.HTTPSPort = c.Proxy.HTTPPort },
-		"admin invalido":         func(c *Config) { c.Woodpecker.Admin = "-fulano" },
-		"client com espaco":      func(c *Config) { c.Woodpecker.GitHubClient = "a b" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

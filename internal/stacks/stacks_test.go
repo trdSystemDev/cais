@@ -21,7 +21,6 @@ func validConfig() config.Config {
 	c := config.Default()
 	c.Domain = "exemplo.com.br"
 	c.Email = "admin@exemplo.com.br"
-	c.Woodpecker = config.Woodpecker{GitHubClient: "Ov23liAbc123", Admin: "fulano"}
 	c.Stacks = []string{"postgres", "mysql"}
 	return c
 }
@@ -122,7 +121,7 @@ func TestProxyNasceVazioComPortasEEmail(t *testing.T) {
 		// o docker.sock so chega pelo socket-proxy somente leitura
 		"--providers.docker.endpoint=tcp://traefik-docker-proxy:2375",
 		"--entrypoints.web.http.redirections.entrypoint.to=websecure",
-		// o padrao de 60s corta o push de camada grande no registry
+		// o padrao de 60s corta upload grande dos apps
 		"--entrypoints.websecure.transport.respondingtimeouts.readtimeout=30m",
 		"--certificatesresolvers.le.acme.email=admin@exemplo.com.br",
 		"--entrypoints.websecure.http.tls.certresolver=le",
@@ -141,24 +140,6 @@ func TestProxyNasceVazioComPortasEEmail(t *testing.T) {
 	}
 }
 
-func TestHostsSaemDaConfig(t *testing.T) {
-	c := validConfig()
-	_, wp := render(t, "woodpecker", c)
-	env := wp.Services["woodpecker-server"].Environment
-	if env["WOODPECKER_HOST"] != "https://ci.exemplo.com.br" {
-		t.Errorf("WOODPECKER_HOST = %q", env["WOODPECKER_HOST"])
-	}
-	if env["WOODPECKER_GITHUB_CLIENT"] != "Ov23liAbc123" || env["WOODPECKER_ADMIN"] != "fulano" {
-		t.Errorf("github do woodpecker errado: %v", env)
-	}
-
-	c.Hosts.CI = "build.outro.com"
-	r, _ := render(t, "woodpecker", c)
-	if !strings.Contains(string(r.Compose), "traefik.http.routers.woodpecker.rule: \"Host(`build.outro.com`)\"") {
-		t.Error("woodpecker nao usou hosts.ci")
-	}
-}
-
 // labels de um servico publicado, ja decodificados
 func labelsOf(t *testing.T, cf compose, service string) map[string]string {
 	t.Helper()
@@ -168,32 +149,6 @@ func labelsOf(t *testing.T, cf compose, service string) map[string]string {
 		t.Fatal(err)
 	}
 	return labels
-}
-
-func TestRegistryPublicadoPeloProxy(t *testing.T) {
-	c := validConfig()
-	c.Hosts.Registry = "registry.trds.com.br"
-	_, cf := render(t, "registry", c)
-
-	reg := cf.Services["registry"]
-	if len(reg.Ports) != 0 {
-		t.Errorf("registry nao pode publicar porta no host, so passar pelo proxy: %v", reg.Ports)
-	}
-	if !slices.Equal(reg.Networks, []string{"proxy_network"}) {
-		t.Errorf("redes do registry %v, esperava so proxy_network", reg.Networks)
-	}
-	labels := labelsOf(t, cf, "registry")
-	want := map[string]string{
-		"traefik.enable":                                          "true",
-		"traefik.http.routers.registry.rule":                      "Host(`registry.trds.com.br`)",
-		"traefik.http.routers.registry.entrypoints":               "websecure",
-		"traefik.http.services.registry.loadbalancer.server.port": "5000",
-	}
-	for k, v := range want {
-		if labels[k] != v {
-			t.Errorf("label %s = %q, esperava %q", k, labels[k], v)
-		}
-	}
 }
 
 func TestBancosIsolados(t *testing.T) {
@@ -218,17 +173,6 @@ func TestBancosIsolados(t *testing.T) {
 	}
 	if len(nets) != 2 {
 		t.Errorf("bancos dividindo rede: %v", nets)
-	}
-
-	r, wp := render(t, "woodpecker", c)
-	for n := range nets {
-		if strings.Contains(string(r.Compose), n) {
-			t.Errorf("woodpecker pendura os builds na %s", n)
-		}
-	}
-	env := wp.Services["woodpecker-server"].Environment
-	if env["WOODPECKER_ENVIRONMENT"] != "CAIS_REGISTRY:registry.exemplo.com.br" {
-		t.Errorf("WOODPECKER_ENVIRONMENT = %q", env["WOODPECKER_ENVIRONMENT"])
 	}
 }
 
@@ -280,8 +224,6 @@ func TestEnabledValidaDependencias(t *testing.T) {
 	}{
 		"desconhecida": {[]string{"proxy", "redis"}, nil, `"redis"`},
 		"repetida":     {[]string{"proxy", "proxy"}, nil, "repetida"},
-		"woodpecker sem github": {[]string{"proxy", "registry", "woodpecker"},
-			func(c *config.Config) { c.Woodpecker = config.Woodpecker{} }, "github_client"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -300,7 +242,7 @@ func TestEnabledValidaDependencias(t *testing.T) {
 
 // as fixas sobem sem estar na config; listar uma delas (config antiga) e aceito
 func TestFixasSempreAtivas(t *testing.T) {
-	for _, list := range [][]string{nil, {"proxy", "registry"}} {
+	for _, list := range [][]string{nil, {"proxy"}} {
 		c := validConfig()
 		c.Stacks = list
 		got, err := Enabled(c)
@@ -311,7 +253,7 @@ func TestFixasSempreAtivas(t *testing.T) {
 		for _, s := range got {
 			names = append(names, s.Name)
 		}
-		if strings.Join(names, ",") != "proxy,registry,woodpecker" {
+		if strings.Join(names, ",") != "proxy" {
 			t.Errorf("stacks %v com config %v", names, list)
 		}
 	}
@@ -340,7 +282,7 @@ func TestGaragePublicadoEmS3(t *testing.T) {
 
 func TestEnabledDevolveNaOrdemDeSubida(t *testing.T) {
 	c := validConfig()
-	c.Stacks = []string{"woodpecker", "mysql", "registry", "postgres", "proxy"}
+	c.Stacks = []string{"garage", "mysql", "postgres", "proxy"}
 	got, err := Enabled(c)
 	if err != nil {
 		t.Fatal(err)
@@ -349,7 +291,7 @@ func TestEnabledDevolveNaOrdemDeSubida(t *testing.T) {
 	for _, s := range got {
 		names = append(names, s.Name)
 	}
-	if strings.Join(names, ",") != "proxy,postgres,mysql,registry,woodpecker" {
+	if strings.Join(names, ",") != "proxy,postgres,mysql,garage" {
 		t.Fatalf("ordem %v", names)
 	}
 }
@@ -363,11 +305,6 @@ func TestRenderRecusa(t *testing.T) {
 	}
 	if _, err := Render("proxy", validConfig(), "secrets"); err == nil {
 		t.Error("aceitou pasta de secrets relativa")
-	}
-	c := validConfig()
-	c.Woodpecker = config.Woodpecker{}
-	if _, err := Render("woodpecker", c, secretsDir); err == nil {
-		t.Error("renderizou woodpecker sem github")
 	}
 }
 

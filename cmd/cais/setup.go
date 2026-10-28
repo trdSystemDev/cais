@@ -16,7 +16,6 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/rpc"
-	"github.com/trdSystemDev/cais/internal/secrets"
 )
 
 // subcommand separa "cais setup <sub> ..." do resto dos argumentos.
@@ -69,8 +68,7 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 	if !info.Exists {
 		fmt.Fprintf(out, "Ainda sem configuracao (%s).\n\n", info.Path)
 		fmt.Fprintln(out, "Comece com:")
-		fmt.Fprintln(out, "  cais setup config --domain exemplo.com.br --email voce@exemplo.com.br \\")
-		fmt.Fprintln(out, "      --github-client <client id> --github-admin <usuario do github>")
+		fmt.Fprintln(out, "  cais setup config --domain exemplo.com.br --email voce@exemplo.com.br")
 		return
 	}
 
@@ -85,12 +83,6 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 		fmt.Fprintf(w, "  tls\tautoassinado (so pra teste)\n")
 	}
 	fmt.Fprintf(w, "  portas\t%d (http), %d (https)\n", cfg.Proxy.HTTPPort, cfg.Proxy.HTTPSPort)
-	if cfg.HasStack("registry") {
-		fmt.Fprintf(w, "  registry\thttps://%s\n", cfg.RegistryHost())
-	}
-	if cfg.HasStack("woodpecker") {
-		fmt.Fprintf(w, "  ci\thttps://%s (admin: %s)\n", cfg.CIHost(), cfg.Woodpecker.Admin)
-	}
 	w.Flush()
 
 	if len(p.Stacks) > 0 {
@@ -155,12 +147,7 @@ func printTrust(out io.Writer, p bootstrap.Plan) {
 	}
 	fmt.Fprintf(out, "\nCertificados assinados pela CA local do cais (%s).\n", p.CAFile)
 	fmt.Fprintln(out, "Ela so assina nomes do dominio do teste. Pra confiar nela nesta maquina:")
-	if p.Config.HasStack("registry") {
-		dir := "/etc/docker/certs.d/" + p.Config.RegistryHost()
-		fmt.Fprintf(out, "\n  # docker push/pull no registry (sem reiniciar o docker)\n")
-		fmt.Fprintf(out, "  sudo mkdir -p %s\n  sudo cp %s %s/ca.crt\n", dir, p.CAFile, dir)
-	}
-	fmt.Fprintf(out, "\n  # navegador, curl e o resto do sistema (opcional)\n")
+	fmt.Fprintf(out, "\n  # navegador, curl e o resto do sistema\n")
 	fmt.Fprintf(out, "  sudo trust anchor --store %s\n", p.CAFile)
 	fmt.Fprintf(out, "\n  # pra desfazer: sudo trust anchor --remove %s\n", p.CAFile)
 }
@@ -172,11 +159,7 @@ func setupConfig(args []string) error {
 	tls := fs.String("tls", "", "letsencrypt (padrao) ou selfsigned (teste local)")
 	httpPort := fs.Int("http-port", 0, "porta http do proxy no host")
 	httpsPort := fs.Int("https-port", 0, "porta https do proxy no host")
-	ghClient := fs.String("github-client", "", "Client ID do OAuth app do GitHub")
-	ghAdmin := fs.String("github-admin", "", "usuario do GitHub que administra o Woodpecker")
-	ghAppID := fs.Int64("github-app-id", 0, "App ID do GitHub App do cais (le os repositorios privados)")
-	hostCI := fs.String("host-ci", "", "nome do Woodpecker (padrao ci.<dominio>)")
-	hostReg := fs.String("host-registry", "", "nome do registry (padrao registry.<dominio>)")
+	ghAppID := fs.Int64("github-app-id", 0, "App ID do GitHub App do cais (baixa o codigo dos repositorios privados)")
 	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (padrao s3.<dominio>)")
 	fs.Parse(args)
 
@@ -205,16 +188,8 @@ func setupConfig(args []string) error {
 			cfg.Proxy.HTTPPort = *httpPort
 		case "https-port":
 			cfg.Proxy.HTTPSPort = *httpsPort
-		case "github-client":
-			cfg.Woodpecker.GitHubClient = *ghClient
-		case "github-admin":
-			cfg.Woodpecker.Admin = *ghAdmin
 		case "github-app-id":
 			cfg.GitHub.AppID = *ghAppID
-		case "host-ci":
-			cfg.Hosts.CI = *hostCI
-		case "host-registry":
-			cfg.Hosts.Registry = *hostReg
 		case "host-s3":
 			cfg.Hosts.S3 = *hostS3
 		}
@@ -388,63 +363,4 @@ func (p *stepPrinter) print(s core.Setup) {
 		}
 		fmt.Println(line)
 	}
-}
-
-func runRegistry(args []string) error {
-	sub, args := subcommand(args)
-	fs, socket := newFlags("registry")
-	fs.Parse(args)
-
-	needUser := sub == "add" || sub == "remove"
-	if needUser && fs.NArg() != 1 {
-		return fmt.Errorf("uso: cais registry %s <usuario>", sub)
-	}
-	if sub != "users" && !needUser {
-		return fmt.Errorf("subcomando desconhecido: registry %s (veja: cais help)", sub)
-	}
-
-	c, err := connect(*socket)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	ctx := context.Background()
-
-	switch sub {
-	case "users":
-		users, err := c.RegistryUsers(ctx)
-		if err != nil {
-			return err
-		}
-		for _, u := range users {
-			note := ""
-			if secrets.IsServiceUser(u) {
-				note = "  (servico do cais)"
-			}
-			fmt.Println(u + note)
-		}
-	case "add":
-		user := fs.Arg(0)
-		pw, err := c.AddRegistryUser(ctx, user)
-		if err != nil {
-			return err
-		}
-		host := registryHost(ctx, c)
-		fmt.Printf("Usuario %s criado. Senha (aparece so agora, guarde num gerenciador):\n\n  %s\n\n", user, pw)
-		fmt.Printf("No seu computador:\n  docker login %s -u %s\n", host, user)
-	case "remove":
-		if err := c.RemoveRegistryUser(ctx, fs.Arg(0)); err != nil {
-			return err
-		}
-		fmt.Printf("Acesso de %s removido.\n", fs.Arg(0))
-	}
-	return nil
-}
-
-func registryHost(ctx context.Context, c *rpc.Client) string {
-	info, err := c.LoadConfig(ctx)
-	if err != nil || !info.Exists {
-		return "registry.<dominio>"
-	}
-	return info.Config.RegistryHost()
 }

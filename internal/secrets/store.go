@@ -17,9 +17,9 @@ import (
 // ErrNotFound indica que o secret ainda nao existe.
 var ErrNotFound = errors.New("secret nao encontrado")
 
-// Store guarda secrets por nome. O valor nunca deve sair do daemon por
-// estado, log ou TUI: quem chama Get e pra gravar num lugar seguro (login
-// do docker, API do Woodpecker), nunca pra mostrar.
+// Store guarda secrets por nome. O valor nunca sai do daemon por estado ou
+// log. A unica excecao e a credencial de um banco criado pelo cais, que a
+// pessoa pede explicitamente (cais db list, aba Infra) pra por no app.
 type Store interface {
 	Get(name string) ([]byte, error)
 	Put(name string, value []byte) error

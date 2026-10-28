@@ -35,8 +35,7 @@ type item struct {
 // setupSections separam o formulario: o que cada grupo de campos configura.
 var setupSections = []struct{ title, hint string }{
 	{"Geral", "o dominio de onde saem os nomes dos servicos"},
-	{"Woodpecker (CI)", "OAuth app do GitHub: login das pessoas no CI"},
-	{"GitHub App do cais", "le repositorios privados e abre o PR do CI"},
+	{"GitHub App do cais", "baixa o codigo dos repositorios privados no deploy"},
 	{"Hosts", "opcional: vazio usa o padrao"},
 }
 
@@ -111,20 +110,12 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	p.items = append(p.items, &item{id: "tls", label: "Certificados", kind: kindSelect})
 
 	section = 1
-	input("ghClient", "Client ID", "do OAuth app")
-	input("ghSecret", "Client secret", "so pra gravar ou trocar")
-	p.get("ghSecret").input.EchoMode = textinput.EchoPassword
-	input("ghAdmin", "Usuario admin", "seu usuario do GitHub")
-
-	section = 2
 	input("ghAppID", "App ID", "numero na pagina do app")
 	input("ghKey", "Chave privada", "cole o .pem ou o caminho")
 	p.get("ghKey").input.EchoMode = textinput.EchoPassword
 	p.get("ghKey").input.CharLimit = 16384 // o .pem inteiro colado
 
-	section = 3
-	input("hostCI", "CI", "")
-	input("hostReg", "Registry", "")
+	section = 2
 	input("hostS3", "S3", "")
 	p.items = append(p.items,
 		&item{id: "save", label: "Salvar", kind: kindButton, section: section},
@@ -219,7 +210,6 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		}
 		p.saveErr = ""
 		p.cfg = msg.cfg
-		p.get("ghSecret").input.SetValue("")
 		p.get("ghKey").input.SetValue("")
 		if msg.key {
 			p.setStatus("ok", "Config salva e chave do GitHub App gravada.")
@@ -248,14 +238,10 @@ func (p *setupPage) fill(c config.Config) {
 	if !c.LetsEncrypt() {
 		p.tls = 1
 	}
-	p.get("ghClient").input.SetValue(c.Woodpecker.GitHubClient)
-	p.get("ghAdmin").input.SetValue(c.Woodpecker.Admin)
 	p.get("ghAppID").input.SetValue("")
 	if c.GitHub.AppID > 0 {
 		p.get("ghAppID").input.SetValue(strconv.FormatInt(c.GitHub.AppID, 10))
 	}
-	p.get("hostCI").input.SetValue(c.Hosts.CI)
-	p.get("hostReg").input.SetValue(c.Hosts.Registry)
 	p.get("hostS3").input.SetValue(c.Hosts.S3)
 }
 
@@ -269,20 +255,18 @@ func (p *setupPage) formConfig() config.Config {
 	if p.tls == 1 {
 		c.TLS = config.TLSSelfSigned
 	}
-	c.Woodpecker.GitHubClient, c.Woodpecker.Admin = val("ghClient"), val("ghAdmin")
 	c.GitHub.AppID = 0
 	if id, err := strconv.ParseInt(val("ghAppID"), 10, 64); err == nil {
 		c.GitHub.AppID = id
 	} else if val("ghAppID") != "" {
 		c.GitHub.AppID = -1 // a validacao da config explica
 	}
-	c.Hosts.CI, c.Hosts.Registry, c.Hosts.S3 = val("hostCI"), val("hostReg"), val("hostS3")
+	c.Hosts.S3 = val("hostS3")
 	return c
 }
 
 func (p *setupPage) save() tea.Cmd {
 	c := p.formConfig()
-	secret := p.get("ghSecret").input.Value()
 	var key []byte
 	if text := strings.TrimSpace(p.get("ghKey").input.Value()); text != "" {
 		var err error
@@ -296,9 +280,6 @@ func (p *setupPage) save() tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		err := p.api.SaveConfig(ctx, c)
-		if err == nil && secret != "" {
-			err = p.api.SetSecret(ctx, "github_client_secret", secret)
-		}
 		if err == nil && key != nil {
 			err = p.api.SetSecret(ctx, "github_app_key", string(key))
 		}
@@ -424,8 +405,6 @@ func (p *setupPage) viewForm() string {
 	if domain == "" {
 		domain = "<dominio>"
 	}
-	p.get("hostCI").input.Placeholder = "ci." + domain
-	p.get("hostReg").input.Placeholder = "registry." + domain
 	p.get("hostS3").input.Placeholder = "s3." + domain
 
 	var rows, buttons []string
@@ -572,11 +551,6 @@ func (p *setupPage) viewAccess(w int) string {
 	}
 	if pl.CAFile != "" {
 		b.WriteString("\n" + t.bold().Render("CA local") + " " + muted.Render("(confie nela nesta maquina)") + "\n")
-		if pl.Config.HasStack("registry") {
-			dir := "/etc/docker/certs.d/" + pl.Config.RegistryHost()
-			b.WriteString(wrap.Render("  sudo mkdir -p "+dir) + "\n")
-			b.WriteString(wrap.Render("  sudo cp "+pl.CAFile+" "+dir+"/ca.crt") + "\n")
-		}
 		b.WriteString(wrap.Render("  sudo trust anchor --store "+pl.CAFile) + "\n")
 	}
 	return b.String()

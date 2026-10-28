@@ -24,34 +24,6 @@ func DefaultSocketPath() string {
 	return filepath.Join(os.TempDir(), "cais.sock")
 }
 
-// DeploySocketPath e o socket de deploy do CI: ao lado do socket principal,
-// ou a variavel CAIS_DEPLOY_SOCKET.
-func DeploySocketPath() string {
-	if p := os.Getenv("CAIS_DEPLOY_SOCKET"); p != "" {
-		return p
-	}
-	return filepath.Join(filepath.Dir(DefaultSocketPath()), "deploy.sock")
-}
-
-// ListenDeploy cria o socket de deploy, que pertence so ao usuario de
-// deploy (0600). O daemon ainda confere quem conecta (SO_PEERCRED) e so
-// aceita o deploy por tag nele.
-func ListenDeploy(path string, uid int) (net.Listener, error) {
-	ln, err := Listen(path, "")
-	if err != nil {
-		return nil, err
-	}
-	if err := os.Chown(path, uid, -1); err != nil {
-		ln.Close()
-		return nil, fmt.Errorf("passando o socket de deploy pro usuario de deploy: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		ln.Close()
-		return nil, err
-	}
-	return ln, nil
-}
-
 // Listen cria o socket do daemon.
 //
 // Quem consegue abrir o socket controla a VPS inteira (como o docker.sock),

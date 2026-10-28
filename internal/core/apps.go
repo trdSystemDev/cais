@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -10,13 +9,15 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
-	"github.com/trdSystemDev/cais/internal/databases"
-	"github.com/trdSystemDev/cais/internal/detect"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 func (c *Core) appManager() apps.Manager {
-	return apps.Manager{Root: c.deps.AppsDir, Docker: c.deps.AppDocker, Now: c.deps.Now}
+	src := c.deps.AppSource
+	if src == nil {
+		src = githubSource{c}
+	}
+	return apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now}
 }
 
 // lockApp pega a trava do app sem esperar: um segundo deploy (ou restart)
@@ -30,19 +31,11 @@ func (c *Core) lockApp(name string) (func(), error) {
 	return mu.Unlock, nil
 }
 
-// reservedHosts sao os dominios das stacks, que nenhum app pode usar.
-func (c *Core) reservedHosts() []string {
-	cfg, err := config.Load(c.deps.ConfigPath)
-	if err != nil {
-		return nil
-	}
-	return cfg.ReservedHosts()
-}
-
 // CheckApps le os apps do disco, pergunta ao docker pelos containers de
 // cada um, publica em State.Apps e devolve. Problema num app fica no
 // resultado dele.
 func (c *Core) CheckApps(ctx context.Context) (Apps, error) {
+	// duas checagens juntas publicariam fora de ordem
 	c.appsCheck.Lock()
 	defer c.appsCheck.Unlock()
 	c.update(func(s *State) {
@@ -104,8 +97,8 @@ func (c *Core) setDeploying(name string, on bool) {
 	})
 }
 
-func (c *Core) CreateApp(ctx context.Context, name string) (apps.App, error) {
-	a, err := c.appManager().Create(name)
+func (c *Core) CreateApp(ctx context.Context, a apps.App) (apps.App, error) {
+	a, err := c.appManager().Create(a)
 	if err != nil {
 		return a, err
 	}
@@ -113,121 +106,20 @@ func (c *Core) CreateApp(ctx context.Context, name string) (apps.App, error) {
 	return a, nil
 }
 
-func (c *Core) SetAppRoutes(ctx context.Context, name string, routes []apps.Route) error {
-	// rotas conferem dominios entre todos os apps: uma troca por vez
-	c.routes.Lock()
-	defer c.routes.Unlock()
-	unlock, err := c.lockApp(name)
+func (c *Core) UpdateApp(ctx context.Context, a apps.App) error {
+	unlock, err := c.lockApp(a.Name)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-
-	err = c.appManager().SetRoutes(ctx, name, routes, c.reservedHosts())
+	err = c.appManager().Update(a)
 	c.CheckApps(ctx)
 	return err
 }
 
-// PlanApp analisa os arquivos do repositorio do app e devolve a proposta
-// de configuracao (spec, rota, banco). Nao grava nada.
-func (c *Core) PlanApp(_ context.Context, name string, files detect.Files) (apps.Plan, error) {
-	if err := apps.CheckName(name); err != nil {
-		return apps.Plan{}, err
-	}
-	for path, data := range files {
-		if !detect.Allowed(files, path) {
-			return apps.Plan{}, fmt.Errorf("arquivo %q nao faz parte da analise", path)
-		}
-		if len(data) > 1<<20 {
-			return apps.Plan{}, fmt.Errorf("arquivo %s grande demais pra analise", path)
-		}
-	}
-	cfg, err := config.Load(c.deps.ConfigPath)
-	if err != nil {
-		return apps.Plan{}, err
-	}
-	return apps.PlanFromAnalysis(name, cfg.RegistryHost(), cfg.Domain, detect.Analyze(files)), nil
-}
-
-// ApplyApp aplica um plano (ja revisado pelo usuario): cria o app se
-// precisar, grava a spec e as rotas e cria o banco. O deploy vem depois,
-// pela tag do primeiro build.
-func (c *Core) ApplyApp(ctx context.Context, p apps.Plan) error {
-	if err := apps.CheckName(p.App); err != nil {
-		return err
-	}
-	if err := apps.CheckSpec(p.Spec); err != nil {
-		return err
-	}
-	if p.Database != nil {
-		if err := apps.CheckDatabase(*p.Database); err != nil {
-			return err
-		}
-		// confere antes de mudar qualquer coisa: senao o app ficaria
-		// criado pela metade (spec e rotas sim, banco nao)
-		cfg, err := config.Load(c.deps.ConfigPath)
-		if err != nil {
-			return err
-		}
-		if !cfg.HasStack(p.Database.Engine) {
-			return fmt.Errorf("o app usa %s, mas a stack %s esta desligada: ligue na aba Infra (ou tire o banco do plano)", p.Database.Engine, p.Database.Engine)
-		}
-	}
-	c.routes.Lock()
-	defer c.routes.Unlock()
-	unlock, err := c.lockApp(p.App)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	defer c.CheckApps(ctx)
-
-	m := c.appManager()
-	if _, err := m.Get(p.App); errors.Is(err, apps.ErrNotFound) {
-		if _, err := m.Create(p.App); err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	}
-	if err := m.SetSpec(p.App, p.Spec); err != nil {
-		return err
-	}
-	if p.Repo != "" {
-		repo, name, err := repoApp(p.Repo)
-		if err != nil {
-			return err
-		}
-		if name != p.App {
-			return fmt.Errorf("o app do repositorio %s se chama %s: o CI usa esse nome", repo, name)
-		}
-		if err := m.SetRepo(p.App, repo.String()); err != nil {
-			return err
-		}
-	}
-	if err := m.SetRoutes(ctx, p.App, p.Routes, c.reservedHosts()); err != nil {
-		return err
-	}
-	if p.Database != nil {
-		return c.setDatabase(ctx, p.App, *p.Database)
-	}
-	return nil
-}
-
-func (c *Core) SetAppSpec(ctx context.Context, name string, spec apps.Spec) error {
-	unlock, err := c.lockApp(name)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	err = c.appManager().SetSpec(name, spec)
-	c.CheckApps(ctx)
-	return err
-}
-
-// DeployAppTag gera o compose da spec com a tag e faz o deploy. E o que o
-// CI chama: ele escolhe so a tag, nunca a configuracao do app.
-func (c *Core) DeployAppTag(ctx context.Context, name, tag string) (apps.DeployResult, error) {
+// DeployApp roda com o contexto do daemon: se a TUI cair no meio, o deploy
+// termina mesmo assim. O andamento (Deploying) aparece no estado.
+func (c *Core) DeployApp(ctx context.Context, name, ref string) (apps.DeployResult, error) {
 	if err := apps.CheckName(name); err != nil {
 		return apps.DeployResult{}, err
 	}
@@ -238,42 +130,7 @@ func (c *Core) DeployAppTag(ctx context.Context, name, tag string) (apps.DeployR
 	defer unlock()
 
 	c.setDeploying(name, true)
-	res, err := c.appManager().DeployTag(ctx, name, tag)
-	c.setDeploying(name, false)
-	c.CheckApps(ctx)
-	return res, err
-}
-
-func (c *Core) AppSecrets(_ context.Context, name string) ([]apps.Secret, error) {
-	return c.appManager().Secrets(name)
-}
-
-func (c *Core) SetAppSecret(ctx context.Context, name, secret, value string) error {
-	unlock, err := c.lockApp(name)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	err = c.appManager().SetSecret(ctx, name, secret, []byte(value))
-	c.CheckApps(ctx)
-	return err
-}
-
-// DeployApp valida e sobe o compose novo do app. O progresso (Deploying)
-// aparece no estado; o resultado tambem e devolvido. Roda com o contexto
-// do daemon: se o CI desconectar, o deploy termina mesmo assim.
-func (c *Core) DeployApp(ctx context.Context, name, composeYAML string) (apps.DeployResult, error) {
-	if err := apps.CheckName(name); err != nil {
-		return apps.DeployResult{}, err
-	}
-	unlock, err := c.lockApp(name)
-	if err != nil {
-		return apps.DeployResult{}, err
-	}
-	defer unlock()
-
-	c.setDeploying(name, true)
-	res, err := c.appManager().Deploy(ctx, name, []byte(composeYAML))
+	res, err := c.appManager().Deploy(ctx, name, ref)
 	c.setDeploying(name, false)
 	c.CheckApps(ctx)
 	return res, err
@@ -316,79 +173,82 @@ func (c *Core) AppLogs(ctx context.Context, name, container string) (string, err
 	return c.deps.ContainerLogs(ctx, container)
 }
 
-// SetAppDatabase cria (ou acerta) o database e o usuario do app na
-// instancia compartilhada do engine e liga o app a ele pelo override. env
-// vazio usa apps.DefaultDBEnv; services vazio liga todos os services.
-func (c *Core) SetAppDatabase(ctx context.Context, name string, db apps.Database) error {
+func (c *Core) AppEnv(_ context.Context, name string) (map[string]string, error) {
+	return c.appManager().Env(name)
+}
+
+func (c *Core) SetAppEnv(ctx context.Context, name string, env map[string]string) error {
+	for k := range env {
+		if apps.IsReservedEnv(k) {
+			return fmt.Errorf("%s e escrita pelo cais em todo deploy", k)
+		}
+	}
 	unlock, err := c.lockApp(name)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	err = c.setDatabase(ctx, name, db)
+	return c.appManager().SetEnv(name, env)
+}
+
+func (c *Core) AppSecrets(_ context.Context, name string) ([]apps.Secret, error) {
+	return c.appManager().Secrets(name)
+}
+
+func (c *Core) SetAppSecret(ctx context.Context, name, secret, value string) error {
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = c.appManager().SetSecret(name, secret, []byte(value))
 	c.CheckApps(ctx)
 	return err
 }
 
-// setDatabase e o SetAppDatabase sem a trava (quem chama ja tem).
-func (c *Core) setDatabase(ctx context.Context, name string, d apps.Database) error {
-	engine := d.Engine
-	e, err := databases.Get(engine)
+func (c *Core) DeleteAppSecret(ctx context.Context, name, secret string) error {
+	unlock, err := c.lockApp(name)
 	if err != nil {
 		return err
+	}
+	defer unlock()
+	err = c.appManager().DeleteSecret(name, secret)
+	c.CheckApps(ctx)
+	return err
+}
+
+// AppGuide monta o texto de ajuda com o dominio sugerido, as redes das
+// stacks ligadas e as variaveis e secrets do app.
+func (c *Core) AppGuide(_ context.Context, name string) (string, error) {
+	m := c.appManager()
+	a, err := m.Get(name)
+	if err != nil {
+		return "", err
 	}
 	cfg, err := config.Load(c.deps.ConfigPath)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if !cfg.HasStack(engine) {
-		return fmt.Errorf("a stack %s esta desligada; ligue no Setup antes de criar o banco", engine)
+	in := apps.GuideInput{App: a.Name, Host: a.Name + "." + cfg.Domain}
+	for _, st := range []string{"postgres", "mysql", "garage"} {
+		if cfg.HasStack(st) {
+			in.Networks = append(in.Networks, st+"_network")
+		}
 	}
-	if len(d.Env) == 0 {
-		d.Env = apps.DefaultDBEnv()
-	}
-	db := &d
-	if err := apps.CheckDatabase(*db); err != nil {
-		return err
-	}
-
-	m := c.appManager()
-	pw, err := m.EnsureDBPassword(name)
+	env, err := m.Env(name)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if err := databases.Provision(ctx, c.deps.ExecInput, e, databases.Identifier(name), pw, d.Extensions); err != nil {
-		return err
+	for k := range env {
+		in.Env = append(in.Env, k)
 	}
-	return m.SetDatabase(ctx, name, db)
-}
-
-// RemoveAppDatabase desliga o app do banco. O database e os dados ficam:
-// apagar dados nunca e efeito colateral.
-func (c *Core) RemoveAppDatabase(ctx context.Context, name string) error {
-	unlock, err := c.lockApp(name)
+	slices.Sort(in.Env)
+	secrets, err := m.Secrets(name)
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer unlock()
-	err = c.appManager().SetDatabase(ctx, name, nil)
-	c.CheckApps(ctx)
-	return err
-}
-
-// SetAppEnv troca as variaveis comuns do app. Com apply, refaz o deploy da
-// tag no ar (o progresso aparece como deploy no estado).
-func (c *Core) SetAppEnv(ctx context.Context, name string, env map[string]string, apply bool) error {
-	unlock, err := c.lockApp(name)
-	if err != nil {
-		return err
+	for _, s := range secrets {
+		in.Secrets = append(in.Secrets, s.Name)
 	}
-	defer unlock()
-	if apply {
-		c.setDeploying(name, true)
-		defer c.setDeploying(name, false)
-	}
-	err = c.appManager().SetEnv(ctx, name, env, apply)
-	c.CheckApps(ctx)
-	return err
+	return apps.Guide(in), nil
 }

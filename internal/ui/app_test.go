@@ -52,7 +52,7 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 			name := filepath.Base(filepath.Dir(file))
 			return []docker.Container{{Name: name, Service: name, State: "running", Health: "healthy", Status: "Up 1 minute (healthy)"}}, nil
 		},
-		Login: func(context.Context, string, string, []byte) error { return nil },
+		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 	})
 	return c, &ups, &pss
 }
@@ -125,7 +125,9 @@ func waitFor(t *testing.T, m *model, text string) {
 				}
 				return
 			}
-			m.Update(stateMsg(s))
+			// como o programa: a foto e o que ela dispara (menos a espera
+			// da proxima, que este laco faz)
+			run(t, m, m.onState(core.State(s)))
 		case <-deadline:
 			t.Fatalf("texto %q nao apareceu na tela:\n%s", text, screen(m))
 		}
@@ -274,15 +276,18 @@ func TestAtalhoNumericoTrocaDeAba(t *testing.T) {
 	m := open(t, c)
 	waitFor(t, m, "Pronto.")
 
-	press(t, m, "4")
-	waitFor(t, m, "Databases e usuarios")
+	press(t, m, "3")
+	waitFor(t, m, "Base e servicos")
+	if m.tab != tabInfra {
+		t.Fatalf("aba %d", m.tab)
+	}
 }
 
 // num campo de texto, numero e digitacao, nao troca de aba
 func TestNumeroNoCampoNaoTrocaDeAba(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
-	press(t, m, "6")
+	press(t, m, "4")
 	click(t, m, "domain")
 	press(t, m, "4")
 	if m.tab != tabSetup {
@@ -312,12 +317,8 @@ func setupDone(t *testing.T, c *core.Core, services ...string) {
 	info, _ := c.LoadConfig(ctx)
 	cfg := info.Config
 	cfg.Domain, cfg.Email, cfg.TLS = "trd.localhost", "a@exemplo.com.br", "selfsigned"
-	cfg.Woodpecker.GitHubClient, cfg.Woodpecker.Admin = "Ov23liAbc", "fulano"
 	cfg.Stacks = services
 	if err := c.SaveConfig(ctx, cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.SetSecret(ctx, "github_client_secret", "x"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.RunSetup(ctx); err != nil {
@@ -338,7 +339,7 @@ func TestInfraMostraAsStacks(t *testing.T) {
 	waitFor(t, m, "Ultima verificacao")
 	out := screen(m)
 	for _, want := range []string{
-		"Base · sobe sempre", "✓ proxy", "✓ woodpecker", "Logs · proxy",
+		"Base · sobe sempre", "✓ proxy", "Logs · proxy",
 		"✓ postgres", "ainda nao subiu", // mysql
 		"· garage", "Ligar", "Desligar",
 	} {
@@ -347,7 +348,7 @@ func TestInfraMostraAsStacks(t *testing.T) {
 		}
 	}
 	// as fixas nao tem botao
-	for _, core := range []string{"proxy", "registry", "woodpecker"} {
+	for _, core := range []string{"proxy"} {
 		if z := m.zones.Get("toggle:" + core); z != nil && !z.IsZero() {
 			t.Errorf("%s tem botao de desligar", core)
 		}
@@ -424,5 +425,33 @@ func TestInfraAtualizaDepoisDoSetup(t *testing.T) {
 		t.Fatal("Setup terminou sem atualizar a Infra")
 	}
 	click(t, m, "tab:Infra")
-	waitFor(t, m, "✓ woodpecker")
+	waitFor(t, m, "✓ proxy")
+}
+
+// Novo banco: database e usuario com senha nova, e a credencial na tela
+func TestInfraNovoBanco(t *testing.T) {
+	c, _, _ := testCore(t, okChecker)
+	setupDone(t, c, "postgres")
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Novo banco")
+	click(t, m, "newdb:postgres")
+	waitFor(t, m, "Novo banco no postgres")
+	typeIn(t, m, "db-name", "loja")
+	// numero no campo nao troca de aba
+	typeIn(t, m, "db-exts", "postgis")
+	click(t, m, "db-create")
+	waitFor(t, m, "Database loja criado")
+	waitFor(t, m, "postgres://loja:")
+	list, err := c.Databases(context.Background())
+	if err != nil || len(list) != 1 || list[0].Name != "loja" {
+		t.Fatalf("databases %+v %v", list, err)
+	}
+
+	// repetido: o motivo aparece
+	typeIn(t, m, "db-name", "loja")
+	click(t, m, "db-create")
+	waitFor(t, m, "ja existe")
+	click(t, m, "db-close")
+	waitFor(t, m, "Logs · ")
 }

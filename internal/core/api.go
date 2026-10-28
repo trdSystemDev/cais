@@ -6,7 +6,6 @@ import (
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
-	"github.com/trdSystemDev/cais/internal/detect"
 )
 
 // API e o contrato que toda interface usa pra falar com o nucleo. *Core
@@ -36,8 +35,8 @@ type API interface {
 	LoadConfig(ctx context.Context) (ConfigInfo, error)
 	// SaveConfig valida (inclusive as stacks) e grava o config.yaml.
 	SaveConfig(ctx context.Context, c config.Config) error
-	// SetSecret grava um secret que o usuario informa (ex: o client secret
-	// do GitHub). Secrets gerados pelo cais nao podem ser sobrescritos.
+	// SetSecret grava um secret que o usuario informa (ex: a chave do
+	// GitHub App). Secrets gerados pelo cais nao podem ser sobrescritos.
 	SetSecret(ctx context.Context, name, value string) error
 
 	// PlanSetup diz o que o Setup faria agora, sem mudar nada.
@@ -48,65 +47,41 @@ type API interface {
 	// garage) e aplica na hora, pelo Setup.
 	SetService(ctx context.Context, name string, on bool) (Setup, error)
 
-	// RegistryUsers lista quem pode entrar no registry.
-	RegistryUsers(ctx context.Context) ([]string, error)
-	// AddRegistryUser cria o acesso de uma pessoa e devolve a senha, que
-	// nao fica guardada: e a unica vez que ela aparece.
-	AddRegistryUser(ctx context.Context, user string) (string, error)
-	// RemoveRegistryUser tira o acesso de uma pessoa.
-	RemoveRegistryUser(ctx context.Context, user string) error
-
 	// CheckApps le os apps e os containers deles e publica em State.Apps.
 	CheckApps(ctx context.Context) (Apps, error)
-	// CreateApp cria um app vazio (pasta, secrets/); o primeiro deploy sobe.
-	CreateApp(ctx context.Context, name string) (apps.App, error)
-	// SetAppRoutes troca as rotas (dominio -> service:porta) do app. Um
-	// dominio pertence a um app so; app no ar e atualizado na hora.
-	SetAppRoutes(ctx context.Context, name string, routes []apps.Route) error
-	// DeployApp valida e sobe um compose novo do app. Se falhar com uma
-	// versao no ar, ela volta e o erro diz isso.
-	DeployApp(ctx context.Context, name, compose string) (apps.DeployResult, error)
+	// CreateApp cria o app (repositorio, branch, compose); o codigo so vem
+	// no deploy.
+	CreateApp(ctx context.Context, a apps.App) (apps.App, error)
+	// UpdateApp troca repositorio, branch e compose (vale no proximo deploy).
+	UpdateApp(ctx context.Context, a apps.App) error
+	// DeployApp baixa o commit de ref (vazio = o mais novo da branch), faz
+	// o build com a versao antiga no ar e sobe; se falhar, a anterior volta.
+	DeployApp(ctx context.Context, name, ref string) (apps.DeployResult, error)
 	// RestartApp reinicia um service do app (ou todos, com service vazio).
 	RestartApp(ctx context.Context, name, service string) error
 	// StopApp para o app sem apagar nada.
 	StopApp(ctx context.Context, name string) error
 	// AppLogs le as ultimas linhas de um container do app.
 	AppLogs(ctx context.Context, name, container string) (string, error)
-	// SetAppDatabase cria database e usuario do app no Postgres/MySQL
-	// compartilhado e injeta a conexao. env: VAR -> host, port, name, user,
-	// password, password_file ou url (vazio = DB_HOST, DB_PORT, ...).
-	SetAppDatabase(ctx context.Context, name string, db apps.Database) error
-	// RemoveAppDatabase desliga o app do banco sem apagar os dados.
-	RemoveAppDatabase(ctx context.Context, name string) error
-
-	// PlanApp analisa os arquivos do repositorio (so os de detect.Wanted) e
-	// propoe a configuracao do app. Nao grava nada.
-	PlanApp(ctx context.Context, name string, files detect.Files) (apps.Plan, error)
-	// ApplyApp aplica um plano revisado: app, spec, rotas e banco.
-	ApplyApp(ctx context.Context, p apps.Plan) error
-	// SetAppSpec troca a spec (vale a partir do proximo deploy por tag).
-	SetAppSpec(ctx context.Context, name string, spec apps.Spec) error
-	// DeployAppTag gera o compose da spec com a tag e faz o deploy.
-	DeployAppTag(ctx context.Context, name, tag string) (apps.DeployResult, error)
+	// AppEnv le as variaveis do app (o .env do projeto no deploy).
+	AppEnv(ctx context.Context, name string) (map[string]string, error)
+	// SetAppEnv troca as variaveis do app; valem no proximo deploy.
+	SetAppEnv(ctx context.Context, name string, env map[string]string) error
 	// AppSecrets lista os secrets do app (nomes, nunca valores).
 	AppSecrets(ctx context.Context, name string) ([]apps.Secret, error)
-	// SetAppEnv troca as variaveis comuns do app (nada com cara de segredo).
-	// Com apply, refaz o deploy da tag no ar; senao vale no proximo deploy.
-	SetAppEnv(ctx context.Context, name string, env map[string]string, apply bool) error
-	// SetAppSecret grava um secret do app (um secret novo passa a ser
-	// montado); com o app no ar, os containers sao atualizados.
+	// SetAppSecret grava um secret do app (arquivo em ${CAIS_SECRETS}).
 	SetAppSecret(ctx context.Context, name, secret, value string) error
+	// DeleteAppSecret apaga um secret do app.
+	DeleteAppSecret(ctx context.Context, name, secret string) error
+	// AppGuide e o texto de ajuda pra escrever o compose de producao do app
+	// (labels do Traefik, redes, variaveis e secrets).
+	AppGuide(ctx context.Context, name string) (string, error)
 
-	// PlanAppFromGitHub le o repositorio privado pelo GitHub App (so os
-	// arquivos da analise) e propoe a configuracao; o app tem o nome do
-	// repositorio. Nao grava nada.
-	PlanAppFromGitHub(ctx context.Context, link string) (apps.Plan, error)
-	// ProposeAppCI abre um PR no repositorio do app com o .woodpecker.yml.
-	ProposeAppCI(ctx context.Context, name string) (string, error)
-
-	// CISetup devolve o pipeline do Woodpecker, a linha do authorized_keys
-	// do usuario cais-deploy e os secrets a cadastrar (gera a chave na primeira vez).
-	CISetup(ctx context.Context) (CIInfo, error)
+	// CreateDatabase cria um database e um usuario com senha nova no
+	// Postgres ou MySQL da infra e devolve a credencial.
+	CreateDatabase(ctx context.Context, req DatabaseRequest) (DatabaseInfo, error)
+	// Databases lista os databases criados pelo cais, com a credencial.
+	Databases(ctx context.Context) ([]DatabaseInfo, error)
 }
 
 // ConfigInfo e o config.yaml atual.

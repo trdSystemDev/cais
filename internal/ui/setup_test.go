@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github/githubtest"
@@ -24,14 +25,11 @@ func openSetup(t *testing.T) (*model, func() int32) {
 }
 
 // fill preenche o formulario do Setup como o usuario faria: dominio,
-// e-mail, CA local (dispensa DNS) e o OAuth app do GitHub (o CI e fixo).
+// e-mail e CA local (dispensa DNS).
 func fill(t *testing.T, m *model, domain string) {
 	t.Helper()
 	m.setup.get("domain").input.SetValue(domain)
 	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
-	m.setup.get("ghClient").input.SetValue("Ov23liAbc")
-	m.setup.get("ghAdmin").input.SetValue("fulano")
-	m.setup.get("ghSecret").input.SetValue("segredo")
 	if m.setup.tls == 0 {
 		click(t, m, "tls")
 	}
@@ -69,9 +67,6 @@ func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {
 	if len(info.Config.Stacks) != 0 {
 		t.Errorf("Setup ligou servico sozinho: %v", info.Config.Stacks)
 	}
-	if info.Config.Woodpecker.GitHubClient != "Ov23liAbc" {
-		t.Errorf("GitHub nao gravou: %+v", info.Config.Woodpecker)
-	}
 }
 
 func TestSetupMostraErroDeValidacao(t *testing.T) {
@@ -92,9 +87,9 @@ func TestSetupExecutaPeloBotao(t *testing.T) {
 
 	click(t, m, "run")
 	waitFor(t, m, "Setup concluido.")
-	waitFor(t, m, "✓ Login da VPS em registry.trd.localhost")
-	if n := ups(); n != 3 {
-		t.Errorf("%d compose up, esperava 3 (proxy, registry, woodpecker)", n)
+	waitFor(t, m, "✓ Subir proxy")
+	if n := ups(); n != 1 {
+		t.Errorf("%d compose up, esperava 1 (proxy)", n)
 	}
 }
 
@@ -117,17 +112,18 @@ func TestSetupDisparadoPorForaApareceNaAba(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, m, "Execucao")
-	waitFor(t, m, "✓ Subir woodpecker")
+	waitFor(t, m, "✓ Subir proxy")
 }
 
 func openSetupGitHub(t *testing.T) (*model, *githubtest.Server) {
 	t.Helper()
 	gh := githubtest.New(t, 5512022, map[string]map[string]string{
-		"trdSystemDev/loja": {"Dockerfile": "FROM nginx\nEXPOSE 80\n"},
+		"trdSystemDev/loja": {"docker-compose.yml": "services: {}\n"},
 	})
 	root := t.TempDir()
 	c := core.New(core.Deps{CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
 		SecretsDir: filepath.Join(root, "secrets"), AppsDir: filepath.Join(root, "apps"), GitHubURL: gh.URL,
+		AppDocker: &fakeApps{up: map[string]bool{}},
 		ComposePS: func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
 	m := open(t, c)
 	click(t, m, "tab:Setup")
@@ -150,9 +146,18 @@ func TestSetupGravaAChaveDoGitHubColada(t *testing.T) {
 	if strings.Contains(screen(m), "PRIVATE KEY") {
 		t.Fatal("a chave apareceu na tela")
 	}
-	plan, err := m.api.PlanAppFromGitHub(context.Background(), "trdSystemDev/loja")
-	if err != nil || plan.App != "loja" {
-		t.Fatalf("import com a chave gravada pela TUI: %+v %v", plan, err)
+	deployWithKey(t, m)
+}
+
+// o deploy baixa o codigo pelo GitHub App com a chave gravada pela TUI
+func deployWithKey(t *testing.T, m *model) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.api.DeployApp(ctx, "loja", ""); err != nil {
+		t.Fatalf("deploy com a chave gravada pela TUI: %v", err)
 	}
 }
 
@@ -163,9 +168,7 @@ func TestSetupGravaAChaveDoGitHubPeloCaminho(t *testing.T) {
 	m.setup.get("ghKey").input.SetValue(file)
 	click(t, m, "save")
 	waitFor(t, m, "chave do GitHub App gravada")
-	if _, err := m.api.PlanAppFromGitHub(context.Background(), "trdSystemDev/loja"); err != nil {
-		t.Fatal(err)
-	}
+	deployWithKey(t, m)
 }
 
 func TestSetupRecusaChaveInvalida(t *testing.T) {

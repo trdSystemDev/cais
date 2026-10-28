@@ -27,7 +27,7 @@ func TestCheckStacks(t *testing.T) {
 		StackDir:    stackDir,
 		ComposePS: func(_ context.Context, file string) ([]docker.Container, error) {
 			name := filepath.Base(filepath.Dir(file))
-			if name == "registry" {
+			if name == "garage" {
 				return nil, errors.New("docker fora do ar")
 			}
 			return ps[name], nil
@@ -35,13 +35,12 @@ func TestCheckStacks(t *testing.T) {
 	})
 	cfg := config.Default()
 	cfg.Domain, cfg.Email = "exemplo.com.br", "a@exemplo.com.br"
-	cfg.Woodpecker = config.Woodpecker{GitHubClient: "Ov23li", Admin: "fulano"}
-	cfg.Stacks = []string{"postgres", "mysql"}
+	cfg.Stacks = []string{"postgres", "mysql", "garage"}
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// proxy, postgres e registry instalados; mysql ativo mas nunca subiu
-	for _, n := range []string{"proxy", "postgres", "registry"} {
+	// proxy, postgres e garage instalados; mysql ativo mas nunca subiu
+	for _, n := range []string{"proxy", "postgres", "garage"} {
 		os.MkdirAll(stackDir(n), 0o700)
 		os.WriteFile(filepath.Join(stackDir(n), "docker-compose.yml"), []byte("name: "+n), 0o644)
 	}
@@ -66,14 +65,11 @@ func TestCheckStacks(t *testing.T) {
 	if s := got["mysql"]; !s.Enabled || s.Installed || s.Healthy() {
 		t.Errorf("mysql ativo e nao instalado: %+v", s)
 	}
-	if s := got["registry"]; s.Error == "" || s.Healthy() {
+	if s := got["garage"]; s.Error == "" || s.Healthy() {
 		t.Errorf("erro do docker tem que ficar na stack: %+v", s)
 	}
-	if s := got["woodpecker"]; !s.Enabled || s.Installed {
-		t.Errorf("woodpecker e fixo (sempre ativo), mas nao subiu: %+v", s)
-	}
-	if s := got["garage"]; s.Enabled || s.Installed {
-		t.Errorf("garage desligado: %+v", s)
+	if len(got) != 4 {
+		t.Errorf("stacks %v", got)
 	}
 	if snap(t, c).Infra.CheckedAt.IsZero() {
 		t.Error("resultado nao foi publicado no estado")
@@ -91,21 +87,21 @@ func TestContainerLogsValidaPertencimento(t *testing.T) {
 	var called string
 	c := New(Deps{
 		ComposePS: func(context.Context, string) ([]docker.Container, error) {
-			return []docker.Container{{Name: "woodpecker-agent"}}, nil
+			return []docker.Container{{Name: "proxy-traefik"}}, nil
 		},
-		ContainerLogs: func(_ context.Context, name string) (string, error) { called = name; return "agent pronto", nil },
+		ContainerLogs: func(_ context.Context, name string) (string, error) { called = name; return "traefik pronto", nil },
 	})
-	if _, err := c.ContainerLogs(context.Background(), "inexistente", "woodpecker-agent"); err == nil {
+	if _, err := c.ContainerLogs(context.Background(), "inexistente", "proxy-traefik"); err == nil {
 		t.Fatal("aceitou stack desconhecida")
 	}
-	if _, err := c.ContainerLogs(context.Background(), "woodpecker", "mysql"); err == nil {
+	if _, err := c.ContainerLogs(context.Background(), "proxy", "mysql"); err == nil {
 		t.Fatal("aceitou container de outra stack")
 	}
 	if called != "" {
 		t.Fatal("leu logs antes de validar")
 	}
-	out, err := c.ContainerLogs(context.Background(), "woodpecker", "woodpecker-agent")
-	if err != nil || out != "agent pronto" || called != "woodpecker-agent" {
+	out, err := c.ContainerLogs(context.Background(), "proxy", "proxy-traefik")
+	if err != nil || out != "traefik pronto" || called != "proxy-traefik" {
 		t.Fatalf("%q, %v, %q", out, err, called)
 	}
 }

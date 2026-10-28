@@ -16,23 +16,15 @@ import (
 	"github.com/trdSystemDev/cais/internal/core"
 )
 
-var tabs = []string{"Dashboard", "Apps", "Secrets", "Bancos", "Infra", "Setup"}
+// secrets ficam em cada app (aba Apps) e os bancos na aba Infra
+var tabs = []string{"Dashboard", "Apps", "Infra", "Setup"}
 
 const (
 	tabDashboard = 0
 	tabApps      = 1
-	tabInfra     = 4
-	tabSetup     = 5
+	tabInfra     = 2
+	tabSetup     = 3
 )
-
-// placeholders das abas que ainda nao existem: fase do roadmap e o que vem.
-var placeholders = map[int]struct {
-	phase int
-	desc  string
-}{
-	2: {3, "Secrets centrais e por app: gerar, copiar, propagar."},
-	3: {4, "Databases e usuarios no Postgres/MySQL, instancias dedicadas."},
-}
 
 // helps sao os atalhos de cada aba, no rodape.
 var helps = map[int]string{
@@ -77,6 +69,7 @@ type model struct {
 	disconnected bool
 	setup        *setupPage
 	apps         *appsPage
+	db           *dbPanel // Novo banco, na aba Infra
 
 	selectionGeneration uint64
 	logSelection        logSelection
@@ -107,6 +100,7 @@ func newModel(api core.API, states <-chan core.State) *model {
 	m := &model{api: api, zones: zone.New(), th: newTheme(true), states: states}
 	m.setup = newSetupPage(api, m.zones, m.th)
 	m.apps = newAppsPage(api, m.zones, m.th)
+	m.db = newDBPanel(api, m.zones, m.th)
 	return m
 }
 
@@ -150,12 +144,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.th = newTheme(msg.IsDark())
 		m.setup.setTheme(m.th)
 		m.apps.setTheme(m.th)
+		m.db.setTheme(m.th)
 		return m, nil
 	case stateMsg:
-		m.state = core.State(msg)
-		m.setup.onState(m.state)
-		appsCmd := m.apps.onState(m.state)
-		return m, tea.Batch(m.waitState(), m.syncInfraLogs(false), appsCmd, m.syncAppLogs(false))
+		return m, tea.Batch(m.waitState(), m.onState(core.State(msg)))
 	case closedMsg:
 		m.disconnected = true
 		return m, nil
@@ -220,6 +212,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setup.paste(msg)
 		case tabApps:
 			return m, m.apps.paste(msg)
+		case tabInfra:
+			return m, m.db.paste(msg)
 		}
 		return m, nil
 	case infraLogsMsg:
@@ -252,6 +246,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case appLogsTick:
 		return m, m.onAppLogsTick(msg)
 	}
+	if cmd, ok := m.db.update(msg); ok {
+		return m, cmd
+	}
 	if cmd, ok := m.apps.update(msg); ok {
 		return m, tea.Batch(cmd, m.syncAppLogs(false))
 	}
@@ -262,6 +259,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = tea.Batch(cmd, m.stacksCmd())
 	}
 	return m, cmd
+}
+
+// onState aplica uma foto nova do estado e devolve o que ela dispara
+// (logs, variaveis e ajuda do app selecionado).
+func (m *model) onState(s core.State) tea.Cmd {
+	m.state = s
+	m.setup.onState(m.state)
+	appsCmd := m.apps.onState(m.state)
+	return tea.Batch(m.syncInfraLogs(false), appsCmd, m.syncAppLogs(false))
 }
 
 // setTab troca de aba; a Infra pergunta ao docker toda vez que abre.
@@ -320,7 +326,8 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	// numeros trocam de aba, menos quando o foco esta num campo de texto
-	typing := (m.tab == tabSetup && m.setup.typing()) || (m.tab == tabApps && m.apps.typing())
+	typing := (m.tab == tabSetup && m.setup.typing()) || (m.tab == tabApps && m.apps.typing()) ||
+		(m.tab == tabInfra && m.db.typing())
 	if !typing && len(k) == 1 && k[0] >= '1' && int(k[0]-'1') < len(tabs) {
 		return m.setTab(int(k[0] - '1'))
 	}
@@ -332,6 +339,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case tabApps:
 		return m.appsKey(msg)
 	case tabInfra:
+		if m.db.open() {
+			return m.db.key(msg)
+		}
 		return m.infraKey(k)
 	case tabSetup:
 		return m.setup.key(msg)
@@ -357,7 +367,7 @@ func (m *model) View() tea.View {
 	if m.tab == tabApps && m.apps.inForm {
 		help = "tab/↑↓ campo · ←→ escolhe · enter/espaco ativa · esc volta pra lista · roda rola · "
 	}
-	footer := m.th.fg(m.th.muted).Render(" clique ou 1-6 troca de aba · " + help + "ctrl+q sai")
+	footer := m.th.fg(m.th.muted).Render(" clique ou 1-" + strconv.Itoa(len(tabs)) + " troca de aba · " + help + "ctrl+q sai")
 	bodyH := m.h - lipgloss.Height(header) - lipgloss.Height(footer)
 
 	var body string
@@ -370,11 +380,6 @@ func (m *model) View() tea.View {
 		body = m.viewInfra(bodyH)
 	case tabSetup:
 		body = m.setup.view(m.w, bodyH)
-	default:
-		p := placeholders[m.tab]
-		body = m.th.panel(false, m.w-2, bodyH-2).Render("\n" + m.th.bold().Render(tabs[m.tab]) + "\n\n" +
-			m.th.fg(m.th.muted).Render(p.desc) + "\n\n" +
-			m.th.fg(m.th.warn).Render("Em construcao -- chega na fase "+strconv.Itoa(p.phase)))
 	}
 	content := m.zones.Scan(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
 	if m.copiedNotice {

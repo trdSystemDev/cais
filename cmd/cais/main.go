@@ -9,8 +9,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"os/user"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -26,8 +24,7 @@ const usage = `cais -- painel da VPS
 
 Uso:
   cais [--socket caminho]            abre a interface (TUI)
-  cais daemon [--socket] [--group] [--deploy-user cais-deploy]
-                                     roda o daemon (dono do estado e das acoes)
+  cais daemon [--socket] [--group]   roda o daemon (dono do estado e das acoes)
   cais state [--socket]              imprime o estado atual em JSON
   cais check [--socket]              checa o ambiente e imprime o resultado em JSON
   cais version                       mostra a versao
@@ -36,55 +33,32 @@ Setup da VPS:
   cais setup                         mostra o plano: o que falta e o que vai mudar
   cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
       --domain --email --tls letsencrypt|selfsigned --http-port --https-port
-      --github-client --github-admin --github-app-id --host-ci --host-registry --host-s3
-  cais setup secret <nome>           grava um secret informado (le do stdin)
+      --github-app-id --host-s3
+  cais setup secret <nome>           grava um secret informado (le do stdin), ex: github_app_key
   cais setup run                     executa o Setup e mostra o progresso
 
-Servicos opcionais (proxy, registry e woodpecker sobem sempre):
+Servicos opcionais (o proxy sobe sempre):
   cais service <nome> on|off         liga ou desliga postgres, mysql ou garage e aplica
 
-Apps:
+Bancos (no Postgres/MySQL da infra):
+  cais db create postgres|mysql <nome> [-extensions postgis]
+                                     database e usuario com senha nova; mostra a credencial
+  cais db list                       databases criados pelo cais, com a credencial
+
+Apps (repositorio no GitHub com o compose de producao pronto):
   cais apps                          lista os apps e o estado dos containers
-  cais app import <link do GitHub>   le o repositorio privado pelo GitHub App, mostra o
-                                     plano e configura o app (o nome e o do repositorio)
-  cais app init <nome> <pasta>       o mesmo, a partir de uma pasta local
-  cais app ci <app>                  abre um PR no repositorio com o .woodpecker.yml
-  cais app create <nome>             cria um app vazio (o nome do repositorio no GitHub)
-  cais app routes <nome> [rota...]   mostra ou troca as rotas; rota: dominio[/caminho]=service:porta
-                                     ex: app.exemplo.com.br=web:3000 app.exemplo.com.br/api=api:8080
-  cais app deploy <nome> --tag <tag> sobe a imagem da tag com a spec do app (o que o CI usa)
-  cais app deploy <nome> < docker-compose.yml
-                                     modo avancado: compose pronto (validado do mesmo jeito)
-                                     nos dois, se o deploy falhar, a versao anterior volta
-  cais app env <nome>                mostra as variaveis do app
-  cais app env <nome> VAR=valor... [-unset VAR,...] [-apply]
-                                     muda as variaveis (segredo nao: use cais app secret);
-                                     -apply refaz o deploy da tag no ar pra valer agora
+  cais app create <nome> <dono/repo> [-branch main] [-compose docker-compose.prod.yml]
+  cais app deploy <nome> [-ref <branch ou commit>]
+                                     baixa o commit, build com a versao no ar, sobe;
+                                     se o up falhar, a versao anterior volta
+  cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
+  cais app env <nome> [VAR=valor...] [-unset VAR,...]
+                                     mostra ou muda as variaveis (.env do projeto)
   cais app secrets <nome>            lista os secrets do app (so nomes)
   cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
-  cais app db <nome> postgres|mysql [--services web,worker] [VAR=valor...]
-                                     cria database e usuario do app e injeta a conexao
-                                     valor: host port name user password_file url_file
-                                     padrao: DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD_FILE
-                                     a senha nunca vai em variavel: o app le o arquivo
-                                     (/run/secrets/cais_db_password ou cais_db_url)
-  cais app db <nome> off             desliga o banco do app (os dados ficam)
-
-CI (Woodpecker):
-  cais ci pipeline                   imprime o .woodpecker.yml (igual pra todo app)
-  cais ci setup                      linha do authorized_keys do usuario cais-deploy e os
-                                     secrets a cadastrar no Woodpecker
-  cais deploy <app> <tag>            deploy por tag pelo socket de deploy; e o forced
-                                     command da chave do CI (le app e tag do
-                                     SSH_ORIGINAL_COMMAND)
-
-Registry de imagens:
-  cais registry users                lista quem pode entrar
-  cais registry add <usuario>        cria o acesso e mostra a senha (uma vez so)
-  cais registry remove <usuario>     tira o acesso
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET).
 `
@@ -107,16 +81,12 @@ func main() {
 		err = runCheck(args)
 	case "setup":
 		err = runSetup(args)
-	case "registry":
-		err = runRegistry(args)
 	case "apps":
 		err = runApps(args)
 	case "app":
 		err = runApp(args)
-	case "deploy":
-		err = runDeploy(args)
-	case "ci":
-		err = runCI(args)
+	case "db":
+		err = runDB(args)
 	case "service":
 		err = runService(args)
 	case "version":
@@ -143,7 +113,6 @@ func newFlags(name string) (*flag.FlagSet, *string) {
 func runDaemon(args []string) error {
 	fs, socket := newFlags("daemon")
 	group := fs.String("group", "", "grupo que pode usar o cais (alem do root)")
-	deployUser := fs.String("deploy-user", "", "usuario do CI (ex: cais-deploy): abre o socket de deploy, que so aceita deploy por tag")
 	fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -156,38 +125,8 @@ func runDaemon(args []string) error {
 	c := core.New(core.Deps{})
 	go c.CheckEnvironment(ctx)
 
-	errs := make(chan error, 2)
-	if *deployUser != "" {
-		u, err := user.Lookup(*deployUser)
-		if err != nil {
-			return fmt.Errorf("usuario de deploy: %w", err)
-		}
-		uid, _ := strconv.Atoi(u.Uid)
-		path := rpc.DeploySocketPath()
-		dln, err := rpc.ListenDeploy(path, uid)
-		if err != nil {
-			return err
-		}
-		// so o usuario de deploy (ou root) e so o deploy por tag; cada
-		// pedido fica no log do daemon (journalctl -u cais)
-		go func() {
-			errs <- rpc.Serve(ctx, dln, c,
-				rpc.Allow(rpc.MethodAppDeployTag),
-				rpc.RequirePeer(func(p rpc.Peer) error {
-					if int(p.UID) != uid && p.UID != 0 {
-						return fmt.Errorf("so o usuario %s pode usar o socket de deploy", *deployUser)
-					}
-					return nil
-				}),
-				rpc.Log(func(f string, a ...any) { log.Printf("deploy: "+f, a...) }))
-		}()
-		log.Printf("socket de deploy em %s (usuario %s)", path, *deployUser)
-	}
-
 	log.Printf("cais daemon %s ouvindo em %s", version, *socket)
-	go func() { errs <- rpc.Serve(ctx, ln, c) }()
-	err = <-errs
-	stop()
+	err = rpc.Serve(ctx, ln, c)
 	log.Print("cais daemon encerrado")
 	return err
 }

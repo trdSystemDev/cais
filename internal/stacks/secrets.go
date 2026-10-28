@@ -20,19 +20,13 @@ type Provided struct {
 
 // provided sao os secrets que vem de fora, com o que mostrar no Setup.
 var provided = map[string]string{
-	"github_app_key":       "Chave privada (.pem) do GitHub App do cais: le os repositorios privados no import",
-	"github_client_secret": "Client secret do OAuth app do GitHub (o mesmo app do woodpecker.github_client)",
+	"github_app_key": "Chave privada (.pem) do GitHub App do cais: baixa o codigo dos repositorios privados no deploy",
 }
 
 // companions sao gerados junto com um secret dos templates, sem aparecer
-// neles: a CA que assina o certificado local e as senhas dos usuarios de
-// servico do registry.
+// neles: a CA que assina o certificado local.
 var companions = map[string][]string{
 	secrets.TLSCert: {secrets.TLSCACert, secrets.TLSCAKey},
-	secrets.RegistryHtpasswd: {
-		secrets.RegistryPasswordSecret(secrets.RegistryCI),
-		secrets.RegistryPasswordSecret(secrets.RegistryVPS),
-	},
 }
 
 // generators dizem como gerar cada secret usado pelos templates. Todo nome
@@ -40,7 +34,6 @@ var companions = map[string][]string{
 var generators = map[string]func(secrets.Store) ([]byte, error){
 	"postgres_password":   func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 	"mysql_root_password": func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
-	"agent_secret":        func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 	"garage_rpc_secret":   func(secrets.Store) ([]byte, error) { return secrets.HexSecret(), nil },
 	"garage_admin_token":  func(secrets.Store) ([]byte, error) { return secrets.Password(), nil },
 }
@@ -137,8 +130,7 @@ func EnsureSecrets(s secrets.Store, c config.Config) (SecretsResult, error) {
 		}
 	}
 
-	// inclui os derivados (a senha base da database_uri) e as senhas dos
-	// usuarios de servico do registry
+	// inclui os derivados (a CA local junto com o certificado)
 	after, err := s.List()
 	if err != nil {
 		return res, err
@@ -153,16 +145,6 @@ func EnsureSecrets(s secrets.Store, c config.Config) (SecretsResult, error) {
 
 func ensureOne(s secrets.Store, name string, c config.Config, res *SecretsResult) error {
 	switch name {
-	case secrets.RegistryHtpasswd:
-		changed, err := secrets.EnsureRegistry(s)
-		if err != nil {
-			return err
-		}
-		if changed {
-			res.Recreate = append(res.Recreate, "registry")
-		}
-		return nil
-
 	case secrets.TLSCert, secrets.TLSKey:
 		// os dois saem juntos; o segundo nome nao tem mais nada a fazer
 		if slices.Contains(res.Recreate, "proxy") {
@@ -205,12 +187,6 @@ func TLSHosts(c config.Config) []string {
 		if !slices.Contains(hosts, h) {
 			hosts = append(hosts, h)
 		}
-	}
-	if c.HasStack("registry") {
-		add(c.RegistryHost())
-	}
-	if c.HasStack("woodpecker") {
-		add(c.CIHost())
 	}
 	if c.HasStack("garage") {
 		add(c.S3Host())

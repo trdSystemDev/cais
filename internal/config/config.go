@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -22,7 +23,7 @@ var ErrNotFound = errors.New("config.yaml nao encontrado (rode o Setup)")
 // decide; secrets nunca entram aqui (ficam em SecretsDir).
 type Config struct {
 	// Domain e o dominio base da VPS. Os subdominios das stacks saem dele
-	// (ci.<domain>, registry.<domain>) se Hosts nao disser outra coisa.
+	// (s3.<domain>) se Hosts nao disser outra coisa.
 	Domain string `yaml:"domain" json:"domain"`
 	// Email recebe os avisos do Let's Encrypt.
 	Email string `yaml:"email" json:"email"`
@@ -32,11 +33,14 @@ type Config struct {
 	TLS string `yaml:"tls,omitempty" json:"tls,omitempty"`
 	// Stacks sao os servicos opcionais ligados (postgres, mysql, garage).
 	// As stacks fixas (CoreStacks) sobem sempre e nao precisam estar aqui.
-	Stacks     []string   `yaml:"stacks,omitempty" json:"stacks,omitempty"`
-	Proxy      Proxy      `yaml:"proxy" json:"proxy"`
-	Hosts      Hosts      `yaml:"hosts,omitempty" json:"hosts"`
-	Woodpecker Woodpecker `yaml:"woodpecker,omitempty" json:"woodpecker"`
-	GitHub     GitHub     `yaml:"github,omitempty" json:"github"`
+	Stacks []string `yaml:"stacks,omitempty" json:"stacks,omitempty"`
+	Proxy  Proxy    `yaml:"proxy" json:"proxy"`
+	Hosts  Hosts    `yaml:"hosts,omitempty" json:"hosts"`
+	GitHub GitHub   `yaml:"github,omitempty" json:"github"`
+
+	// campos de versoes antigas (CI e registry saíram): aceitos na leitura
+	// pra config velha continuar valendo, e descartados ao gravar
+	OldWoodpecker any `yaml:"woodpecker,omitempty" json:"-"`
 }
 
 // Proxy sao as portas do host publicadas pelo Traefik. Fora de 80/443 so
@@ -48,27 +52,17 @@ type Proxy struct {
 
 // Hosts troca o nome publico de uma stack. Vazio usa o padrao.
 type Hosts struct {
-	CI string `yaml:"ci,omitempty" json:"ci,omitempty"`
-	// Registry e o nome do registry de imagens, usado no push do CI e no
-	// pull da VPS (e de qualquer outra maquina com o login).
-	Registry string `yaml:"registry,omitempty" json:"registry,omitempty"`
 	// S3 e o endpoint S3 do Garage (padrao s3.<domain>).
 	S3 string `yaml:"s3,omitempty" json:"s3,omitempty"`
+
+	OldCI       string `yaml:"ci,omitempty" json:"-"`
+	OldRegistry string `yaml:"registry,omitempty" json:"-"`
 }
 
-// GitHub e o GitHub App do cais, que le os repositorios privados no import
-// e abre o PR do CI. A chave privada fica no secret github_app_key.
+// GitHub e o GitHub App do cais, que baixa o codigo dos repositorios
+// privados no deploy. A chave privada fica no secret github_app_key.
 type GitHub struct {
 	AppID int64 `yaml:"app_id,omitempty" json:"app_id,omitempty"`
-}
-
-// Woodpecker e o que o CI precisa e nao e secret. O client secret do app
-// OAuth do GitHub fica em SecretsDir.
-type Woodpecker struct {
-	// GitHubClient e o Client ID do OAuth app do GitHub.
-	GitHubClient string `yaml:"github_client,omitempty" json:"github_client,omitempty"`
-	// Admin e o usuario do GitHub que administra o Woodpecker.
-	Admin string `yaml:"admin,omitempty" json:"admin,omitempty"`
 }
 
 // Modos de TLS.
@@ -80,9 +74,9 @@ const (
 // LetsEncrypt diz se os certificados vem do Let's Encrypt.
 func (c Config) LetsEncrypt() bool { return c.TLS == "" || c.TLS == TLSLetsEncrypt }
 
-// CoreStacks sobem sempre: sem proxy, registry e CI nao da pra publicar
-// app nenhum. O resto (bancos, storage) e ligado conforme o uso.
-var CoreStacks = []string{"proxy", "registry", "woodpecker"}
+// CoreStacks sobem sempre: sem proxy nao da pra publicar app nenhum. O
+// resto (bancos, storage) e ligado conforme o uso.
+var CoreStacks = []string{"proxy"}
 
 // IsCore diz se a stack e fixa.
 func IsCore(name string) bool {
@@ -99,22 +93,6 @@ func Default() Config {
 	return Config{
 		Proxy: Proxy{HTTPPort: 80, HTTPSPort: 443},
 	}
-}
-
-// CIHost e o nome publico do Woodpecker.
-func (c Config) CIHost() string {
-	if c.Hosts.CI != "" {
-		return c.Hosts.CI
-	}
-	return "ci." + c.Domain
-}
-
-// RegistryHost e o nome publico do registry de imagens.
-func (c Config) RegistryHost() string {
-	if c.Hosts.Registry != "" {
-		return c.Hosts.Registry
-	}
-	return "registry." + c.Domain
 }
 
 // S3Host e o endpoint publico do Garage (API S3).
@@ -138,15 +116,11 @@ func (c Config) HasStack(name string) bool {
 	return false
 }
 
-var (
-	hostLabel    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-	githubUser   = regexp.MustCompile(`^[A-Za-z0-9](-?[A-Za-z0-9]){0,38}$`)
-	githubClient = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-)
+var hostLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// Validate confere os campos gerais. As regras de cada stack (dependencias,
-// campos obrigatorios do Woodpecker) ficam no pacote stacks. Os valores
-// vao direto pros compose, entao tudo e restrito a caracteres seguros.
+// Validate confere os campos gerais. As regras de cada stack (dependencias)
+// ficam no pacote stacks. Os valores vao direto pros compose, entao tudo e
+// restrito a caracteres seguros.
 func (c Config) Validate() error {
 	var errs []error
 	if err := validHost(c.Domain); err != nil {
@@ -154,16 +128,6 @@ func (c Config) Validate() error {
 	}
 	if err := validEmail(c.Email); err != nil {
 		errs = append(errs, fmt.Errorf("email: %w", err))
-	}
-	if c.Hosts.CI != "" {
-		if err := validHost(c.Hosts.CI); err != nil {
-			errs = append(errs, fmt.Errorf("hosts.ci: %w", err))
-		}
-	}
-	if c.Hosts.Registry != "" {
-		if err := validHost(c.Hosts.Registry); err != nil {
-			errs = append(errs, fmt.Errorf("hosts.registry: %w", err))
-		}
 	}
 	if c.Hosts.S3 != "" {
 		if err := validHost(c.Hosts.S3); err != nil {
@@ -185,23 +149,11 @@ func (c Config) Validate() error {
 	if c.GitHub.AppID < 0 {
 		errs = append(errs, fmt.Errorf("github.app_id: id invalido %d", c.GitHub.AppID))
 	}
-	if v := c.Woodpecker.GitHubClient; v != "" && !githubClient.MatchString(v) {
-		errs = append(errs, fmt.Errorf("woodpecker.github_client: client id invalido %q", v))
-	}
-	if v := c.Woodpecker.Admin; v != "" && !githubUser.MatchString(v) {
-		errs = append(errs, fmt.Errorf("woodpecker.admin: usuario do GitHub invalido %q", v))
-	}
 	return errors.Join(errs...)
 }
 
-// ValidHost confere um nome de dominio (ex: a rota de um app).
+// ValidHost confere um nome de dominio.
 func ValidHost(h string) error { return validHost(h) }
-
-// ReservedHosts sao os nomes das stacks publicas: nenhum app pode usar,
-// mesmo com a stack desligada (ela pode ser ligada depois).
-func (c Config) ReservedHosts() []string {
-	return []string{c.CIHost(), c.RegistryHost(), c.S3Host()}
-}
 
 func validHost(h string) error {
 	if h == "" {
@@ -260,6 +212,8 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&c); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
+	// stacks de versoes antigas (o CI e o registry sairam)
+	c.Stacks = slices.DeleteFunc(c.Stacks, func(s string) bool { return s == "registry" || s == "woodpecker" })
 	if err := c.Validate(); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
@@ -272,6 +226,8 @@ func Save(path string, c Config) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	// campos de versoes antigas nao voltam pro arquivo
+	c.OldWoodpecker, c.Hosts.OldCI, c.Hosts.OldRegistry = nil, "", ""
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err

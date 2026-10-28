@@ -7,10 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strings"
 	"testing"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 func newStore(t *testing.T) FileStore {
@@ -103,111 +100,5 @@ func TestPasswordSeguraEmURL(t *testing.T) {
 			t.Fatal("senha repetida")
 		}
 		seen[p] = true
-	}
-}
-
-func checkLogin(t *testing.T, s Store, user, password string) bool {
-	t.Helper()
-	b, err := s.Get(RegistryHtpasswd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := parseHtpasswd(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash, ok := h.hashes[user]
-	return ok && bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
-}
-
-func TestEnsureRegistryCriaUsuariosDeServico(t *testing.T) {
-	s := newStore(t)
-	changed, err := EnsureRegistry(s)
-	if err != nil || !changed {
-		t.Fatalf("EnsureRegistry = %v, %v", changed, err)
-	}
-	for _, u := range []string{RegistryCI, RegistryVPS} {
-		pw, err := s.Get(RegistryPasswordSecret(u))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !checkLogin(t, s, u, string(pw)) {
-			t.Errorf("senha guardada de %s nao confere com o htpasswd", u)
-		}
-	}
-
-	// segunda vez nao muda nada (o registry nao precisa ser recriado)
-	before, _ := s.Get(RegistryHtpasswd)
-	changed, err = EnsureRegistry(s)
-	after, _ := s.Get(RegistryHtpasswd)
-	if err != nil || changed || !bytes.Equal(before, after) {
-		t.Fatalf("segunda chamada mexeu no htpasswd: changed=%v err=%v", changed, err)
-	}
-}
-
-func TestEnsureRegistryRefazSenhaPerdida(t *testing.T) {
-	s := newStore(t)
-	EnsureRegistry(s)
-	pw, _ := AddRegistryUser(s, "patrick")
-	s.Delete(RegistryPasswordSecret(RegistryVPS))
-
-	changed, err := EnsureRegistry(s)
-	if err != nil || !changed {
-		t.Fatalf("EnsureRegistry = %v, %v", changed, err)
-	}
-	newPw, _ := s.Get(RegistryPasswordSecret(RegistryVPS))
-	if !checkLogin(t, s, RegistryVPS, string(newPw)) {
-		t.Error("senha nova do vps nao entrou no htpasswd")
-	}
-	if !checkLogin(t, s, "patrick", pw) {
-		t.Error("usuario de pessoa perdeu o acesso")
-	}
-}
-
-func TestUsuariosDePessoas(t *testing.T) {
-	s := newStore(t)
-	EnsureRegistry(s)
-
-	pw, err := AddRegistryUser(s, "patrick")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !checkLogin(t, s, "patrick", pw) {
-		t.Fatal("senha devolvida nao confere")
-	}
-	// a senha da pessoa nao fica guardada em lugar nenhum
-	names, _ := s.List()
-	for _, n := range names {
-		v, _ := s.Get(n)
-		if strings.Contains(string(v), pw) {
-			t.Fatalf("senha da pessoa gravada em %s", n)
-		}
-	}
-
-	if _, err := AddRegistryUser(s, "patrick"); err == nil {
-		t.Error("criou usuario repetido")
-	}
-	for _, bad := range []string{RegistryCI, RegistryVPS, "Patrick", "a:b", "", "-x"} {
-		if _, err := AddRegistryUser(s, bad); err == nil {
-			t.Errorf("aceitou usuario %q", bad)
-		}
-	}
-
-	users, _ := RegistryUsers(s)
-	if !slices.Equal(users, []string{RegistryCI, RegistryVPS, "patrick"}) {
-		t.Fatalf("usuarios %v", users)
-	}
-
-	if err := RemoveRegistryUser(s, RegistryCI); err == nil {
-		t.Error("removeu usuario de servico")
-	}
-	if err := RemoveRegistryUser(s, "patrick"); err != nil {
-		t.Fatal(err)
-	}
-	if checkLogin(t, s, "patrick", pw) {
-		t.Error("usuario removido ainda entra")
-	}
-	if err := RemoveRegistryUser(s, "patrick"); err == nil {
-		t.Error("removeu usuario que nao existe")
 	}
 }

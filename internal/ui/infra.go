@@ -173,6 +173,9 @@ func (m *model) viewInfra(h int) string {
 				btn = t.disabledPill()
 			}
 			line += "  " + m.zones.Mark("toggle:"+name, btn.Render(text))
+			if (name == "postgres" || name == "mysql") && st.Enabled && st.Installed {
+				line += " " + m.zones.Mark("newdb:"+name, t.pill(m.db.engine == name).Render("Novo banco"))
+			}
 		}
 		card := t.panel(selected, leftW-4, 2).Render(ansi.Truncate(title, leftW-6, "…") + "\n" + line)
 		cards = append(cards, m.zones.Mark("stack:"+name, card))
@@ -187,7 +190,12 @@ func (m *model) viewInfra(h int) string {
 	}
 	left := lipgloss.NewStyle().Width(leftW).Height(h).Render(header + "\n" + strings.Join(cards, "\n") + "\n" + footer)
 	rightW := m.w - leftW - 1
-	right := m.zones.Mark("infra-logs", m.viewInfraLogs(rightW, innerH))
+	var right string
+	if m.db.open() {
+		right = m.db.view(rightW, innerH)
+	} else {
+		right = m.zones.Mark("infra-logs", m.viewInfraLogs(rightW, innerH))
+	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
@@ -356,7 +364,16 @@ func (m *model) infraClick(msg tea.MouseMsg) tea.Cmd {
 	if m.zones.Get("infra-refresh").InBounds(msg) && !m.state.Infra.Checking {
 		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
 	}
+	if m.db.open() {
+		if cmd := m.db.click(msg); cmd != nil || !m.db.open() {
+			return cmd
+		}
+	}
 	for i, name := range infraOrder() {
+		if m.zones.Get("newdb:" + name).InBounds(msg) {
+			m.infraSel = i
+			return m.db.show(name)
+		}
 		if m.zones.Get("toggle:" + name).InBounds(msg) {
 			m.infraSel = i
 			m.infraContainer = 0
@@ -383,6 +400,12 @@ func (m *model) infraKey(k string) tea.Cmd {
 	switch k {
 	case "r":
 		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
+	case "b":
+		// Novo banco no Postgres/MySQL selecionado
+		if st := m.selectedStack(); (st.Name == "postgres" || st.Name == "mysql") && st.Enabled && st.Installed {
+			return m.db.show(st.Name)
+		}
+		return nil
 	case "down", "tab":
 		m.infraSel = (m.infraSel + 1) % n
 	case "up", "shift+tab":

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -297,7 +296,7 @@ func startSetupDaemon(t *testing.T) (*daemon, *atomic.Int32) {
 			return nil
 		},
 		ComposeDown: func(context.Context, string) error { return nil },
-		Login:       func(context.Context, string, string, []byte) error { return nil },
+		ExecInput:   func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 	})
 	return d, &ups
 }
@@ -315,11 +314,7 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	cfg.Domain = "exemplo.com.br"
 	cfg.Email = "admin@exemplo.com.br"
 	cfg.Stacks = []string{"postgres"}
-	cfg.Woodpecker = config.Woodpecker{GitHubClient: "Ov23li", Admin: "fulano"}
 	if err := c.SaveConfig(ctx, cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.SetSecret(ctx, "github_client_secret", "x"); err != nil {
 		t.Fatal(err)
 	}
 	if info, _ = c.LoadConfig(ctx); !info.Exists || info.Config.Domain != "exemplo.com.br" {
@@ -327,7 +322,7 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	}
 
 	plan, err := c.PlanSetup(ctx)
-	if err != nil || !plan.Ready() || len(plan.Stacks) != 4 {
+	if err != nil || !plan.Ready() || len(plan.Stacks) != 2 {
 		t.Fatalf("plano: %+v, %v", plan, err)
 	}
 
@@ -337,8 +332,8 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	if err != nil || setup.Running || setup.Error != "" {
 		t.Fatalf("RunSetup: %+v, %v", setup, err)
 	}
-	if ups.Load() != 4 {
-		t.Errorf("%d compose up, esperava 4", ups.Load())
+	if ups.Load() != 2 {
+		t.Errorf("%d compose up, esperava 2", ups.Load())
 	}
 	// o progresso chegou pela notificacao de estado
 	st := recv(t, states, func(s core.State) bool { return !s.Setup.Running && !s.Setup.FinishedAt.IsZero() })
@@ -346,16 +341,12 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 		t.Fatal("estado sem os passos do Setup")
 	}
 
-	pw, err := c.AddRegistryUser(ctx, "patrick")
-	if err != nil || len(pw) != 26 {
-		t.Fatalf("AddRegistryUser: %q, %v", pw, err)
+	db, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "meu_app"})
+	if err != nil || db.Password == "" || !strings.HasPrefix(db.URL, "postgres://meu_app:") {
+		t.Fatalf("CreateDatabase: %+v, %v", db, err)
 	}
-	users, _ := c.RegistryUsers(ctx)
-	if strings.Join(users, ",") != "ci,vps,patrick" {
-		t.Errorf("usuarios %v", users)
-	}
-	if ups.Load() != 5 {
-		t.Error("registry nao foi recriado depois de criar usuario")
+	if list, err := c.Databases(ctx); err != nil || len(list) != 1 || list[0] != db {
+		t.Errorf("Databases: %+v, %v", list, err)
 	}
 
 	// ligar um servico pelo socket aplica na hora
@@ -364,9 +355,6 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	}
 	if info, _ := c.LoadConfig(ctx); !info.Config.HasStack("mysql") {
 		t.Error("mysql nao ligou pelo socket")
-	}
-	if err := c.RemoveRegistryUser(ctx, "ci"); err == nil {
-		t.Error("removeu usuario de servico pelo socket")
 	}
 }
 
@@ -384,7 +372,7 @@ func TestConfigInvalidaVoltaComoErro(t *testing.T) {
 func TestParametroDesconhecidoERecusado(t *testing.T) {
 	d, _ := startSetupDaemon(t)
 	c := dial(t, d.path)
-	err := c.call(context.Background(), MethodRegistryUserAdd, map[string]string{"usuario": "x"}, nil)
+	err := c.call(context.Background(), MethodAppDeploy, map[string]string{"nome": "x"}, nil)
 	var rerr *Error
 	if !errors.As(err, &rerr) || rerr.Code != CodeInvalidParams {
 		t.Fatalf("esperava CodeInvalidParams, veio %v", err)
@@ -410,13 +398,25 @@ func TestContainerLogsPeloSocket(t *testing.T) {
 
 type fakeAppDocker struct{ ups atomic.Int32 }
 
-func (f *fakeAppDocker) Up(context.Context, docker.Project) error { f.ups.Add(1); return nil }
+func (f *fakeAppDocker) Config(context.Context, docker.Project) ([]byte, error) {
+	return []byte(`{"services": {"web": {"privileged": true}}}`), nil
+}
+func (f *fakeAppDocker) Build(context.Context, docker.Project) error { return nil }
+func (f *fakeAppDocker) Up(context.Context, docker.Project) error    { f.ups.Add(1); return nil }
 func (f *fakeAppDocker) PS(_ context.Context, p docker.Project) ([]docker.Container, error) {
 	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running"}}, nil
 }
 func (f *fakeAppDocker) Restart(context.Context, docker.Project, string) error { return nil }
-func (f *fakeAppDocker) Recreate(ctx context.Context, p docker.Project) error  { return f.Up(ctx, p) }
 func (f *fakeAppDocker) Stop(context.Context, docker.Project) error            { return nil }
+
+// fakeSource e um repositorio com um commit so
+type fakeSource struct{}
+
+func (fakeSource) Resolve(context.Context, string, string) (string, error) { return "c0ffee", nil }
+func (fakeSource) Download(_ context.Context, _, _, dir string) error {
+	os.Mkdir(dir, 0o700)
+	return os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o644)
+}
 
 func TestAppPeloSocket(t *testing.T) {
 	root := t.TempDir()
@@ -426,112 +426,46 @@ func TestAppPeloSocket(t *testing.T) {
 		ConfigPath:  filepath.Join(root, "config.yaml"),
 		AppsDir:     filepath.Join(root, "apps"),
 		AppDocker:   ad,
+		AppSource:   fakeSource{},
 	})
 	c := dial(t, d.path)
 	ctx := context.Background()
 
-	if _, err := c.CreateApp(ctx, "meu-app"); err != nil {
+	if _, err := c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"}); err != nil {
 		t.Fatal(err)
 	}
-	routes := []apps.Route{{Host: "app.exemplo.com.br", Service: "web", Port: 3000}}
-	if err := c.SetAppRoutes(ctx, "meu-app", routes); err != nil {
+	if err := c.SetAppEnv(ctx, "meu-app", map[string]string{"A": "1"}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := c.DeployApp(ctx, "meu-app", "services:\n  web:\n    image: x/meu-app:v1\n")
-	if err != nil || len(res.Images) != 1 || ad.ups.Load() != 1 {
+	if env, err := c.AppEnv(ctx, "meu-app"); err != nil || env["A"] != "1" {
+		t.Fatalf("env %v %v", env, err)
+	}
+	if err := c.SetAppSecret(ctx, "meu-app", "jwt", "x"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.DeployApp(ctx, "meu-app", "")
+	if err != nil || res.Commit != "c0ffee" || ad.ups.Load() != 1 {
 		t.Fatalf("deploy: %+v %v (ups %d)", res, err, ad.ups.Load())
 	}
-	_, err = c.DeployApp(ctx, "meu-app", "services:\n  web:\n    image: x\n    privileged: true\n")
-	if err == nil || !strings.Contains(err.Error(), "privileged") {
-		t.Fatalf("deploy com privileged: %v", err)
+	// aviso volta junto, sem impedir o deploy
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "privileged") {
+		t.Errorf("avisos %v", res.Warnings)
 	}
 	list, err := c.CheckApps(ctx)
-	if err != nil || len(list.List) != 1 || len(list.List[0].Routes) != 1 || list.List[0].Last == nil {
+	if err != nil || len(list.List) != 1 || list.List[0].Commit != "c0ffee" || len(list.List[0].Secrets) != 1 {
 		t.Fatalf("apps: %+v %v", list, err)
 	}
-}
-
-// socket de deploy: so o metodo liberado, e so pra quem o kernel diz que e
-// o usuario certo
-func startRestricted(t *testing.T, opts ...Option) (string, *fakeAppDocker) {
-	t.Helper()
-	root := t.TempDir()
-	ad := &fakeAppDocker{}
-	c := core.New(core.Deps{CheckDocker: okStatus, ConfigPath: filepath.Join(root, "config.yaml"),
-		AppsDir: filepath.Join(root, "apps"), AppDocker: ad})
-	ctx := context.Background()
-	c.CreateApp(ctx, "meu-app")
-	c.SetAppSpec(ctx, "meu-app", apps.Spec{Image: "registry.exemplo.com.br/meu-app"})
-
-	path := filepath.Join(t.TempDir(), "deploy.sock")
-	ln, err := Listen(path, "")
-	if err != nil {
+	if out, err := c.AppGuide(ctx, "meu-app"); err == nil || out != "" {
+		// sem config.yaml a ajuda nao tem o dominio
+		t.Errorf("ajuda sem config: %q %v", out, err)
+	}
+	if err := c.DeleteAppSecret(ctx, "meu-app", "jwt"); err != nil {
 		t.Fatal(err)
 	}
-	sctx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() { done <- Serve(sctx, ln, c, opts...) }()
-	t.Cleanup(func() { cancel(); <-done })
-	return path, ad
-}
-
-func TestSocketRestritoSoAceitaODeploy(t *testing.T) {
-	var logs []string
-	var mu sync.Mutex
-	path, ad := startRestricted(t, Allow(MethodAppDeployTag), Log(func(f string, a ...any) {
-		mu.Lock()
-		logs = append(logs, fmt.Sprintf(f, a...))
-		mu.Unlock()
-	}))
-	c := dial(t, path)
-	ctx := context.Background()
-
-	if _, err := c.DeployAppTag(ctx, "meu-app", "abc123"); err != nil {
+	if err := c.RestartApp(ctx, "meu-app", "web"); err != nil {
 		t.Fatal(err)
 	}
-	if ad.ups.Load() != 1 {
-		t.Fatal("deploy nao subiu")
-	}
-	for name, call := range map[string]func() error{
-		"state.get":      func() error { _, err := c.Snapshot(ctx); return err },
-		"app.deploy":     func() error { _, err := c.DeployApp(ctx, "meu-app", "services: {}"); return err },
-		"app.secret.set": func() error { return c.SetAppSecret(ctx, "meu-app", "x", "y") },
-		"config.save":    func() error { return c.SaveConfig(ctx, config.Default()) },
-	} {
-		var rerr *Error
-		if err := call(); !errors.As(err, &rerr) || rerr.Code != CodeForbidden {
-			t.Errorf("%s no socket de deploy: %v", name, err)
-		}
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	joined := strings.Join(logs, "\n")
-	if !strings.Contains(joined, fmt.Sprintf("uid %d: app.deploy.tag", os.Getuid())) || !strings.Contains(joined, "nao permitido") {
-		t.Errorf("registro do socket de deploy:\n%s", joined)
-	}
-}
-
-func TestSocketRestritoConfereQuemConecta(t *testing.T) {
-	var seen atomic.Uint32
-	path, _ := startRestricted(t, Allow(MethodAppDeployTag), RequirePeer(func(p Peer) error {
-		seen.Store(p.UID + 1)
-		if p.UID != uint32(os.Getuid()) {
-			return errors.New("uid errado")
-		}
-		return nil
-	}))
-	c := dial(t, path)
-	if _, err := c.DeployAppTag(context.Background(), "meu-app", "v1"); err != nil {
+	if err := c.UpdateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/outro", Compose: "prod.yml"}); err != nil {
 		t.Fatal(err)
-	}
-	if seen.Load() != uint32(os.Getuid())+1 {
-		t.Fatalf("o kernel nao informou o uid de quem conectou (%d)", seen.Load())
-	}
-
-	// quem o check recusa e desconectado antes de qualquer chamada
-	other, _ := startRestricted(t, RequirePeer(func(Peer) error { return errors.New("so o usuario deploy") }))
-	c2 := dial(t, other)
-	if _, err := c2.DeployAppTag(context.Background(), "meu-app", "v1"); !errors.Is(err, ErrDisconnected) {
-		t.Fatalf("conexao recusada devia cair: %v", err)
 	}
 }

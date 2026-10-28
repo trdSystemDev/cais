@@ -34,8 +34,6 @@ var All = []Stack{
 	{Name: "postgres", Desc: "Postgres compartilhado, so no loopback (tunel SSH)", Optional: true},
 	{Name: "mysql", Desc: "MySQL compartilhado, so no loopback (tunel SSH)", Optional: true},
 	{Name: "garage", Desc: "Storage S3 (Garage), publico com TLS", Requires: []string{"proxy"}, Optional: true},
-	{Name: "registry", Desc: "Registry de imagens publico, com TLS e login", Requires: []string{"proxy"}},
-	{Name: "woodpecker", Desc: "CI ligado ao GitHub", Requires: []string{"proxy", "registry"}},
 }
 
 // Get procura uma stack pelo nome.
@@ -88,20 +86,9 @@ func Enabled(c config.Config) ([]Stack, error) {
 	return out, nil
 }
 
-// checkStack confere os campos da config que so uma stack exige.
-func checkStack(name string, c config.Config) error {
-	if name == "woodpecker" {
-		var errs []error
-		if c.Woodpecker.GitHubClient == "" {
-			errs = append(errs, errors.New("stack woodpecker: falta woodpecker.github_client (Client ID do OAuth app do GitHub)"))
-		}
-		if c.Woodpecker.Admin == "" {
-			errs = append(errs, errors.New("stack woodpecker: falta woodpecker.admin (usuario do GitHub)"))
-		}
-		return errors.Join(errs...)
-	}
-	return nil
-}
+// checkStack confere os campos da config que so uma stack exige (hoje
+// nenhuma tem regra propria).
+func checkStack(string, config.Config) error { return nil }
 
 // Rendered e o compose de uma stack pronto pra gravar.
 type Rendered struct {
@@ -114,15 +101,11 @@ type Rendered struct {
 
 // vars e o que os templates enxergam.
 type vars struct {
-	Email        string
-	LetsEncrypt  bool
-	HTTPPort     int
-	HTTPSPort    int
-	CIHost       string
-	RegistryHost string
-	S3Host       string
-	GitHubClient string
-	Admin        string
+	Email       string
+	LetsEncrypt bool
+	HTTPPort    int
+	HTTPSPort   int
+	S3Host      string
 }
 
 var secretName = regexp.MustCompile(`^[a-z0-9_]+$`)
@@ -163,15 +146,11 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 
 	var buf bytes.Buffer
 	err = tmpl.Execute(&buf, vars{
-		Email:        c.Email,
-		LetsEncrypt:  c.LetsEncrypt(),
-		HTTPPort:     c.Proxy.HTTPPort,
-		HTTPSPort:    c.Proxy.HTTPSPort,
-		CIHost:       c.CIHost(),
-		RegistryHost: c.RegistryHost(),
-		S3Host:       c.S3Host(),
-		GitHubClient: c.Woodpecker.GitHubClient,
-		Admin:        c.Woodpecker.Admin,
+		Email:       c.Email,
+		LetsEncrypt: c.LetsEncrypt(),
+		HTTPPort:    c.Proxy.HTTPPort,
+		HTTPSPort:   c.Proxy.HTTPSPort,
+		S3Host:      c.S3Host(),
 	})
 	if err != nil {
 		return Rendered{}, fmt.Errorf("stack %s: %w", name, err)

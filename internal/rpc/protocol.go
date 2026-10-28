@@ -10,9 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/trdSystemDev/cais/internal/apps"
-	"github.com/trdSystemDev/cais/internal/detect"
 )
 
 // Metodos aceitos pelo daemon.
@@ -28,28 +25,21 @@ const (
 	MethodSetupPlan        = "setup.plan"
 	MethodSetupRun         = "setup.run"
 	MethodServiceSet       = "service.set" // params: serviceParams
-	MethodRegistryUsers    = "registry.users"
-	MethodRegistryUserAdd  = "registry.user.add"    // params: userParams
-	MethodRegistryUserDel  = "registry.user.remove" // params: userParams
 	MethodAppsCheck        = "apps.check"
-	MethodAppCreate        = "app.create"     // params: appParams
-	MethodAppRoutes        = "app.routes"     // params: routesParams
-	MethodAppDeploy        = "app.deploy"     // params: deployParams
-	MethodAppRestart       = "app.restart"    // params: appParams (service opcional)
-	MethodAppStop          = "app.stop"       // params: appParams
-	MethodAppLogs          = "app.logs"       // params: appParams (container)
-	MethodAppDatabase      = "app.db"         // params: dbParams
-	MethodAppDatabaseOff   = "app.db.off"     // params: appParams
-	MethodAppPlan          = "app.plan"       // params: planParams
-	MethodAppApply         = "app.apply"      // params: apps.Plan
-	MethodAppSpec          = "app.spec"       // params: specParams
-	MethodAppDeployTag     = "app.deploy.tag" // params: tagParams
-	MethodAppSecrets       = "app.secrets"    // params: appParams
-	MethodAppSecretSet     = "app.secret.set" // params: appSecretParams
-	MethodCISetup          = "ci.setup"
-	MethodAppEnv           = "app.env"         // params: envParams
-	MethodAppPlanGitHub    = "app.plan.github" // params: repoParams
-	MethodAppCIPR          = "app.ci.pr"       // params: appParams
+	MethodAppCreate        = "app.create"        // params: apps.App
+	MethodAppUpdate        = "app.update"        // params: apps.App
+	MethodAppDeploy        = "app.deploy"        // params: deployParams
+	MethodAppRestart       = "app.restart"       // params: appParams (service opcional)
+	MethodAppStop          = "app.stop"          // params: appParams
+	MethodAppLogs          = "app.logs"          // params: appParams (container)
+	MethodAppEnvGet        = "app.env.get"       // params: appParams
+	MethodAppEnvSet        = "app.env.set"       // params: envParams
+	MethodAppSecrets       = "app.secrets"       // params: appParams
+	MethodAppSecretSet     = "app.secret.set"    // params: appSecretParams
+	MethodAppSecretDel     = "app.secret.delete" // params: appSecretParams
+	MethodAppGuide         = "app.guide"         // params: appParams
+	MethodDatabaseCreate   = "db.create"         // params: core.DatabaseRequest
+	MethodDatabases        = "db.list"
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -61,9 +51,7 @@ const (
 	CodeParseError     = -32700
 	CodeMethodNotFound = -32601
 	CodeInvalidParams  = -32602
-	// CodeForbidden: o metodo existe, mas nao neste socket (o de deploy).
-	CodeForbidden    = -32003
-	CodeActionFailed = -32000
+	CodeActionFailed   = -32000
 )
 
 // ErrDisconnected e devolvido pelo cliente quando a conexao com o daemon
@@ -102,14 +90,6 @@ type secretParams struct {
 	Value string `json:"value"`
 }
 
-type userParams struct {
-	User string `json:"user"`
-}
-
-type passwordResult struct {
-	Password string `json:"password"`
-}
-
 type serviceParams struct {
 	Name string `json:"name"`
 	On   bool   `json:"on"`
@@ -126,52 +106,23 @@ type appParams struct {
 	Container string `json:"container,omitempty"`
 }
 
-type routesParams struct {
-	Name   string       `json:"name"`
-	Routes []apps.Route `json:"routes"`
-}
-
 type deployParams struct {
-	Name    string `json:"name"`
-	Compose string `json:"compose"`
-}
-
-type dbParams struct {
-	Name     string        `json:"name"`
-	Database apps.Database `json:"database"`
-}
-
-type planParams struct {
-	Name  string       `json:"name"`
-	Files detect.Files `json:"files"`
-}
-
-type specParams struct {
-	Name string    `json:"name"`
-	Spec apps.Spec `json:"spec"`
-}
-
-type tagParams struct {
 	Name string `json:"name"`
-	Tag  string `json:"tag"`
+	// Ref e a branch ou o commit; vazio e o mais novo da branch do app.
+	Ref string `json:"ref,omitempty"`
+}
+
+type envParams struct {
+	Name string            `json:"name"`
+	Env  map[string]string `json:"env"`
 }
 
 type appSecretParams struct {
 	Name   string `json:"name"`
 	Secret string `json:"secret"`
-	Value  string `json:"value"`
+	Value  string `json:"value,omitempty"`
 }
 
-type envParams struct {
-	Name  string            `json:"name"`
-	Env   map[string]string `json:"env"`
-	Apply bool              `json:"apply,omitempty"`
-}
-
-type repoParams struct {
-	Repo string `json:"repo"`
-}
-
-type linkResult struct {
-	URL string `json:"url"`
+type textResult struct {
+	Text string `json:"text"`
 }

@@ -13,7 +13,6 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/secrets"
-	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
 // fakeDocker registra o que o Setup pediu ao docker.
@@ -23,11 +22,9 @@ type fakeDocker struct {
 	downs         []string
 	ups           []string // nome da stack (pasta do compose)
 	recreate      []string
-	logins        []string
 	failUp        string // stack cujo up falha
 	execs         []string
 	layoutVersion int
-	loginErr      int // quantos logins falham antes de passar
 }
 
 func (f *fakeDocker) up(_ context.Context, file string, recreate bool) error {
@@ -79,29 +76,16 @@ func (f *fakeDocker) exec(_ context.Context, container string, args ...string) (
 	return "", nil
 }
 
-func (f *fakeDocker) login(_ context.Context, host, user string, pw []byte) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.logins = append(f.logins, host+" "+user)
-	if f.loginErr > 0 {
-		f.loginErr--
-		return errors.New("x509: certificate is not valid")
-	}
-	return nil
-}
-
 func newDeps(t *testing.T, f *fakeDocker) Deps {
 	root := t.TempDir()
 	return Deps{
-		ConfigPath:    filepath.Join(root, "etc", "config.yaml"),
-		SecretsDir:    filepath.Join(root, "data", "secrets"),
-		StackDir:      func(n string) string { return filepath.Join(root, "data", "stacks", n) },
-		CheckDocker:   func(context.Context) error { return nil },
-		ComposeUp:     f.up,
-		ComposeDown:   f.down,
-		Exec:          f.exec,
-		Login:         f.login,
-		LoginAttempts: 3,
+		ConfigPath:  filepath.Join(root, "etc", "config.yaml"),
+		SecretsDir:  filepath.Join(root, "data", "secrets"),
+		StackDir:    func(n string) string { return filepath.Join(root, "data", "stacks", n) },
+		CheckDocker: func(context.Context) error { return nil },
+		ComposeUp:   f.up,
+		ComposeDown: f.down,
+		Exec:        f.exec,
 	}
 }
 
@@ -110,7 +94,6 @@ func writeConfig(t *testing.T, d Deps, mutate func(*config.Config)) config.Confi
 	c := config.Default()
 	c.Domain = "exemplo.com.br"
 	c.Email = "admin@exemplo.com.br"
-	c.Woodpecker = config.Woodpecker{GitHubClient: "Ov23liAbc", Admin: "fulano"}
 	c.Stacks = []string{"postgres", "mysql"}
 	if mutate != nil {
 		mutate(&c)
@@ -119,13 +102,6 @@ func writeConfig(t *testing.T, d Deps, mutate func(*config.Config)) config.Confi
 		t.Fatal(err)
 	}
 	return c
-}
-
-func provideGitHub(t *testing.T, d Deps) {
-	t.Helper()
-	if err := stacks.SetProvided(d.store(), "github_client_secret", []byte("segredo")); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestPlanSemConfig(t *testing.T) {
@@ -142,7 +118,7 @@ func TestPlanSemConfig(t *testing.T) {
 	}
 }
 
-func TestPlanPedeSecretInformadoENaoGrava(t *testing.T) {
+func TestPlanNaoGrava(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
 	writeConfig(t, d, nil)
@@ -151,22 +127,17 @@ func TestPlanPedeSecretInformadoENaoGrava(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Ready() || len(p.Missing) != 1 || p.Missing[0].Name != "github_client_secret" {
-		t.Fatalf("esperava faltar so o github_client_secret: %+v", p)
+	if !p.Ready() || len(p.Missing) != 0 {
+		t.Fatalf("plano tem que estar pronto: %+v", p)
 	}
-	if len(p.Stacks) != 5 || p.Stacks[0].Change != ChangeNew {
+	if len(p.Stacks) != 3 || p.Stacks[0].Change != ChangeNew {
 		t.Fatalf("stacks do plano: %+v", p.Stacks)
 	}
 	if _, err := os.Stat(filepath.Dir(d.SecretsDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("o plano gravou algo no disco")
 	}
-
-	_, err = Run(context.Background(), d, nil)
-	if err == nil || !strings.Contains(err.Error(), "github_client_secret") {
-		t.Fatalf("Run sem o secret informado: %v", err)
-	}
 	if len(f.ups) != 0 {
-		t.Fatal("subiu stack sem estar pronto")
+		t.Fatal("o plano subiu stack")
 	}
 }
 
@@ -189,24 +160,17 @@ func TestPlanDizComoChegarNosBancos(t *testing.T) {
 }
 
 func TestRunSobeTudoEmOrdem(t *testing.T) {
-	f := &fakeDocker{loginErr: 1} // certificado ainda saindo no primeiro login
+	f := &fakeDocker{}
 	d := newDeps(t, f)
 	writeConfig(t, d, nil)
-	provideGitHub(t, d)
 
 	var reports [][]Step
 	steps, err := Run(context.Background(), d, func(s []Step) { reports = append(reports, s) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(f.ups, []string{"proxy", "postgres", "mysql", "registry", "woodpecker"}) {
+	if !slices.Equal(f.ups, []string{"proxy", "postgres", "mysql"}) {
 		t.Errorf("ordem de subida %v", f.ups)
-	}
-	if !slices.Equal(f.recreate, []string{"registry"}) {
-		t.Errorf("htpasswd novo tem que recriar so o registry: %v", f.recreate)
-	}
-	if len(f.logins) != 2 || f.logins[1] != "registry.exemplo.com.br vps" {
-		t.Errorf("logins %v", f.logins)
 	}
 	for _, s := range steps {
 		if s.Status != Done {
@@ -231,7 +195,6 @@ func TestRunDeNovoNaoMudaNada(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
 	writeConfig(t, d, nil)
-	provideGitHub(t, d)
 	if _, err := Run(context.Background(), d, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -266,47 +229,31 @@ func TestRunDeNovoNaoMudaNada(t *testing.T) {
 	}
 
 	// mudar a config so regrava a stack afetada
-	writeConfig(t, d, func(c *config.Config) { c.Hosts.CI = "build.exemplo.com.br" })
+	writeConfig(t, d, func(c *config.Config) { c.Proxy.HTTPPort = 8080 })
 	steps, _ = Run(context.Background(), d, nil)
-	if steps[2].Detail != "woodpecker" {
-		t.Errorf("regravou %q, esperava so woodpecker", steps[2].Detail)
+	if steps[2].Detail != "proxy" {
+		t.Errorf("regravou %q, esperava so proxy", steps[2].Detail)
 	}
 }
 
 func TestRunParaNoPrimeiroErro(t *testing.T) {
-	f := &fakeDocker{failUp: "registry"}
+	f := &fakeDocker{failUp: "postgres"}
 	d := newDeps(t, f)
 	writeConfig(t, d, nil)
-	provideGitHub(t, d)
 
 	steps, err := Run(context.Background(), d, nil)
 	if err == nil || !strings.Contains(err.Error(), "unhealthy") {
 		t.Fatalf("erro %v", err)
 	}
-	if !slices.Equal(f.ups, []string{"proxy", "postgres", "mysql", "registry"}) {
+	if !slices.Equal(f.ups, []string{"proxy", "postgres"}) {
 		t.Errorf("continuou depois do erro: %v", f.ups)
 	}
 	status := map[string]Status{}
 	for _, s := range steps {
 		status[s.ID] = s.Status
 	}
-	if status["stack:registry"] != Failed || status["stack:woodpecker"] != Pending || status[stepRegistryLogin] != Pending {
+	if status["stack:postgres"] != Failed || status["stack:mysql"] != Pending {
 		t.Errorf("status %v", status)
-	}
-}
-
-func TestRunLoginDesisteComDica(t *testing.T) {
-	f := &fakeDocker{loginErr: 10}
-	d := newDeps(t, f)
-	writeConfig(t, d, nil)
-	provideGitHub(t, d)
-
-	_, err := Run(context.Background(), d, nil)
-	if err == nil || !strings.Contains(err.Error(), "DNS de registry.exemplo.com.br") {
-		t.Fatalf("erro %v", err)
-	}
-	if len(f.logins) != d.LoginAttempts {
-		t.Errorf("%d tentativas, esperava %d", len(f.logins), d.LoginAttempts)
 	}
 }
 
@@ -315,16 +262,12 @@ func TestFixasSobemSempre(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
 	writeConfig(t, d, func(c *config.Config) { c.Stacks = nil })
-	provideGitHub(t, d)
 
 	if _, err := Run(context.Background(), d, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(f.ups, []string{"proxy", "registry", "woodpecker"}) {
+	if !slices.Equal(f.ups, []string{"proxy"}) {
 		t.Errorf("subiu %v", f.ups)
-	}
-	if len(f.logins) != 1 {
-		t.Errorf("login da VPS no registry: %v", f.logins)
 	}
 	if ok, _ := secrets.Exists(d.store(), "postgres_password"); ok {
 		t.Error("gerou senha de banco desligado")
@@ -335,7 +278,6 @@ func TestGarageLayoutSoNaPrimeiraVez(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
 	writeConfig(t, d, func(c *config.Config) { c.Stacks = []string{"garage"} })
-	provideGitHub(t, d)
 
 	steps, err := Run(context.Background(), d, nil)
 	if err != nil {
@@ -371,14 +313,13 @@ func TestStackDesativadaEDerrubadaEReativada(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
 	writeConfig(t, d, nil)
-	provideGitHub(t, d)
 	if _, err := Run(context.Background(), d, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// desliga o mysql na config
 	writeConfig(t, d, func(c *config.Config) {
-		c.Stacks = []string{"proxy", "postgres", "registry", "woodpecker"}
+		c.Stacks = []string{"proxy", "postgres"}
 	})
 	p, err := MakePlan(d)
 	if err != nil {
@@ -433,7 +374,6 @@ func TestStackLegadaEDerrubada(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
 	writeConfig(t, d, nil)
-	provideGitHub(t, d)
 	old := d.ComposeFile("infra")
 	os.MkdirAll(filepath.Dir(old), 0o700)
 	os.WriteFile(old, []byte("name: infra\n"), 0o644)

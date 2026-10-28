@@ -15,7 +15,7 @@ import (
 func TestTodoSecretTemOrigem(t *testing.T) {
 	local := validConfig()
 	local.Domain, local.TLS = "trd.localhost", config.TLSSelfSigned
-	special := []string{secrets.RegistryHtpasswd, secrets.TLSCert, secrets.TLSKey}
+	special := []string{secrets.TLSCert, secrets.TLSKey}
 	for _, c := range []config.Config{validConfig(), local} {
 		for _, st := range All {
 			r, err := Render(st.Name, c, "/")
@@ -38,7 +38,8 @@ func TestEnsureSecretsGeraCertificadoLocal(t *testing.T) {
 	c := validConfig()
 	c.Domain, c.TLS = "trd.localhost", config.TLSSelfSigned
 	c.Stacks = []string{"postgres"}
-	c.Hosts.Registry = "imagens.outro.localhost"
+	c.Stacks = []string{"postgres", "garage"}
+	c.Hosts.S3 = "arquivos.outro.localhost"
 
 	create, _, err := PlanSecrets(s, c)
 	if err != nil {
@@ -63,7 +64,7 @@ func TestEnsureSecretsGeraCertificadoLocal(t *testing.T) {
 	if !slices.Contains(res.Recreate, "proxy") {
 		t.Errorf("certificado novo tem que recriar o proxy: %v", res.Recreate)
 	}
-	if got := TLSDomains(c); !slices.Equal(got, []string{"trd.localhost", "imagens.outro.localhost"}) {
+	if got := TLSDomains(c); !slices.Equal(got, []string{"trd.localhost", "arquivos.outro.localhost"}) {
 		t.Errorf("dominios da CA %v", got)
 	}
 
@@ -81,14 +82,11 @@ func TestEnsureSecretsGeraOQueFaltaEPedeOResto(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Missing) != 1 || res.Missing[0].Name != "github_client_secret" {
-		t.Fatalf("Missing = %+v, esperava so o github_client_secret", res.Missing)
+	// nenhuma stack pede secret de fora (a chave do GitHub App e do deploy)
+	if len(res.Missing) != 0 {
+		t.Fatalf("Missing = %+v", res.Missing)
 	}
-	if !slices.Equal(res.Recreate, []string{"registry"}) {
-		t.Error("primeira vez tem que criar o htpasswd")
-	}
-	for _, want := range []string{"postgres_password",
-		"agent_secret", "registry_htpasswd", "registry_ci_password", "registry_vps_password"} {
+	for _, want := range []string{"postgres_password", "mysql_root_password"} {
 		if !slices.Contains(res.Created, want) {
 			t.Errorf("Created nao tem %s: %v", want, res.Created)
 		}
@@ -114,12 +112,8 @@ func TestEnsureSecretsGeraOQueFaltaEPedeOResto(t *testing.T) {
 		}
 	}
 
-	if err := SetProvided(s, "github_client_secret", []byte("abc")); err != nil {
+	if err := SetProvided(s, "github_app_key", []byte("pem")); err != nil {
 		t.Fatal(err)
-	}
-	res, _ = EnsureSecrets(s, c)
-	if len(res.Missing) != 0 {
-		t.Errorf("ainda pede %+v", res.Missing)
 	}
 }
 
@@ -137,8 +131,8 @@ func TestEnsureSecretsSoDasStacksAtivas(t *testing.T) {
 			t.Errorf("criou secret de servico desligado: %s", n)
 		}
 	}
-	if !slices.Contains(res.Created, "agent_secret") || !slices.Contains(res.Created, "registry_htpasswd") {
-		t.Errorf("fixas sem secrets: %v", res.Created)
+	if len(res.Created) != 0 {
+		t.Errorf("o proxy com Let's Encrypt nao precisa de secret: %v", res.Created)
 	}
 
 	c.Stacks = []string{"garage"}
@@ -156,10 +150,10 @@ func TestPlanSecretsNaoGrava(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(missing) != 1 || missing[0].Name != "github_client_secret" {
+	if len(missing) != 0 {
 		t.Errorf("missing = %+v", missing)
 	}
-	if !slices.Contains(create, "postgres_password") || !slices.Contains(create, "registry_htpasswd") {
+	if !slices.Contains(create, "postgres_password") || !slices.Contains(create, "mysql_root_password") {
 		t.Errorf("create = %v", create)
 	}
 	if names, _ := s.List(); len(names) != 0 {
@@ -178,7 +172,7 @@ func TestSetProvidedRecusa(t *testing.T) {
 	if err := SetProvided(s, "postgres_password", []byte("x")); err == nil {
 		t.Error("deixou sobrescrever secret gerado")
 	}
-	if err := SetProvided(s, "github_client_secret", nil); err == nil {
+	if err := SetProvided(s, "github_app_key", nil); err == nil {
 		t.Error("aceitou valor vazio")
 	}
 }

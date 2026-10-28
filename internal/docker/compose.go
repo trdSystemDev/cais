@@ -97,23 +97,6 @@ func Exec(ctx context.Context, container string, args ...string) (string, error)
 	return out, nil
 }
 
-// Login faz docker login com a senha pelo stdin (nunca na linha de
-// comando, onde apareceria no ps). A credencial fica no config.json do
-// usuario que roda o daemon, que e quem faz os pulls.
-func Login(ctx context.Context, host, user string, password []byte) error {
-	cmd := exec.CommandContext(ctx, "docker", "login", host, "-u", user, "--password-stdin")
-	cmd.Stdin = bytes.NewReader(password)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("docker login %s: %s", host, msg)
-	}
-	return nil
-}
-
 // lastLines fica com o fim da saida do compose: e la que esta o erro, e o
 // comeco e so progresso de pull.
 func lastLines(s string, n int) error {
@@ -153,12 +136,22 @@ func (CLI) Up(ctx context.Context, p Project) error {
 	return nil
 }
 
-// Recreate e o Up recriando todos os containers: um arquivo de secret
-// trocado so chega no container novo (o bind mount prende o arquivo antigo).
-func (CLI) Recreate(ctx context.Context, p Project) error {
-	_, err := execRunner(ctx, "docker", p.args("up", "-d", "--wait", "--wait-timeout", "300", "--remove-orphans", "--force-recreate")...)
+// Config devolve o compose resolvido (interpolado, com ancoras e extends
+// aplicados) em JSON, como o docker compose vai usar.
+func (CLI) Config(ctx context.Context, p Project) ([]byte, error) {
+	out, err := execRunner(ctx, "docker", p.args("config", "--format", "json")...)
 	if err != nil {
-		return fmt.Errorf("docker compose up (%s): %w", p.Name, lastLines(err.Error(), 15))
+		return nil, fmt.Errorf("o compose do app tem erro (%s): %w", p.Name, lastLines(err.Error(), 10))
+	}
+	return []byte(out), nil
+}
+
+// Build constroi as imagens dos services com build. Nao mexe nos
+// containers no ar: o app continua respondendo durante o build.
+func (CLI) Build(ctx context.Context, p Project) error {
+	_, err := execRunner(ctx, "docker", p.args("build", "--pull")...)
+	if err != nil {
+		return fmt.Errorf("docker compose build (%s): %w", p.Name, lastLines(err.Error(), 20))
 	}
 	return nil
 }

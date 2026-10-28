@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/fsx"
@@ -48,12 +47,6 @@ type Deps struct {
 	ComposeUp   func(ctx context.Context, file string, recreate bool) error
 	ComposeDown func(ctx context.Context, file string) error
 	Exec        func(ctx context.Context, container string, args ...string) (string, error)
-	Login       func(ctx context.Context, host, user string, password []byte) error
-
-	// o login no registry depende do DNS e do certificado do Let's Encrypt,
-	// que podem levar um tempo depois do proxy subir
-	LoginAttempts int
-	LoginDelay    time.Duration
 }
 
 func (d Deps) store() secrets.FileStore { return secrets.FileStore{Dir: d.SecretsDir} }
@@ -252,13 +245,12 @@ func compare(file string, want []byte) (string, error) {
 }
 
 const (
-	stepDocker        = "docker"
-	stepSecrets       = "secrets"
-	stepFiles         = "files"
-	stepRegistryLogin = "registry-login"
-	stepGarageLayout  = "garage-layout"
-	stackStepPrefix   = "stack:"
-	stopStepPrefix    = "stop:"
+	stepDocker       = "docker"
+	stepSecrets      = "secrets"
+	stepFiles        = "files"
+	stepGarageLayout = "garage-layout"
+	stackStepPrefix  = "stack:"
+	stopStepPrefix   = "stop:"
 )
 
 func steps(enabled []stacks.Stack, disable []StackPlan, cfg config.Config) []Step {
@@ -276,9 +268,6 @@ func steps(enabled []stacks.Stack, disable []StackPlan, cfg config.Config) []Ste
 	}
 	if cfg.HasStack("garage") {
 		out = append(out, Step{ID: stepGarageLayout, Desc: "Preparar o Garage (layout de no unico)"})
-	}
-	if cfg.HasStack("registry") {
-		out = append(out, Step{ID: stepRegistryLogin, Desc: "Login da VPS em " + cfg.RegistryHost()})
 	}
 	for i := range out {
 		out[i].Status = Pending
@@ -387,23 +376,6 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 		}
 	}
 
-	if cfg.HasStack("registry") {
-		host := cfg.RegistryHost()
-		if err := r.do(stepRegistryLogin, func() (string, error) {
-			pw, err := d.store().Get(secrets.RegistryPasswordSecret(secrets.RegistryVPS))
-			if err != nil {
-				return "", err
-			}
-			if err := retry(ctx, d.LoginAttempts, d.LoginDelay, func() error {
-				return d.Login(ctx, host, secrets.RegistryVPS, pw)
-			}); err != nil {
-				return "", fmt.Errorf("%w\nconfira se o DNS de %s aponta pra esta VPS e se o certificado ja foi emitido; depois rode o Setup de novo", err, host)
-			}
-			return "", nil
-		}); err != nil {
-			return r.steps, err
-		}
-	}
 	return r.steps, nil
 }
 
@@ -434,27 +406,6 @@ func (r *runner) set(i int, st Status, detail string) {
 	if r.report != nil {
 		r.report(steps)
 	}
-}
-
-func retry(ctx context.Context, attempts int, delay time.Duration, fn func() error) error {
-	if attempts < 1 {
-		attempts = 1
-	}
-	var err error
-	for i := range attempts {
-		if err = fn(); err == nil {
-			return nil
-		}
-		if i == attempts-1 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
-	return err
 }
 
 // garageLayout da ao no unico do Garage o papel de guardar tudo. So na

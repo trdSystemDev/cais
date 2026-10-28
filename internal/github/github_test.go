@@ -1,6 +1,9 @@
 package github
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -13,6 +16,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -54,13 +59,13 @@ func testKey(t *testing.T) (*rsa.PrivateKey, []byte) {
 // fakeGitHub simula as rotas da API que o cais usa e confere a
 // autenticacao de cada uma.
 type fakeGitHub struct {
-	t     *testing.T
-	key   *rsa.PublicKey
-	files map[string]string // caminho -> conteudo no branch principal
-	mu    sync.Mutex
-	calls []string
-	puts  map[string]string // arquivo gravado no branch do PR
-	scope []string          // repositorios pedidos no token
+	t       *testing.T
+	key     *rsa.PublicKey
+	files   map[string]string // caminho -> conteudo no branch principal
+	tarball []byte            // o que o tarball devolve (nil = tarOf(files))
+	mu      sync.Mutex
+	calls   []string
+	scope   []string // repositorios pedidos no token
 }
 
 func (f *fakeGitHub) checkJWT(r *http.Request) {
@@ -110,19 +115,14 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.scope = body.Repositories
 		w.WriteHeader(201)
 		io.WriteString(w, `{"token": "ghs_teste"}`)
-	case !inst:
+	case !inst && !strings.HasPrefix(p, "/codeload/"):
 		f.t.Errorf("%s %s sem token de instalacao", r.Method, p)
 		w.WriteHeader(401)
 	case p == "/repos/trdSystemDev/meu-app":
 		io.WriteString(w, `{"default_branch": "principal"}`)
 	case strings.HasPrefix(p, "/repos/trdSystemDev/meu-app/contents/") && r.Method == "GET":
 		path := strings.TrimPrefix(p, "/repos/trdSystemDev/meu-app/contents/")
-		ref := r.URL.Query().Get("ref")
-		if ref == "cais/ci" {
-			w.WriteHeader(404)
-			return
-		}
-		if ref != "principal" {
+		if ref := r.URL.Query().Get("ref"); ref != "principal" {
 			f.t.Errorf("leu %s do ref %q", path, ref)
 		}
 		if r.Header.Get("Accept") != "application/vnd.github.raw+json" {
@@ -135,34 +135,25 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		io.WriteString(w, c)
-	case p == "/repos/trdSystemDev/meu-app/git/ref/heads/principal":
-		io.WriteString(w, `{"object": {"sha": "abc"}}`)
-	case p == "/repos/trdSystemDev/meu-app/git/refs" && r.Method == "POST":
-		var body map[string]string
-		json.NewDecoder(r.Body).Decode(&body)
-		if body["ref"] != "refs/heads/cais/ci" || body["sha"] != "abc" {
-			f.t.Errorf("branch criado %v", body)
+	case strings.HasPrefix(p, "/repos/trdSystemDev/meu-app/commits/"):
+		if r.Header.Get("Accept") != "application/vnd.github.sha" {
+			f.t.Errorf("commit sem Accept sha")
 		}
-		w.WriteHeader(201)
-		io.WriteString(w, `{}`)
-	case strings.HasPrefix(p, "/repos/trdSystemDev/meu-app/contents/") && r.Method == "PUT":
-		var body map[string]string
-		json.NewDecoder(r.Body).Decode(&body)
-		c, _ := base64.StdEncoding.DecodeString(body["content"])
-		if body["branch"] != "cais/ci" {
-			f.t.Errorf("gravou no branch %q", body["branch"])
+		if ref := strings.TrimPrefix(p, "/repos/trdSystemDev/meu-app/commits/"); ref != "principal" && ref != testCommit {
+			w.WriteHeader(404) // o GitHub devolve 422 ou 404; os dois viram "nao existe"
+			io.WriteString(w, `{"message":"Not Found"}`)
+			return
 		}
-		f.puts = map[string]string{strings.TrimPrefix(p, "/repos/trdSystemDev/meu-app/contents/"): string(c)}
-		w.WriteHeader(201)
-		io.WriteString(w, `{}`)
-	case p == "/repos/trdSystemDev/meu-app/pulls" && r.Method == "POST":
-		var body map[string]string
-		json.NewDecoder(r.Body).Decode(&body)
-		if body["head"] != "cais/ci" || body["base"] != "principal" {
-			f.t.Errorf("PR %v", body)
+		io.WriteString(w, testCommit)
+	case p == "/repos/trdSystemDev/meu-app/tarball/"+testCommit:
+		// o GitHub redireciona pro codeload, que nao pode receber o token
+		http.Redirect(w, r, "/codeload/"+testCommit, http.StatusFound)
+	case p == "/codeload/"+testCommit:
+		data := f.tarball
+		if data == nil {
+			data = tarOf(f.t, "trdSystemDev-meu-app-"+testCommit[:7], f.files)
 		}
-		w.WriteHeader(201)
-		io.WriteString(w, `{"html_url": "https://github.com/trdSystemDev/meu-app/pull/1"}`)
+		w.Write(data)
 	default:
 		f.t.Errorf("rota inesperada %s %s", r.Method, p)
 		w.WriteHeader(404)
@@ -197,12 +188,111 @@ func TestLeArquivosDoRepositorioPrivado(t *testing.T) {
 	if len(f.scope) != 1 || f.scope[0] != "meu-app" {
 		t.Errorf("token com escopo %v", f.scope)
 	}
-	files, err := s.ReadFiles(context.Background(), []string{"Dockerfile", ".env.example", "prisma/schema.prisma"})
+	got, err := s.ReadFile(context.Background(), "Dockerfile")
+	if err != nil || !strings.Contains(string(got), "EXPOSE 3000") {
+		t.Fatalf("Dockerfile %q, %v", got, err)
+	}
+	if _, err := s.ReadFile(context.Background(), ".env.example"); !IsNotFound(err) {
+		t.Errorf("arquivo que nao existe: %v", err)
+	}
+}
+
+const testCommit = "0123456789abcdef0123456789abcdef01234567"
+
+// tarEntry e uma entrada do tar.gz falso; link != "" e symlink.
+type tarEntry struct{ name, body, link string }
+
+func tarOf(t *testing.T, top string, files map[string]string) []byte {
+	var list []tarEntry
+	for n, c := range files {
+		list = append(list, tarEntry{name: top + "/" + n, body: c})
+	}
+	return tarEntries(t, list)
+}
+
+func tarEntries(t *testing.T, list []tarEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, e := range list {
+		h := &tar.Header{Name: e.name, Mode: 0o644, Size: int64(len(e.body)), Typeflag: tar.TypeReg}
+		if e.link != "" {
+			h = &tar.Header{Name: e.name, Linkname: e.link, Typeflag: tar.TypeSymlink}
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(tw, e.body)
+	}
+	tw.Close()
+	gz.Close()
+	return buf.Bytes()
+}
+
+func TestResolveEDownload(t *testing.T) {
+	app, f := newApp(t, map[string]string{
+		"docker-compose.yml": "services: {}\n",
+		"app/Dockerfile":     "FROM node:22\n",
+	})
+	s, err := app.Open(context.Background(), Repo{"trdSystemDev", "meu-app"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 || !strings.Contains(string(files["Dockerfile"]), "EXPOSE 3000") || files["prisma/schema.prisma"] == nil {
-		t.Fatalf("arquivos %v", files)
+	commit, err := s.Resolve(context.Background(), "")
+	if err != nil || commit != testCommit {
+		t.Fatalf("Resolve = %q, %v", commit, err)
+	}
+	if _, err := s.Resolve(context.Background(), "nao-existe"); err == nil || !strings.Contains(err.Error(), "nao existe") {
+		t.Errorf("ref inexistente: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "src")
+	if err := s.Download(context.Background(), commit, dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "app", "Dockerfile"))
+	if err != nil || string(got) != "FROM node:22\n" {
+		t.Fatalf("Dockerfile extraido %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "docker-compose.yml")); err != nil {
+		t.Error("a pasta de cima do tarball nao foi tirada")
+	}
+	// pasta que ja existe nao e sobrescrita
+	if err := s.Download(context.Background(), commit, dir); err == nil {
+		t.Error("baixou por cima de uma pasta existente")
+	}
+	if len(f.scope) != 1 {
+		t.Errorf("token com escopo %v", f.scope)
+	}
+}
+
+func TestDownloadRecusaCaminhoPraFora(t *testing.T) {
+	cases := map[string][]tarEntry{
+		"..":               {{name: "top/../../fora", body: "x"}},
+		"symlink absoluto": {{name: "top/etc", link: "/etc"}},
+		"symlink pra fora": {{name: "top/sobe", link: "../../.."}},
+	}
+	for name, entries := range cases {
+		t.Run(name, func(t *testing.T) {
+			app, f := newApp(t, nil)
+			f.tarball = tarEntries(t, entries)
+			s, err := app.Open(context.Background(), Repo{"trdSystemDev", "meu-app"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := t.TempDir()
+			dir := filepath.Join(base, "src")
+			if err := s.Download(context.Background(), testCommit, dir); err == nil {
+				t.Fatal("aceitou tarball que grava fora da pasta")
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Error("a pasta do download falho ficou")
+			}
+			if _, err := os.Stat(filepath.Join(base, "fora")); err == nil {
+				t.Error("gravou fora da pasta")
+			}
+		})
 	}
 }
 
@@ -214,21 +304,6 @@ func TestAppNaoInstalado(t *testing.T) {
 	}
 	if _, err := (App{}).Open(context.Background(), Repo{"a", "b"}); err == nil || !strings.Contains(err.Error(), "nao configurado") {
 		t.Fatalf("app sem configuracao: %v", err)
-	}
-}
-
-func TestAbrePRComArquivo(t *testing.T) {
-	app, f := newApp(t, nil)
-	s, err := app.Open(context.Background(), Repo{"trdSystemDev", "meu-app"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	link, err := s.ProposeFile(context.Background(), "cais/ci", ".woodpecker.yml", []byte("steps: []\n"), "CI do cais", "corpo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if link != "https://github.com/trdSystemDev/meu-app/pull/1" || f.puts[".woodpecker.yml"] != "steps: []\n" {
-		t.Fatalf("PR %s arquivo %v", link, f.puts)
 	}
 }
 

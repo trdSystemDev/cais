@@ -10,7 +10,6 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
-	"github.com/trdSystemDev/cais/internal/detect"
 )
 
 // Client fala com o daemon pelo socket e implementa core.API: quem usa
@@ -102,21 +101,6 @@ func (c *Client) RunSetup(ctx context.Context) (st core.Setup, err error) {
 func (c *Client) SetService(ctx context.Context, name string, on bool) (st core.Setup, err error) {
 	err = c.call(ctx, MethodServiceSet, serviceParams{Name: name, On: on}, &st)
 	return
-}
-
-func (c *Client) RegistryUsers(ctx context.Context) (users []string, err error) {
-	err = c.call(ctx, MethodRegistryUsers, nil, &users)
-	return
-}
-
-func (c *Client) AddRegistryUser(ctx context.Context, user string) (string, error) {
-	var r passwordResult
-	err := c.call(ctx, MethodRegistryUserAdd, userParams{User: user}, &r)
-	return r.Password, err
-}
-
-func (c *Client) RemoveRegistryUser(ctx context.Context, user string) error {
-	return c.call(ctx, MethodRegistryUserDel, userParams{User: user}, nil)
 }
 
 // Subscribe tem a mesma semantica do core: recebe a foto atual (se o
@@ -284,19 +268,19 @@ func (c *Client) CheckApps(ctx context.Context) (a core.Apps, err error) {
 	return
 }
 
-func (c *Client) CreateApp(ctx context.Context, name string) (a apps.App, err error) {
-	err = c.call(ctx, MethodAppCreate, appParams{Name: name}, &a)
+func (c *Client) CreateApp(ctx context.Context, a apps.App) (out apps.App, err error) {
+	err = c.call(ctx, MethodAppCreate, a, &out)
 	return
 }
 
-func (c *Client) SetAppRoutes(ctx context.Context, name string, routes []apps.Route) error {
-	return c.call(ctx, MethodAppRoutes, routesParams{Name: name, Routes: routes}, nil)
+func (c *Client) UpdateApp(ctx context.Context, a apps.App) error {
+	return c.call(ctx, MethodAppUpdate, a, nil)
 }
 
-// DeployApp bloqueia ate o deploy terminar (espera os healthchecks). Se o
+// DeployApp bloqueia ate o deploy terminar (build e healthchecks). Se o
 // cliente desistir, o deploy continua no daemon.
-func (c *Client) DeployApp(ctx context.Context, name, compose string) (r apps.DeployResult, err error) {
-	err = c.call(ctx, MethodAppDeploy, deployParams{Name: name, Compose: compose}, &r)
+func (c *Client) DeployApp(ctx context.Context, name, ref string) (r apps.DeployResult, err error) {
+	err = c.call(ctx, MethodAppDeploy, deployParams{Name: name, Ref: ref}, &r)
 	return
 }
 
@@ -313,32 +297,13 @@ func (c *Client) AppLogs(ctx context.Context, name, container string) (out strin
 	return
 }
 
-func (c *Client) SetAppDatabase(ctx context.Context, name string, db apps.Database) error {
-	return c.call(ctx, MethodAppDatabase, dbParams{Name: name, Database: db}, nil)
-}
-
-func (c *Client) RemoveAppDatabase(ctx context.Context, name string) error {
-	return c.call(ctx, MethodAppDatabaseOff, appParams{Name: name}, nil)
-}
-
-func (c *Client) PlanApp(ctx context.Context, name string, files detect.Files) (p apps.Plan, err error) {
-	err = c.call(ctx, MethodAppPlan, planParams{Name: name, Files: files}, &p)
+func (c *Client) AppEnv(ctx context.Context, name string) (env map[string]string, err error) {
+	err = c.call(ctx, MethodAppEnvGet, appParams{Name: name}, &env)
 	return
 }
 
-func (c *Client) ApplyApp(ctx context.Context, p apps.Plan) error {
-	return c.call(ctx, MethodAppApply, p, nil)
-}
-
-func (c *Client) SetAppSpec(ctx context.Context, name string, spec apps.Spec) error {
-	return c.call(ctx, MethodAppSpec, specParams{Name: name, Spec: spec}, nil)
-}
-
-// DeployAppTag bloqueia ate o deploy terminar; se o cliente desistir, o
-// deploy continua no daemon.
-func (c *Client) DeployAppTag(ctx context.Context, name, tag string) (r apps.DeployResult, err error) {
-	err = c.call(ctx, MethodAppDeployTag, tagParams{Name: name, Tag: tag}, &r)
-	return
+func (c *Client) SetAppEnv(ctx context.Context, name string, env map[string]string) error {
+	return c.call(ctx, MethodAppEnvSet, envParams{Name: name, Env: env}, nil)
 }
 
 func (c *Client) AppSecrets(ctx context.Context, name string) (list []apps.Secret, err error) {
@@ -350,23 +315,22 @@ func (c *Client) SetAppSecret(ctx context.Context, name, secret, value string) e
 	return c.call(ctx, MethodAppSecretSet, appSecretParams{Name: name, Secret: secret, Value: value}, nil)
 }
 
-func (c *Client) CISetup(ctx context.Context) (info core.CIInfo, err error) {
-	err = c.call(ctx, MethodCISetup, nil, &info)
+func (c *Client) DeleteAppSecret(ctx context.Context, name, secret string) error {
+	return c.call(ctx, MethodAppSecretDel, appSecretParams{Name: name, Secret: secret}, nil)
+}
+
+func (c *Client) AppGuide(ctx context.Context, name string) (string, error) {
+	var r textResult
+	err := c.call(ctx, MethodAppGuide, appParams{Name: name}, &r)
+	return r.Text, err
+}
+
+func (c *Client) CreateDatabase(ctx context.Context, req core.DatabaseRequest) (info core.DatabaseInfo, err error) {
+	err = c.call(ctx, MethodDatabaseCreate, req, &info)
 	return
 }
 
-// SetAppEnv bloqueia ate o redeploy terminar quando apply e verdadeiro.
-func (c *Client) SetAppEnv(ctx context.Context, name string, env map[string]string, apply bool) error {
-	return c.call(ctx, MethodAppEnv, envParams{Name: name, Env: env, Apply: apply}, nil)
-}
-
-func (c *Client) PlanAppFromGitHub(ctx context.Context, link string) (p apps.Plan, err error) {
-	err = c.call(ctx, MethodAppPlanGitHub, repoParams{Repo: link}, &p)
+func (c *Client) Databases(ctx context.Context) (list []core.DatabaseInfo, err error) {
+	err = c.call(ctx, MethodDatabases, nil, &list)
 	return
-}
-
-func (c *Client) ProposeAppCI(ctx context.Context, name string) (string, error) {
-	var r linkResult
-	err := c.call(ctx, MethodAppCIPR, appParams{Name: name}, &r)
-	return r.URL, err
 }
