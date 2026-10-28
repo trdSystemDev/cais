@@ -15,6 +15,7 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/compose"
+	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/detect"
 	"github.com/trdSystemDev/cais/internal/rpc"
 )
@@ -77,6 +78,8 @@ func runApp(args []string) error {
 	dbServices := fs.String("services", "", "services que usam o banco (padrao: todos)")
 	tag := fs.String("tag", "", "deploy da imagem nessa tag, com a spec do app")
 	yes := fs.Bool("yes", false, "aplica o plano sem perguntar")
+	unset := fs.String("unset", "", "variaveis a remover, separadas por virgula")
+	apply := fs.Bool("apply", false, "refaz o deploy da tag no ar pra mudanca valer agora")
 	pos := parseInterspersed(fs, args)
 	arg := func(i int) string {
 		if i < len(pos) {
@@ -87,7 +90,7 @@ func runApp(args []string) error {
 	need := map[string][2]int{ // minimo e maximo de argumentos
 		"create": {1, 1}, "routes": {1, -1}, "deploy": {1, 1},
 		"restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "db": {2, -1},
-		"init": {2, 2}, "secrets": {1, 1}, "secret": {2, 2},
+		"init": {2, 2}, "secrets": {1, 1}, "secret": {2, 2}, "env": {1, -1},
 	}
 	lim, ok := need[sub]
 	if !ok {
@@ -138,6 +141,8 @@ func runApp(args []string) error {
 		return printRoutes(ctx, c, name)
 	case "init":
 		return appInit(ctx, c, name, arg(1), *yes)
+	case "env":
+		return appEnv(ctx, c, name, pos[1:], splitList(*unset), *apply)
 	case "secrets":
 		list, err := c.AppSecrets(ctx, name)
 		if err != nil {
@@ -384,4 +389,65 @@ func parseInterspersed(fs *flag.FlagSet, args []string) []string {
 		pos = append(pos, fs.Arg(0))
 		args = fs.Args()[1:]
 	}
+}
+
+// appEnv mostra ou muda as variaveis do app. Sem mudancas, so mostra.
+func appEnv(ctx context.Context, c *rpc.Client, name string, set, unset []string, apply bool) error {
+	list, err := c.CheckApps(ctx)
+	if err != nil {
+		return err
+	}
+	var a *core.AppStatus
+	for i := range list.List {
+		if list.List[i].Name == name {
+			a = &list.List[i]
+		}
+	}
+	if a == nil {
+		return fmt.Errorf("app %s nao encontrado", name)
+	}
+	if a.Spec == nil {
+		return fmt.Errorf("app %s sem spec (modo compose): as variaveis ficam no compose do app", name)
+	}
+	env := map[string]string{}
+	for k, v := range a.Spec.Env {
+		env[k] = v
+	}
+
+	if len(set) == 0 && len(unset) == 0 {
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		if len(keys) == 0 {
+			fmt.Printf("%s sem variaveis.\n", name)
+		}
+		for _, k := range keys {
+			fmt.Printf("  %s=%s\n", k, env[k])
+		}
+		return nil
+	}
+	for _, kv := range set {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			return fmt.Errorf("%q: use VAR=valor", kv)
+		}
+		env[k] = v
+	}
+	for _, k := range unset {
+		delete(env, k)
+	}
+	if apply {
+		fmt.Printf("Aplicando em %s (deploy da tag %s)...\n", name, a.Tag)
+	}
+	if err := c.SetAppEnv(ctx, name, env, apply); err != nil {
+		return err
+	}
+	if apply && a.Tag != "" {
+		fmt.Printf("Variaveis de %s gravadas e no ar.\n", name)
+	} else {
+		fmt.Printf("Variaveis de %s gravadas; valem no proximo deploy (ou use -apply).\n", name)
+	}
+	return nil
 }

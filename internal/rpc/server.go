@@ -322,6 +322,13 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		}
 		return ok(s.api.SetAppSecret(s.ctx, p.Name, p.Secret, p.Value))
 
+	case MethodAppEnv:
+		var p envParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetAppEnv(s.ctx, p.Name, p.Env, p.Apply))
+
 	case MethodCISetup:
 		return wrap(s.api.CISetup(s.ctx))
 

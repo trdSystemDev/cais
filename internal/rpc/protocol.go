@@ -47,6 +47,7 @@ const (
 	MethodAppSecrets       = "app.secrets"    // params: appParams
 	MethodAppSecretSet     = "app.secret.set" // params: appSecretParams
 	MethodCISetup          = "ci.setup"
+	MethodAppEnv           = "app.env" // params: envParams
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -159,4 +160,10 @@ type appSecretParams struct {
 	Name   string `json:"name"`
 	Secret string `json:"secret"`
 	Value  string `json:"value"`
+}
+
+type envParams struct {
+	Name  string            `json:"name"`
+	Env   map[string]string `json:"env"`
+	Apply bool              `json:"apply,omitempty"`
 }

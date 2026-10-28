@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -318,4 +319,64 @@ func TestAppsDeployDeForaAparece(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, m, "1/1 no ar")
+}
+
+func TestAppsVariaveisSalvaEAplica(t *testing.T) {
+	m, fa, _ := openApps(t)
+	ctx := context.Background()
+	m.api.CreateApp(ctx, "loja")
+	m.api.SetAppSpec(ctx, "loja", apps.Spec{Image: "registry.trd.localhost/loja", Port: 3000,
+		Env: map[string]string{"APP_URL": "http://localhost:3000"}})
+	if _, err := m.api.DeployAppTag(ctx, "loja", "v3"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "1/1 no ar")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Variaveis")
+	waitFor(t, m, "deploy da tag no ar (v3)")
+	if m.apps.envRows[0].value.Value() != "http://localhost:3000" {
+		t.Fatalf("valor carregado %q", m.apps.envRows[0].value.Value())
+	}
+
+	m.apps.envRows[0].value.SetValue("https://loja.trd.localhost")
+	click(t, m, "env-add")
+	m.apps.envRows[1].name.SetValue("LOG_LEVEL")
+	m.apps.envRows[1].value.SetValue("info")
+	before := fa.ups.Load()
+	click(t, m, "env-apply")
+	waitFor(t, m, "Variaveis de loja salvas e no ar.")
+	if fa.ups.Load() != before+1 {
+		t.Error("aplicar nao refez o deploy")
+	}
+	a := appState(t, m, "loja")
+	if a.Spec.Env["APP_URL"] != "https://loja.trd.localhost" || a.Spec.Env["LOG_LEVEL"] != "info" || a.Tag != "v3" {
+		t.Fatalf("spec %+v tag %s", a.Spec.Env, a.Tag)
+	}
+
+	// segredo em variavel: recusado, com o motivo na tela, e nada muda
+	click(t, m, "env-add")
+	m.apps.envRows[2].name.SetValue("STRIPE_SECRET")
+	m.apps.envRows[2].value.SetValue("sk_live_x")
+	click(t, m, "env-save")
+	waitFor(t, m, "STRIPE_SECRET parece segredo")
+	if _, ok := appState(t, m, "loja").Spec.Env["STRIPE_SECRET"]; ok {
+		t.Fatal("gravou segredo em variavel")
+	}
+}
+
+func TestAppsSecretNovoPelaTelaEntraNaSpec(t *testing.T) {
+	m, _, _ := openApps(t)
+	ctx := context.Background()
+	m.api.CreateApp(ctx, "loja")
+	m.api.SetAppSpec(ctx, "loja", apps.Spec{Image: "registry.trd.localhost/loja"})
+	waitFor(t, m, "loja")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Secrets")
+	typeIn(t, m, "secret-name", "stripe_key")
+	typeIn(t, m, "secret-value", "sk_live_y")
+	click(t, m, "secret-save")
+	waitFor(t, m, "stripe_key gravado")
+	if a := appState(t, m, "loja"); !slices.Contains(a.Spec.Secrets, "stripe_key") {
+		t.Fatalf("secret fora da spec: %+v", a.Spec)
+	}
 }

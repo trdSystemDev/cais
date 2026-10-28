@@ -167,3 +167,81 @@ func TestPlanFromAnalysis(t *testing.T) {
 		t.Fatalf("plano gerou spec invalida: %v", err)
 	}
 }
+
+func TestSetEnvAplicaComAMesmaTag(t *testing.T) {
+	m, f := newManager(t)
+	ctx := context.Background()
+	m.Create("meu-app")
+	s := validSpec()
+	s.Secrets, s.Workers = nil, nil
+	s.Env = map[string]string{"APP_URL": "http://antigo"}
+	m.SetSpec("meu-app", s)
+	if _, err := m.DeployTag(ctx, "meu-app", "v7"); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := m.Get("meu-app"); a.Tag != "v7" {
+		t.Fatalf("tag no ar %q", a.Tag)
+	}
+
+	// sem aplicar: grava e nao sobe nada
+	before := len(f.ups)
+	if err := m.SetEnv(ctx, "meu-app", map[string]string{"APP_URL": "https://novo"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.ups) != before {
+		t.Fatal("subiu sem pedir pra aplicar")
+	}
+	// aplicando: refaz o deploy da mesma tag com a variavel nova
+	if err := m.SetEnv(ctx, "meu-app", map[string]string{"APP_URL": "https://novo", "LOG_LEVEL": "info"}, true); err != nil {
+		t.Fatal(err)
+	}
+	last := f.ups[len(f.ups)-1]
+	if !strings.Contains(last, "meu-app:v7") || !strings.Contains(last, "https://novo") || !strings.Contains(last, "LOG_LEVEL") {
+		t.Fatalf("redeploy sem a tag ou sem as variaveis novas:\n%s", last)
+	}
+
+	// segredo em variavel continua recusado aqui
+	if err := m.SetEnv(ctx, "meu-app", map[string]string{"STRIPE_SECRET": "sk"}, true); err == nil {
+		t.Error("aceitou segredo em variavel")
+	}
+}
+
+func TestDeployQueFalhaNaoMudaATagNoAr(t *testing.T) {
+	m, f := newManager(t)
+	ctx := context.Background()
+	m.Create("meu-app")
+	s := validSpec()
+	s.Secrets, s.Workers, s.Env = nil, nil, nil
+	m.SetSpec("meu-app", s)
+	m.DeployTag(ctx, "meu-app", "v1")
+	f.failFor = ":v2"
+	if _, err := m.DeployTag(ctx, "meu-app", "v2"); err == nil {
+		t.Fatal("deploy quebrado passou")
+	}
+	if a, _ := m.Get("meu-app"); a.Tag != "v1" {
+		t.Fatalf("tag no ar virou %q depois de um deploy que falhou", a.Tag)
+	}
+}
+
+func TestSecretNovoEMontado(t *testing.T) {
+	m, f := newManager(t)
+	ctx := context.Background()
+	m.Create("meu-app")
+	s := validSpec()
+	s.Secrets, s.Workers = nil, nil
+	s.Env = nil
+	m.SetSpec("meu-app", s)
+	m.DeployTag(ctx, "meu-app", "v1")
+
+	if err := m.SetSecret(ctx, "meu-app", "stripe_key", []byte("sk_live")); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := m.Get("meu-app")
+	if !slices.Contains(a.Spec.Secrets, "stripe_key") {
+		t.Fatalf("secret novo fora da spec: %v", a.Spec.Secrets)
+	}
+	last := f.ups[len(f.ups)-1]
+	if !strings.Contains(last, "./secrets/stripe_key") || !strings.Contains(last, "meu-app:v1") {
+		t.Fatalf("o compose no ar nao monta o secret novo:\n%s", last)
+	}
+}

@@ -265,7 +265,14 @@ cais app init meu-app ./meu-app        # analisa Dockerfile, .env.example e mani
 cais app secret meu-app jwt_secret     # segredos detectados viram arquivo em /run/secrets
 cais app deploy meu-app --tag <sha>    # o CI chama isso depois do build: o compose sai da
                                        # spec do app; o CI so escolhe a tag
+cais app env meu-app APP_URL=https://x -apply   # muda variaveis; -apply refaz o deploy
+                                                # da tag no ar pra valer agora
 ```
+
+Onde fica a configuracao do app: variaveis comuns na spec (`app.yaml`), segredos
+em `secrets/` do app (montados em `/run/secrets`), tudo na VPS. O `.env.example`
+do repositorio so e lido na analise, e o Woodpecker so tem a senha do registry e
+a chave de deploy: o CI nunca ve a configuracao nem os segredos do app.
 
 A analise so sugere: porta, banco e variaveis podem ser trocados depois (`cais app
 db`, `routes`). Variavel com cara de segredo (`*_SECRET`, `*_TOKEN`, `*_PASSWORD`...)

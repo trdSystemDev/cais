@@ -351,3 +351,20 @@ func (c *Core) RemoveAppDatabase(ctx context.Context, name string) error {
 	c.CheckApps(ctx)
 	return err
 }
+
+// SetAppEnv troca as variaveis comuns do app. Com apply, refaz o deploy da
+// tag no ar (o progresso aparece como deploy no estado).
+func (c *Core) SetAppEnv(ctx context.Context, name string, env map[string]string, apply bool) error {
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if apply {
+		c.setDeploying(name, true)
+		defer c.setDeploying(name, false)
+	}
+	err = c.appManager().SetEnv(ctx, name, env, apply)
+	c.CheckApps(ctx)
+	return err
+}

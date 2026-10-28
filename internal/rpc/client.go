@@ -354,3 +354,8 @@ func (c *Client) CISetup(ctx context.Context) (info core.CIInfo, err error) {
 	err = c.call(ctx, MethodCISetup, nil, &info)
 	return
 }
+
+// SetAppEnv bloqueia ate o redeploy terminar quando apply e verdadeiro.
+func (c *Client) SetAppEnv(ctx context.Context, name string, env map[string]string, apply bool) error {
+	return c.call(ctx, MethodAppEnv, envParams{Name: name, Env: env, Apply: apply}, nil)
+}

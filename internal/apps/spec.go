@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -174,7 +175,60 @@ func (m Manager) DeployTag(ctx context.Context, name, tag string) (DeployResult,
 	if err != nil {
 		return DeployResult{}, err
 	}
-	return m.Deploy(ctx, name, data)
+	res, err := m.Deploy(ctx, name, data)
+	if err != nil {
+		return res, err
+	}
+	// so um deploy que subiu vira a tag no ar (o Deploy ja gravou o Last)
+	a, err = m.Get(name)
+	if err != nil {
+		return res, err
+	}
+	a.Tag = tag
+	return res, m.save(a)
+}
+
+// redeploy refaz o deploy da tag no ar com a spec atual: e como uma
+// mudanca de variavel ou secret chega nos containers, com a mesma
+// validacao, espera dos healthchecks e volta se falhar.
+func (m Manager) redeploy(ctx context.Context, name string) error {
+	a, err := m.Get(name)
+	if err != nil {
+		return err
+	}
+	if a.Tag == "" {
+		return nil // ainda sem deploy por tag: vale no primeiro
+	}
+	_, err = m.DeployTag(ctx, name, a.Tag)
+	return err
+}
+
+// SetEnv troca as variaveis comuns do app. Com apply e o app no ar, refaz o
+// deploy da tag atual pra elas valerem agora; senao valem no proximo deploy.
+func (m Manager) SetEnv(ctx context.Context, name string, env map[string]string, apply bool) error {
+	a, err := m.Get(name)
+	if err != nil {
+		return err
+	}
+	if a.Spec == nil {
+		return fmt.Errorf("app %s sem spec (modo compose): as variaveis ficam no compose do app", name)
+	}
+	spec := *a.Spec
+	spec.Env = env
+	if len(env) == 0 {
+		spec.Env = nil
+	}
+	if err := CheckSpec(spec); err != nil {
+		return err
+	}
+	a.Spec = &spec
+	if err := m.save(a); err != nil {
+		return err
+	}
+	if !apply {
+		return nil
+	}
+	return m.redeploy(ctx, name)
 }
 
 func (m Manager) missingSecrets(name string, names []string) []string {
@@ -244,6 +298,21 @@ func (m Manager) SetSecret(ctx context.Context, name, secret string, value []byt
 	}
 	if err := m.secrets(name).Put(secret, value); err != nil {
 		return err
+	}
+	// secret novo entra na spec pra ser montado; o compose muda e o deploy
+	// da tag no ar e refeito (so recriar nao montaria um arquivo novo)
+	a, err := m.Get(name)
+	if err != nil {
+		return err
+	}
+	if a.Spec != nil && !slices.Contains(a.Spec.Secrets, secret) {
+		spec := *a.Spec
+		spec.Secrets = append(slices.Clone(spec.Secrets), secret)
+		a.Spec = &spec
+		if err := m.save(a); err != nil {
+			return err
+		}
+		return m.redeploy(ctx, name)
 	}
 	if _, err := os.Stat(filepath.Join(m.dir(name), ComposeFile)); errors.Is(err, os.ErrNotExist) {
 		return nil

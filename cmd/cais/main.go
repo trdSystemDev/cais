@@ -54,6 +54,10 @@ Apps:
   cais app deploy <nome> < docker-compose.yml
                                      modo avancado: compose pronto (validado do mesmo jeito)
                                      nos dois, se o deploy falhar, a versao anterior volta
+  cais app env <nome>                mostra as variaveis do app
+  cais app env <nome> VAR=valor... [-unset VAR,...] [-apply]
+                                     muda as variaveis (segredo nao: use cais app secret);
+                                     -apply refaz o deploy da tag no ar pra valer agora
   cais app secrets <nome>            lista os secrets do app (so nomes)
   cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
   cais app restart <nome> [service]  reinicia o app (ou um service)

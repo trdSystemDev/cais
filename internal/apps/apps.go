@@ -69,7 +69,10 @@ type App struct {
 	Database *Database `yaml:"database,omitempty" json:"database,omitempty"`
 	// Spec e a configuracao de onde o compose sai no deploy por tag. Sem
 	// spec, o app recebe o compose pronto no deploy (modo avancado).
-	Spec *Spec   `yaml:"spec,omitempty" json:"spec,omitempty"`
+	Spec *Spec `yaml:"spec,omitempty" json:"spec,omitempty"`
+	// Tag e a tag no ar (ultimo deploy por tag que deu certo). Aplicar uma
+	// mudanca de variavel ou secret e refazer o deploy dela.
+	Tag  string  `yaml:"tag,omitempty" json:"tag,omitempty"`
 	Last *Deploy `yaml:"last_deploy,omitempty" json:"last_deploy,omitempty"`
 }
 

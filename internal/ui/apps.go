@@ -24,11 +24,12 @@ import (
 )
 
 // secoes do detalhe de um app
-var appSections = []string{"Geral", "Rotas", "Banco", "Secrets", "Logs"}
+var appSections = []string{"Geral", "Rotas", "Variaveis", "Banco", "Secrets", "Logs"}
 
 const (
 	secGeneral = iota
 	secRoutes
+	secEnv
 	secDatabase
 	secSecrets
 	secLogs
@@ -89,6 +90,7 @@ type appsPage struct {
 	loadedFor   string
 	tag         *textinput.Model
 	routes      []*routeRow
+	envRows     []*envRow
 	dbEngine    int
 	dbServices  *textinput.Model
 	dbRows      []*dbRow
@@ -188,6 +190,9 @@ func (p *appsPage) allInputs() []*textinput.Model {
 	for _, r := range p.impEnv {
 		out = append(out, r.name, r.value)
 	}
+	for _, r := range p.envRows {
+		out = append(out, r.name, r.value)
+	}
 	return out
 }
 
@@ -247,6 +252,17 @@ func (p *appsPage) loadSelected(force bool) tea.Cmd {
 	p.routes = nil
 	for _, r := range a.Routes {
 		p.addRoute(r)
+	}
+	p.envRows = nil
+	if a.Spec != nil {
+		keys := make([]string, 0, len(a.Spec.Env))
+		for k := range a.Spec.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			p.envRows = append(p.envRows, p.newEnvRow(k, a.Spec.Env[k]))
+		}
 	}
 	p.loadDB(a.Database)
 	p.secretName.SetValue("")
@@ -404,6 +420,19 @@ func (p *appsPage) rebuild() {
 		}
 		add(btn("route-add", "+ rota", func() tea.Cmd { p.addRoute(apps.Route{Service: apps.WebService}); p.rebuild(); return nil }))
 		add(btn("routes-save", "Salvar rotas", p.saveRoutes))
+	case secEnv:
+		if a.Spec == nil {
+			break
+		}
+		for i, r := range p.envRows {
+			i := i
+			add(&field{id: fmt.Sprintf("env-name:%d", i), input: r.name})
+			add(&field{id: fmt.Sprintf("env-value:%d", i), input: r.value})
+			add(btn(fmt.Sprintf("env-del:%d", i), "x", func() tea.Cmd { p.envRows = del(p.envRows, i); p.rebuild(); return nil }))
+		}
+		add(btn("env-add", "+ variavel", func() tea.Cmd { p.envRows = append(p.envRows, p.newEnvRow("", "")); p.rebuild(); return nil }))
+		add(btn("env-save", "Salvar", func() tea.Cmd { return p.saveEnv(false) }))
+		add(btn("env-apply", "Salvar e aplicar", func() tea.Cmd { return p.saveEnv(true) }))
 	case secDatabase:
 		p.dbFields(add, btn, "")
 		add(btn("db-save", "Salvar banco", p.saveDB))
@@ -456,7 +485,7 @@ func del[T any](list []T, i int) []T {
 }
 
 func (p *appsPage) newEnvRow(name, value string) *envRow {
-	r := &envRow{name: p.input("VARIAVEL", 18), value: p.input("valor", 18)}
+	r := &envRow{name: p.input("VARIAVEL", 18), value: p.input("valor", 36)}
 	r.name.SetValue(name)
 	r.value.SetValue(value)
 	return r
@@ -582,6 +611,34 @@ func (p *appsPage) saveDB() tea.Cmd {
 	}
 	return p.do(name, "Criando o banco", "Banco "+db.Engine+" ligado a "+name+".", true, func(ctx context.Context) error {
 		return p.api.SetAppDatabase(ctx, name, db.Engine, db.Services, db.Env)
+	})
+}
+
+// saveEnv grava as variaveis; com apply, refaz o deploy da tag no ar.
+func (p *appsPage) saveEnv(apply bool) tea.Cmd {
+	a := p.selected()
+	if a == nil || a.Spec == nil {
+		return nil
+	}
+	env := map[string]string{}
+	for _, r := range p.envRows {
+		k := strings.TrimSpace(r.name.Value())
+		if k == "" {
+			continue
+		}
+		if _, dup := env[k]; dup {
+			p.setStatus("danger", "variavel "+k+" repetida")
+			return nil
+		}
+		env[k] = r.value.Value()
+	}
+	name := a.Name
+	label, ok := "Salvando variaveis", "Variaveis de "+name+" salvas; valem no proximo deploy."
+	if apply && a.Tag != "" {
+		label, ok = "Aplicando variaveis (deploy de "+a.Tag+")", "Variaveis de "+name+" salvas e no ar."
+	}
+	return p.do(name, label, ok, true, func(ctx context.Context) error {
+		return p.api.SetAppEnv(ctx, name, env, apply)
 	})
 }
 
@@ -1074,6 +1131,8 @@ func (p *appsPage) viewDetail(w, h int) string {
 			body.WriteString("\n")
 			p.inline(&body, "route-add", "routes-save")
 			body.WriteString("\n" + muted.Width(inner).Render(("Um dominio e de um app so. Caminho vazio responde o dominio todo; /api manda so esse prefixo pro service.")) + "\n")
+		case secEnv:
+			p.viewEnv(&body, *a, inner)
 		case secDatabase:
 			p.viewDB(&body, "", inner)
 			body.WriteString("\n")
@@ -1179,6 +1238,29 @@ func (p *appsPage) viewDB(b *strings.Builder, prefix string, w int) {
 	p.inline(b, prefix+"db-add")
 	b.WriteString("\n" + muted.Width(w).Render(("A senha nunca vai em variavel: password_file e url_file sao caminhos de arquivo (/run/secrets/...) que o app le. " +
 		"Services vazio = todos.")) + "\n")
+}
+
+func (p *appsPage) viewEnv(b *strings.Builder, a core.AppStatus, w int) {
+	muted := p.th.fg(p.th.muted)
+	if a.Spec == nil {
+		b.WriteString(muted.Width(w).Render("App em modo compose: as variaveis ficam no compose do app, que vem pelo deploy.") + "\n")
+		return
+	}
+	b.WriteString(muted.Render("  variavel             valor") + "\n")
+	for i := range p.envRows {
+		p.inline(b, fmt.Sprintf("env-name:%d", i), fmt.Sprintf("env-value:%d", i), fmt.Sprintf("env-del:%d", i))
+	}
+	if len(p.envRows) == 0 {
+		b.WriteString(muted.Render("  nenhuma variavel") + "\n")
+	}
+	p.inline(b, "env-add")
+	b.WriteString("\n")
+	p.inline(b, "env-save", "env-apply")
+	tag := "o app ainda nao teve deploy: valem no primeiro"
+	if a.Tag != "" {
+		tag = "Salvar e aplicar refaz o deploy da tag no ar (" + a.Tag + "); se falhar, a versao anterior volta"
+	}
+	b.WriteString("\n" + muted.Width(w).Render("Variaveis comuns, sem segredo: nomes como *_SECRET, *_TOKEN, *_PASSWORD sao recusados (aparecem no docker inspect) -- use Secrets e X_FILE=/run/secrets/<nome>. Salvar vale no proximo deploy; "+tag+".") + "\n")
 }
 
 func (p *appsPage) viewSecrets(b *strings.Builder, w int) {

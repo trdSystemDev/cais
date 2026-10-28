@@ -90,7 +90,11 @@ type API interface {
 	DeployAppTag(ctx context.Context, name, tag string) (apps.DeployResult, error)
 	// AppSecrets lista os secrets do app (nomes, nunca valores).
 	AppSecrets(ctx context.Context, name string) ([]apps.Secret, error)
-	// SetAppSecret grava um secret do app; com o app no ar, recria os containers.
+	// SetAppEnv troca as variaveis comuns do app (nada com cara de segredo).
+	// Com apply, refaz o deploy da tag no ar; senao vale no proximo deploy.
+	SetAppEnv(ctx context.Context, name string, env map[string]string, apply bool) error
+	// SetAppSecret grava um secret do app (um secret novo passa a ser
+	// montado); com o app no ar, os containers sao atualizados.
 	SetAppSecret(ctx context.Context, name, secret, value string) error
 
 	// CISetup devolve o pipeline do Woodpecker, a linha do authorized_keys
