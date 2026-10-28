@@ -3,13 +3,16 @@
 package ci
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	_ "embed"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"text/template"
 
 	"golang.org/x/crypto/ssh"
 
@@ -17,10 +20,42 @@ import (
 )
 
 //go:embed woodpecker.yml
-var pipeline []byte
+var pipelineTmpl string
 
-// Pipeline e o .woodpecker.yml dos apps.
-func Pipeline() []byte { return pipeline }
+var tmpl = template.Must(template.New("woodpecker.yml").Parse(pipelineTmpl))
+
+// Build e o que muda no pipeline de um app: pasta de build, Dockerfile (a
+// partir da raiz do repositorio) e build args, ja conferidos pela spec.
+type Build struct {
+	Context    string
+	Dockerfile string
+	Args       map[string]string
+}
+
+// Pipeline e o .woodpecker.yml padrao: Dockerfile na raiz, sem build args.
+func Pipeline() []byte { return PipelineFor(Build{}) }
+
+// PipelineFor e o .woodpecker.yml de um app com o build dele.
+func PipelineFor(b Build) []byte {
+	keys := make([]string, 0, len(b.Args))
+	for k := range b.Args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var args []string
+	for _, k := range keys {
+		// $ seria substituido pelo Woodpecker: o valor vai escapado
+		args = append(args, k+"="+strings.ReplaceAll(b.Args[k], "$", "$$"))
+	}
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, struct {
+		Context, Dockerfile string
+		Args                []string
+	}{b.Context, b.Dockerfile, args}); err != nil {
+		panic(err) // o template e embutido e testado
+	}
+	return out.Bytes()
+}
 
 // Nomes dos secrets da chave de deploy na pasta de secrets centrais.
 const (

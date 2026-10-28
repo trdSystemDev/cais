@@ -94,12 +94,15 @@ type appsPage struct {
 	envRows     []*envRow
 	dbEngine    int
 	dbServices  *textinput.Model
+	dbExts      *textinput.Model
 	dbRows      []*dbRow
 	secretName  *textinput.Model
 	secretValue *textinput.Model
 
 	// import
 	impName, impDir                          *textinput.Model
+	impCmd, impCtx, impDockerfile            *textinput.Model
+	impArgs                                  []*envRow
 	plan                                     *apps.Plan
 	impPort, impHost, impVolumes, impSecrets *textinput.Model
 	impEnv                                   []*envRow
@@ -140,6 +143,10 @@ func newAppsPage(api core.API, zones *zone.Manager, th theme) *appsPage {
 	p := &appsPage{api: api, zones: zones, th: th}
 	p.tag = p.input("tag do build (ex: commit)", 24)
 	p.dbServices = p.input("todos", 24)
+	p.dbExts = p.input("nenhuma (ex: postgis)", 24)
+	p.impCmd = p.input("o do Dockerfile", 36)
+	p.impCtx = p.input("raiz do repositorio", 24)
+	p.impDockerfile = p.input("Dockerfile", 24)
 	p.secretName = p.input("nome (ex: jwt_secret)", 24)
 	p.secretValue = p.input("valor", 24)
 	p.secretValue.EchoMode = textinput.EchoPassword
@@ -180,7 +187,7 @@ func (p *appsPage) setTheme(th theme) {
 }
 
 func (p *appsPage) allInputs() []*textinput.Model {
-	out := []*textinput.Model{p.tag, p.dbServices, p.secretName, p.secretValue,
+	out := []*textinput.Model{p.tag, p.dbServices, p.dbExts, p.impCmd, p.impCtx, p.impDockerfile, p.secretName, p.secretValue,
 		p.impName, p.impDir, p.impPort, p.impHost, p.impVolumes, p.impSecrets}
 	for _, r := range p.routes {
 		out = append(out, r.host, r.path, r.service, r.port)
@@ -192,6 +199,9 @@ func (p *appsPage) allInputs() []*textinput.Model {
 		out = append(out, r.name, r.value)
 	}
 	for _, r := range p.envRows {
+		out = append(out, r.name, r.value)
+	}
+	for _, r := range p.impArgs {
 		out = append(out, r.name, r.value)
 	}
 	return out
@@ -287,6 +297,7 @@ func (p *appsPage) addRoute(r apps.Route) {
 func (p *appsPage) loadDB(db *apps.Database) {
 	p.dbEngine = 0
 	p.dbServices.SetValue("")
+	p.dbExts.SetValue("")
 	p.dbRows = nil
 	env := apps.DefaultDBEnv()
 	if db != nil {
@@ -296,6 +307,7 @@ func (p *appsPage) loadDB(db *apps.Database) {
 			}
 		}
 		p.dbServices.SetValue(strings.Join(db.Services, ", "))
+		p.dbExts.SetValue(strings.Join(db.Extensions, ", "))
 		env = db.Env
 	}
 	keys := make([]string, 0, len(env))
@@ -334,7 +346,8 @@ func (p *appsPage) dbValue() (*apps.Database, error) {
 		}
 		env[name] = dbKinds[r.kind]
 	}
-	return &apps.Database{Engine: dbEngines[p.dbEngine], Services: splitComma(p.dbServices.Value()), Env: env}, nil
+	return &apps.Database{Engine: dbEngines[p.dbEngine], Services: splitComma(p.dbServices.Value()), Env: env,
+		Extensions: splitComma(p.dbExts.Value())}, nil
 }
 
 func (p *appsPage) routesValue() ([]apps.Route, error) {
@@ -379,6 +392,20 @@ func (p *appsPage) rebuild() {
 			add(btn("imp-analyze", "Analisar", p.analyze))
 			add(btn("imp-cancel", "Cancelar", p.cancelImport))
 		} else {
+			add(&field{id: "imp-ctx", label: "Pasta de build", input: p.impCtx})
+			add(&field{id: "imp-dockerfile", label: "Dockerfile", input: p.impDockerfile})
+			for i, r := range p.impArgs {
+				i := i
+				add(&field{id: fmt.Sprintf("imp-arg-name:%d", i), input: r.name})
+				add(&field{id: fmt.Sprintf("imp-arg-value:%d", i), input: r.value})
+				add(btn(fmt.Sprintf("imp-arg-del:%d", i), "x", func() tea.Cmd { p.impArgs = del(p.impArgs, i); p.rebuild(); return nil }))
+			}
+			add(btn("imp-arg-add", "+ build arg", func() tea.Cmd {
+				p.impArgs = append(p.impArgs, p.newEnvRow("NEXT_PUBLIC_", ""))
+				p.rebuild()
+				return nil
+			}))
+			add(&field{id: "imp-cmd", label: "Comando", input: p.impCmd})
 			add(&field{id: "imp-port", label: "Porta", input: p.impPort})
 			add(&field{id: "imp-host", label: "Dominio", input: p.impHost})
 			add(&field{id: "imp-volumes", label: "Volumes", input: p.impVolumes})
@@ -470,6 +497,9 @@ func (p *appsPage) dbFields(add func(*field), btn func(string, string, func() te
 		return
 	}
 	add(&field{id: prefix + "db-services", label: "Services", input: p.dbServices})
+	if dbEngines[p.dbEngine] == "postgres" {
+		add(&field{id: prefix + "db-exts", label: "Extensoes", input: p.dbExts})
+	}
 	for i, r := range p.dbRows {
 		i, r := i, r
 		add(&field{id: fmt.Sprintf("%sdb-name:%d", prefix, i), input: r.name})
@@ -614,7 +644,7 @@ func (p *appsPage) saveDB() tea.Cmd {
 		})
 	}
 	return p.do(name, "Criando o banco", "Banco "+db.Engine+" ligado a "+name+".", true, func(ctx context.Context) error {
-		return p.api.SetAppDatabase(ctx, name, db.Engine, db.Services, db.Env)
+		return p.api.SetAppDatabase(ctx, name, *db)
 	})
 }
 
@@ -706,20 +736,19 @@ func (p *appsPage) analyze() tea.Cmd {
 		if fromGitHub {
 			plan, err := p.api.PlanAppFromGitHub(ctx, src)
 			if err == nil && name != "" && name != plan.App {
-				err = fmt.Errorf("o app precisa ter o nome do repositorio (%s): o CI usa esse nome; deixe o nome vazio", plan.App)
+				err = fmt.Errorf("o app desse repositorio se chama %s (o nome do repositorio em minusculas, que o CI usa): deixe o nome vazio", plan.App)
 			}
 			return appPlanMsg{plan, err}
 		}
-		files := detect.Files{}
-		for _, path := range detect.Wanted {
-			data, err := os.ReadFile(filepath.Join(src, path))
+		files, err := detect.Collect(func(p string) ([]byte, bool, error) {
+			data, err := os.ReadFile(filepath.Join(src, p))
 			if errors.Is(err, os.ErrNotExist) {
-				continue
+				return nil, false, nil
 			}
-			if err != nil {
-				return appPlanMsg{err: err}
-			}
-			files[path] = data
+			return data, err == nil, err
+		})
+		if err != nil {
+			return appPlanMsg{err: err}
 		}
 		if len(files) == 0 {
 			return appPlanMsg{err: fmt.Errorf("nenhum arquivo do app em %s (Dockerfile, .env.example...)", src)}
@@ -766,6 +795,18 @@ func (p *appsPage) fillPlan(pl apps.Plan) {
 		p.impHost.SetValue(pl.Routes[0].Host)
 	}
 	p.impVolumes.SetValue(strings.Join(pl.Spec.Volumes, ", "))
+	p.impCtx.SetValue(pl.Spec.Build.Context)
+	p.impDockerfile.SetValue(pl.Spec.Build.Dockerfile)
+	p.impCmd.SetValue(strings.Join(quoteArgs(pl.Spec.Command), " "))
+	p.impArgs = nil
+	argKeys := make([]string, 0, len(pl.Spec.Build.Args))
+	for k := range pl.Spec.Build.Args {
+		argKeys = append(argKeys, k)
+	}
+	sort.Strings(argKeys)
+	for _, k := range argKeys {
+		p.impArgs = append(p.impArgs, p.newEnvRow(k, pl.Spec.Build.Args[k]))
+	}
 	p.impSecrets.SetValue(strings.Join(pl.Spec.Secrets, ", "))
 	p.impEnv = nil
 	keys := make([]string, 0, len(pl.Spec.Env))
@@ -786,7 +827,11 @@ func (p *appsPage) fillPlan(pl apps.Plan) {
 func (p *appsPage) planValue() (apps.Plan, error) {
 	pl := *p.plan
 	pl.App = strings.TrimSpace(p.impName.Value())
-	pl.Spec.Image = strings.TrimSuffix(pl.Spec.Image, "/"+p.plan.App) + "/" + pl.App
+	// do GitHub o nome e a imagem saem do repositorio e nao mudam; de pasta
+	// local a imagem acompanha o nome escolhido
+	if pl.Repo == "" {
+		pl.Spec.Image = strings.TrimSuffix(pl.Spec.Image, "/"+p.plan.App) + "/" + pl.App
+	}
 	port := 0
 	if s := strings.TrimSpace(p.impPort.Value()); s != "" {
 		var err error
@@ -796,6 +841,16 @@ func (p *appsPage) planValue() (apps.Plan, error) {
 	}
 	pl.Spec.Port = port
 	pl.Spec.Volumes = splitComma(p.impVolumes.Value())
+	pl.Spec.Build = apps.Build{Context: strings.TrimSpace(p.impCtx.Value()), Dockerfile: strings.TrimSpace(p.impDockerfile.Value())}
+	for _, r := range p.impArgs {
+		if k := strings.TrimSpace(r.name.Value()); k != "" {
+			if pl.Spec.Build.Args == nil {
+				pl.Spec.Build.Args = map[string]string{}
+			}
+			pl.Spec.Build.Args[k] = r.value.Value()
+		}
+	}
+	pl.Spec.Command = splitArgs(p.impCmd.Value())
 	pl.Spec.Secrets = splitComma(p.impSecrets.Value())
 	pl.Spec.Env = map[string]string{}
 	for _, r := range p.impEnv {
@@ -1284,6 +1339,7 @@ func (p *appsPage) viewDB(b *strings.Builder, prefix string, w int) {
 		return
 	}
 	p.row(b, prefix+"db-services")
+	p.row(b, prefix+"db-exts")
 	b.WriteString("\n" + muted.Render("  variavel               recebe") + "\n")
 	for i := range p.dbRows {
 		p.inline(b, fmt.Sprintf("%sdb-name:%d", prefix, i), fmt.Sprintf("%sdb-kind:%d", prefix, i), fmt.Sprintf("%sdb-del:%d", prefix, i))
@@ -1358,6 +1414,18 @@ func (p *appsPage) viewImport(b *strings.Builder, w int) {
 	}
 	a := p.plan.Analysis
 	b.WriteString(fmt.Sprintf("  %-20s %s:%s\n", "Imagem", p.plan.Spec.Image, muted.Render("<tag do build>")))
+	b.WriteString("\n" + t.bold().Render("Build") + muted.Render(" (o CI constroi a imagem assim)") + "\n")
+	p.row(b, "imp-ctx")
+	p.row(b, "imp-dockerfile")
+	if len(p.impArgs) > 0 {
+		b.WriteString(muted.Render("  build args (publicos: ficam na imagem)") + "\n")
+	}
+	for i := range p.impArgs {
+		p.inline(b, fmt.Sprintf("imp-arg-name:%d", i), fmt.Sprintf("imp-arg-value:%d", i), fmt.Sprintf("imp-arg-del:%d", i))
+	}
+	p.inline(b, "imp-arg-add")
+	b.WriteString("\n" + t.bold().Render("Execucao") + "\n")
+	p.row(b, "imp-cmd")
 	p.row(b, "imp-port")
 	if a.PortSource != "" {
 		b.WriteString(muted.Render("                        detectada: "+a.PortSource) + "\n")
@@ -1538,4 +1606,46 @@ func (p *appsPage) paste(msg tea.PasteMsg) tea.Cmd {
 	ti, cmd := f.input.Update(msg)
 	*f.input = ti
 	return cmd
+}
+
+// splitArgs separa o comando digitado em argumentos (respeitando aspas),
+// como um shell faria pra uma linha simples.
+func splitArgs(s string) []string {
+	var out []string
+	var cur strings.Builder
+	quote := rune(0)
+	inWord := false
+	for _, r := range s {
+		switch {
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote == 0 && (r == '"' || r == '\''):
+			quote, inWord = r, true
+		case quote == 0 && (r == ' ' || r == '\t'):
+			if inWord {
+				out = append(out, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteRune(r)
+			inWord = true
+		}
+	}
+	if inWord {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// quoteArgs mostra o comando numa linha, com aspas onde tem espaco.
+func quoteArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		if strings.ContainsAny(a, " \t") {
+			a = `"` + a + `"`
+		}
+		out[i] = a
+	}
+	return out
 }

@@ -43,6 +43,8 @@ func (c *Core) reservedHosts() []string {
 // cada um, publica em State.Apps e devolve. Problema num app fica no
 // resultado dele.
 func (c *Core) CheckApps(ctx context.Context) (Apps, error) {
+	c.appsCheck.Lock()
+	defer c.appsCheck.Unlock()
 	c.update(func(s *State) {
 		c.appChecks++
 		s.Apps.Checking = true
@@ -133,7 +135,7 @@ func (c *Core) PlanApp(_ context.Context, name string, files detect.Files) (apps
 		return apps.Plan{}, err
 	}
 	for path, data := range files {
-		if !slices.Contains(detect.Wanted, path) {
+		if !detect.Allowed(files, path) {
 			return apps.Plan{}, fmt.Errorf("arquivo %q nao faz parte da analise", path)
 		}
 		if len(data) > 1<<20 {
@@ -192,12 +194,12 @@ func (c *Core) ApplyApp(ctx context.Context, p apps.Plan) error {
 		return err
 	}
 	if p.Repo != "" {
-		repo, err := repoApp(p.Repo)
+		repo, name, err := repoApp(p.Repo)
 		if err != nil {
 			return err
 		}
-		if repo.Name != p.App {
-			return fmt.Errorf("o app precisa ter o nome do repositorio (%s): o CI usa esse nome", repo.Name)
+		if name != p.App {
+			return fmt.Errorf("o app do repositorio %s se chama %s: o CI usa esse nome", repo, name)
 		}
 		if err := m.SetRepo(p.App, repo.String()); err != nil {
 			return err
@@ -207,7 +209,7 @@ func (c *Core) ApplyApp(ctx context.Context, p apps.Plan) error {
 		return err
 	}
 	if p.Database != nil {
-		return c.setDatabase(ctx, p.App, p.Database.Engine, p.Database.Services, p.Database.Env)
+		return c.setDatabase(ctx, p.App, *p.Database)
 	}
 	return nil
 }
@@ -317,19 +319,20 @@ func (c *Core) AppLogs(ctx context.Context, name, container string) (string, err
 // SetAppDatabase cria (ou acerta) o database e o usuario do app na
 // instancia compartilhada do engine e liga o app a ele pelo override. env
 // vazio usa apps.DefaultDBEnv; services vazio liga todos os services.
-func (c *Core) SetAppDatabase(ctx context.Context, name, engine string, services []string, env map[string]string) error {
+func (c *Core) SetAppDatabase(ctx context.Context, name string, db apps.Database) error {
 	unlock, err := c.lockApp(name)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	err = c.setDatabase(ctx, name, engine, services, env)
+	err = c.setDatabase(ctx, name, db)
 	c.CheckApps(ctx)
 	return err
 }
 
 // setDatabase e o SetAppDatabase sem a trava (quem chama ja tem).
-func (c *Core) setDatabase(ctx context.Context, name, engine string, services []string, env map[string]string) error {
+func (c *Core) setDatabase(ctx context.Context, name string, d apps.Database) error {
+	engine := d.Engine
 	e, err := databases.Get(engine)
 	if err != nil {
 		return err
@@ -341,10 +344,10 @@ func (c *Core) setDatabase(ctx context.Context, name, engine string, services []
 	if !cfg.HasStack(engine) {
 		return fmt.Errorf("a stack %s esta desligada; ligue no Setup antes de criar o banco", engine)
 	}
-	if len(env) == 0 {
-		env = apps.DefaultDBEnv()
+	if len(d.Env) == 0 {
+		d.Env = apps.DefaultDBEnv()
 	}
-	db := &apps.Database{Engine: engine, Services: services, Env: env}
+	db := &d
 	if err := apps.CheckDatabase(*db); err != nil {
 		return err
 	}
@@ -354,7 +357,7 @@ func (c *Core) setDatabase(ctx context.Context, name, engine string, services []
 	if err != nil {
 		return err
 	}
-	if err := databases.Provision(ctx, c.deps.ExecInput, e, databases.Identifier(name), pw); err != nil {
+	if err := databases.Provision(ctx, c.deps.ExecInput, e, databases.Identifier(name), pw, d.Extensions); err != nil {
 		return err
 	}
 	return m.SetDatabase(ctx, name, db)

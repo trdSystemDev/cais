@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/ci"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/github/githubtest"
@@ -20,7 +21,9 @@ func newGitHubCore(t *testing.T) (*Core, *githubtest.Server) {
 			"package.json": `{"dependencies": {"pg": "8"}}`,
 			".env.example": "NODE_ENV=production\nJWT_SECRET=x\n",
 		},
-		"trdSystemDev/Meu_App": {"Dockerfile": "FROM nginx\n"},
+		"trdSystemDev/Meu_App":         {"Dockerfile": "FROM nginx\n"},
+		"trdSystemDev/TRDSmartPodCast": {"Dockerfile": "FROM node:22\nEXPOSE 3000\n"},
+		"trdSystemDev/Registry":        {"Dockerfile": "FROM nginx\n"},
 	})
 	root := t.TempDir()
 	c := New(Deps{CheckDocker: okStatus, Now: func() time.Time { return fixedNow },
@@ -79,7 +82,7 @@ func TestImportRecusa(t *testing.T) {
 
 	cases := map[string]string{
 		"https://github.com/trdSystemDev/nao-instalado": "nao esta instalado",
-		"https://github.com/trdSystemDev/Meu_App":       "renomeie o repositorio",
+		"https://github.com/trdSystemDev/Registry":      `vira o app "registry"`,
 		"https://gitlab.com/a/b":                        "nao e de um repositorio do GitHub",
 	}
 	for link, want := range cases {
@@ -94,7 +97,7 @@ func TestImportRecusa(t *testing.T) {
 	}
 	plan.App = "outro"
 	plan.Spec.Image = "registry.trd.localhost/outro"
-	if err := c.ApplyApp(ctx, plan); err == nil || !strings.Contains(err.Error(), "nome do repositorio") {
+	if err := c.ApplyApp(ctx, plan); err == nil || !strings.Contains(err.Error(), "o CI usa esse nome") {
 		t.Fatalf("aplicou com nome diferente do repositorio: %v", err)
 	}
 	// app sem repositorio nao abre PR
@@ -119,5 +122,34 @@ func TestApplyNaoDeixaAppPelaMetade(t *testing.T) {
 	}
 	if _, err := c.appManager().Get("loja"); err == nil {
 		t.Fatal("o app foi criado mesmo com o plano recusado")
+	}
+}
+
+// repositorio com maiuscula ou _: o app tem o nome convertido e a imagem o
+// nome em minusculas, que e o que o pipeline publica
+func TestImportComNomeDeRepositorioQualquer(t *testing.T) {
+	c, gh := newGitHubCore(t)
+	ctx := context.Background()
+	c.SetSecret(ctx, GitHubKeySecret, string(gh.Key))
+
+	for link, want := range map[string][2]string{
+		"https://github.com/trdSystemDev/TRDSmartPodCast": {"trdsmartpodcast", "registry.trd.localhost/trdsmartpodcast"},
+		"trdSystemDev/Meu_App":                            {"meu-app", "registry.trd.localhost/meu_app"},
+	} {
+		plan, err := c.PlanAppFromGitHub(ctx, link)
+		if err != nil {
+			t.Fatalf("%s: %v", link, err)
+		}
+		if plan.App != want[0] || plan.Spec.Image != want[1] {
+			t.Errorf("%s: app %q imagem %q, esperava %v", link, plan.App, plan.Spec.Image, want)
+		}
+		plan.Database = nil
+		if err := c.ApplyApp(ctx, plan); err != nil {
+			t.Fatalf("%s: %v", link, err)
+		}
+	}
+	// o CI manda TRDSmartPodCast: a conversao do cais deploy chega nesse app
+	if a, err := c.appManager().Get(apps.NameFromRepo("TRDSmartPodCast")); err != nil || a.Repo != "trdSystemDev/TRDSmartPodCast" {
+		t.Fatalf("app %+v %v", a, err)
 	}
 }

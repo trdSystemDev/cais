@@ -474,3 +474,23 @@ func TestOverrideComBancoNoDocker(t *testing.T) {
 		t.Error("web perdeu a proxy_network da rota")
 	}
 }
+
+func TestNameFromRepo(t *testing.T) {
+	cases := map[string]string{
+		"meu-app":                       "meu-app",
+		"TRDSmartPodCast":               "trdsmartpodcast",
+		"Meu_App":                       "meu-app",
+		"meu_app.web":                   "meu-app-web",
+		"__x--y..z__":                   "x-y-z",
+		"-.-":                           "",
+		strings.Repeat("a", 39) + "_bc": strings.Repeat("a", 39),
+	}
+	for in, want := range cases {
+		if got := NameFromRepo(in); got != want {
+			t.Errorf("NameFromRepo(%q) = %q, esperava %q", in, got, want)
+		}
+	}
+	if got := ImageFromRepo("registry.exemplo.com.br", "TRDSmartPodCast"); got != "registry.exemplo.com.br/trdsmartpodcast" {
+		t.Errorf("imagem %s", got)
+	}
+}

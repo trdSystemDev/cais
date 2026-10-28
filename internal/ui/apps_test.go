@@ -161,6 +161,7 @@ func TestAppsImportMostraPlanoEAplica(t *testing.T) {
 	if v := m.apps.impHost.Value(); v != "meu-app.trd.localhost" {
 		t.Errorf("dominio no campo: %q", v)
 	}
+	reach(t, m, "imp-db-name:0")
 	if !strings.Contains(screen(m), "DATABASE_URL_FILE") || !strings.Contains(screen(m), "url_file") {
 		t.Errorf("mapeamento do banco nao aparece:\n%s", screen(m))
 	}

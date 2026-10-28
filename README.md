@@ -284,6 +284,18 @@ acesso pede um token de uma hora restrito ao repositorio importado e le so os
 arquivos da analise. O app tem o nome do repositorio, porque o CI usa esse nome
 pro app e pra imagem.
 
+Quando o repositorio tem compose de producao (`docker-compose.producao.yml`,
+`docker-compose-prod.yml`, `.prod.yml`...), a analise parte dele: o service com
+`build` e o app (pasta, Dockerfile, build args, comando, porta do container,
+volumes e variaveis do `environment`/`env_file`); o service de banco vira o
+Postgres/MySQL da infra (imagem PostGIS cria a extensao `postgis` no database do
+app); o resto (init de permissao, codigo montado do repositorio) vira aviso. O
+Dockerfile e os manifestos sao lidos da pasta de build.
+
+Build args so pra valores publicos (`NEXT_PUBLIC_*`, `VITE_*`...): ficam gravados
+na imagem. O `.woodpecker.yml` do PR (`cais app ci`) sai com a pasta, o
+Dockerfile e os build args do app. Todo app sai com rotacao de log (20 MB x 5).
+
 A analise so sugere: porta, banco e variaveis podem ser trocados depois (`cais app
 db`, `routes`). Variavel com cara de segredo (`*_SECRET`, `*_TOKEN`, `*_PASSWORD`...)
 e recusada na spec: vira secret do app e o app recebe `X_FILE=/run/secrets/x`.

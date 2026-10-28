@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,12 +19,11 @@ import (
 type Files map[string][]byte
 
 // Wanted sao os caminhos que interessam a analise.
-var Wanted = []string{
-	"Dockerfile", ".env.example", ".env.sample", ".env.dist",
-	"package.json", "prisma/schema.prisma",
-	"requirements.txt", "pyproject.toml",
-	"composer.json", "Gemfile", "go.mod", "pom.xml", "build.gradle", "build.gradle.kts",
-}
+var Wanted = func() []string {
+	out := append([]string{"Dockerfile"}, manifests...)
+	out = append(out, exampleFiles...)
+	return append(out, composeFiles...)
+}()
 
 // Var e uma variavel de ambiente que o app espera (do .env.example).
 type Var struct {
@@ -50,6 +51,8 @@ type Database struct {
 	Why string `json:"why"`
 	// Env e o mapeamento sugerido VAR -> host|port|name|user|password_file|url_file.
 	Env map[string]string `json:"env"`
+	// Extensions sao extensoes do Postgres que o app usa (postgis).
+	Extensions []string `json:"extensions,omitempty"`
 }
 
 // Result e o que a analise descobriu.
@@ -63,7 +66,13 @@ type Result struct {
 	// healthy. Sem ele, "rodando" ja conta como pronto.
 	Healthcheck bool `json:"healthcheck"`
 	// Volumes sao as pastas do VOLUME do Dockerfile (dados persistentes).
-	Volumes  []string  `json:"volumes,omitempty"`
+	Volumes []string `json:"volumes,omitempty"`
+	// ComposeFile e o compose de onde veio a analise (vazio sem compose).
+	ComposeFile string `json:"compose_file,omitempty"`
+	// Build e como construir a imagem (pasta, Dockerfile, build args).
+	Build Build `json:"build"`
+	// Command e o comando do app quando o compose troca o do Dockerfile.
+	Command  []string  `json:"command,omitempty"`
 	Database *Database `json:"database,omitempty"`
 	Vars     []Var     `json:"vars,omitempty"`
 	// Notes sao avisos e o que o app precisa mudar, em texto pra mostrar.
@@ -73,33 +82,68 @@ type Result struct {
 // Analyze le os arquivos do repositorio e descreve como publicar o app.
 // Nunca falha: o que nao der pra descobrir vira nota.
 func Analyze(files Files) Result {
-	var r Result
-	if df, ok := files["Dockerfile"]; ok {
+	r := Result{Build: Build{Context: ".", Dockerfile: "Dockerfile"}}
+	example := envVars(files)
+
+	// com compose de producao, o app e o service com build dele: pasta,
+	// Dockerfile, args, comando, porta, volumes e variaveis saem de la
+	c := parseCompose(files)
+	view := files
+	if c != nil {
+		r.ComposeFile = c.file
+		r.Build = Build{Context: c.ctx, Dockerfile: path.Join(c.ctx, c.dockerfile), Args: c.buildArgs(example)}
+		r.Command = c.command
+		view = sub(files, c.ctx)
+		r.Notes = append(r.Notes, c.notes...)
+	}
+
+	dfName := path.Base(r.Build.Dockerfile)
+	if c != nil {
+		dfName = c.dockerfile
+	}
+	if df, ok := view[dfName]; ok {
 		r.Dockerfile = true
 		dockerfile(df, &r)
 	} else {
-		r.Notes = append(r.Notes, "o repositorio nao tem Dockerfile na raiz: o cais publica a imagem construida a partir dele")
+		r.Notes = append(r.Notes, fmt.Sprintf("nao achei o Dockerfile (%s): o cais publica a imagem construida a partir dele", r.Build.Dockerfile))
 	}
-	r.Language = language(files)
-	r.Vars = envVars(files)
+	r.Language = language(view)
+
+	if c != nil {
+		r.Vars = c.vars(example)
+		if c.port > 0 {
+			r.Port, r.PortSource = c.port, "porta do container no "+c.file
+		}
+		for _, v := range c.volumes {
+			if !slices.Contains(r.Volumes, v) {
+				r.Volumes = append(r.Volumes, v)
+			}
+		}
+	} else {
+		r.Vars = example
+	}
 
 	if r.Port == 0 {
 		for _, v := range r.Vars {
 			if v.Name == "PORT" {
 				if p, err := strconv.Atoi(v.Example); err == nil && p > 0 && p < 65536 {
-					r.Port, r.PortSource = p, "PORT no .env.example"
+					r.Port, r.PortSource = p, "PORT no exemplo de variaveis"
 				}
 			}
 		}
 	}
 	if r.Port == 0 {
-		r.Notes = append(r.Notes, "nao achei a porta do app (EXPOSE no Dockerfile ou PORT no .env.example): informe no import")
+		r.Notes = append(r.Notes, "nao achei a porta do app (EXPOSE no Dockerfile, ports no compose ou PORT no .env.example): informe no import")
 	}
 	if r.Dockerfile && !r.Healthcheck {
 		r.Notes = append(r.Notes, "o Dockerfile nao tem HEALTHCHECK: o deploy considera o app pronto assim que o container sobe; com HEALTHCHECK ele espera o app responder e volta a versao anterior se nao responder")
 	}
 
-	r.Database = database(files, r.Vars)
+	if c != nil && c.dbEngine != "" {
+		r.Database = &Database{Engine: c.dbEngine, Why: c.dbWhy, Env: dbEnv(r.Vars), Extensions: c.extensions}
+	} else {
+		r.Database = database(view, r.Vars)
+	}
 	// exemplo de segredo ou de conexao nao serve pra nada depois da
 	// analise e as vezes e real (senha de desenvolvimento commitada)
 	for i, v := range r.Vars {
@@ -109,6 +153,14 @@ func Analyze(files Files) Result {
 	}
 	if r.Database != nil {
 		r.Notes = append(r.Notes, databaseNotes(r)...)
+		for _, e := range r.Database.Extensions {
+			r.Notes = append(r.Notes, fmt.Sprintf("o banco usa a extensao %s: o cais cria ela no database do app", e))
+		}
+	}
+	for k := range r.Build.Args {
+		if LooksSecret(k) {
+			r.Notes = append(r.Notes, fmt.Sprintf("o build arg %s parece segredo: build arg fica gravado na imagem (docker history); passe segredo em execucao, por arquivo", k))
+		}
 	}
 	for _, v := range r.Vars {
 		if v.Kind == VarSecret {
@@ -216,14 +268,51 @@ func has(files Files, names ...string) bool {
 }
 
 var (
-	dbVar     = regexp.MustCompile(`^(DATABASE_|DB_|POSTGRES_|PG|MYSQL_)|^DATABASE$`)
-	secretVar = regexp.MustCompile(`SECRET|PASSWORD|PASSWD|PASS$|TOKEN|PRIVATE|CREDENTIAL|_KEY$|^KEY$|APIKEY|API_KEY|DSN$`)
+	dbVar = regexp.MustCompile(`^(DATABASE_|DB_|POSTGRES_|PG|MYSQL_)|^DATABASE$`)
+	// em ingles e em portugues (SENHA, CHAVE): projetos daqui usam os dois
+	secretVar = regexp.MustCompile(`SECRET|PASSWORD|PASSWD|PASS$|PWD$|TOKEN|PRIVATE|CREDENTIAL|_KEY$|^KEY$|APIKEY|API_KEY|DSN$|KEY_ID$|SENHA|SEGREDO|CHAVE`)
 )
 
 // LooksSecret diz se o nome de uma variavel parece de segredo (senha,
 // token, chave). Esses valores vao em arquivo, nunca no ambiente.
 func LooksSecret(name string) bool {
+	if IsPublic(name) {
+		return false
+	}
+	// chave publica (Mercado Pago, Stripe publishable) nao e segredo
+	if up := strings.ToUpper(name); strings.Contains(up, "PUBLIC_KEY") || strings.Contains(up, "PUBLISHABLE_KEY") {
+		return false
+	}
 	return secretVar.MatchString(strings.ToUpper(name)) || dbPassword.MatchString(strings.ToUpper(name))
+}
+
+// publicPrefix sao prefixos que os frameworks de frontend embutem no
+// JavaScript do navegador: o valor e publico por definicao, mesmo que o nome
+// diga TOKEN (ex: NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN, que e a chave publica).
+var publicPrefix = []string{"NEXT_PUBLIC_", "VITE_", "REACT_APP_", "NUXT_PUBLIC_", "EXPO_PUBLIC_", "PUBLIC_", "GATSBY_"}
+
+// IsPublic diz se a variavel e publica por definicao (vai pro navegador).
+func IsPublic(name string) bool {
+	up := strings.ToUpper(name)
+	for _, p := range publicPrefix {
+		if strings.HasPrefix(up, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// classify diz o tipo de uma variavel pelo nome.
+func classify(name string) string {
+	switch {
+	case IsPublic(name):
+		return VarPlain
+	case dbVar.MatchString(name):
+		return VarDatabase
+	case LooksSecret(name):
+		return VarSecret
+	}
+	return VarPlain
 }
 
 var dbPassword = regexp.MustCompile(`(DATABASE_URL|_URI)$`)
@@ -232,7 +321,7 @@ var dbPassword = regexp.MustCompile(`(DATABASE_URL|_URI)$`)
 // variavel.
 func envVars(files Files) []Var {
 	var data []byte
-	for _, name := range []string{".env.example", ".env.sample", ".env.dist"} {
+	for _, name := range exampleFiles {
 		if d, ok := files[name]; ok {
 			data = d
 			break
@@ -254,14 +343,7 @@ func envVars(files Files) []Var {
 		}
 		seen[name] = true
 		val = strings.Trim(strings.TrimSpace(val), `"'`)
-		v := Var{Name: name, Example: val, Kind: VarPlain}
-		switch {
-		case dbVar.MatchString(name):
-			v.Kind = VarDatabase
-		case secretVar.MatchString(name):
-			v.Kind = VarSecret
-		}
-		out = append(out, v)
+		out = append(out, Var{Name: name, Example: val, Kind: classify(name)})
 	}
 	return out
 }

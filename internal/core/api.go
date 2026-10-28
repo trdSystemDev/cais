@@ -75,7 +75,7 @@ type API interface {
 	// SetAppDatabase cria database e usuario do app no Postgres/MySQL
 	// compartilhado e injeta a conexao. env: VAR -> host, port, name, user,
 	// password, password_file ou url (vazio = DB_HOST, DB_PORT, ...).
-	SetAppDatabase(ctx context.Context, name, engine string, services []string, env map[string]string) error
+	SetAppDatabase(ctx context.Context, name string, db apps.Database) error
 	// RemoveAppDatabase desliga o app do banco sem apagar os dados.
 	RemoveAppDatabase(ctx context.Context, name string) error
 

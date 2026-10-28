@@ -85,6 +85,8 @@ type Database struct {
 	Engine string `yaml:"engine" json:"engine"`
 	// Services que usam o banco; vazio = todos os services do app.
 	Services []string `yaml:"services,omitempty" json:"services,omitempty"`
+	// Extensions sao extensoes do Postgres criadas no database (postgis).
+	Extensions []string `yaml:"extensions,omitempty" json:"extensions,omitempty"`
 	// Env diz que variavel recebe o que: VAR -> host, port, name, user,
 	// password_file ou url_file. Senha nunca vai em variavel (apareceria
 	// no docker inspect): o app le do arquivo. Cada framework espera nomes
@@ -121,6 +123,9 @@ var (
 // CheckDatabase confere a configuracao do banco de um app.
 func CheckDatabase(db Database) error {
 	if _, err := databases.Get(db.Engine); err != nil {
+		return err
+	}
+	if err := databases.CheckExtensions(db.Engine, db.Extensions); err != nil {
 		return err
 	}
 	if len(db.Env) == 0 {
@@ -175,6 +180,36 @@ func CheckName(name string) error {
 		return fmt.Errorf("%q e nome reservado do cais", name)
 	}
 	return nil
+}
+
+// NameFromRepo e o nome do app de um repositorio: minusculas, _ e . viram
+// -, sem - repetido ou nas pontas, ate 40 caracteres (TRDSmartPodCast ->
+// trdsmartpodcast, meu_app.web -> meu-app-web). O import e o cais deploy
+// usam a mesma conversao, entao o CI manda o nome do repositorio como esta.
+func NameFromRepo(repo string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(repo) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			dash = false
+		case !dash && b.Len() > 0:
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	name := strings.TrimRight(b.String(), "-")
+	if len(name) > 40 {
+		name = strings.TrimRight(name[:40], "-")
+	}
+	return name
+}
+
+// ImageFromRepo e o repositorio da imagem de um app no registry: o nome do
+// repositorio em minusculas, como o pipeline publica (${CI_REPO_NAME,,}).
+func ImageFromRepo(registryHost, repo string) string {
+	return registryHost + "/" + strings.ToLower(repo)
 }
 
 func (m Manager) dir(name string) string { return filepath.Join(m.Root, name) }

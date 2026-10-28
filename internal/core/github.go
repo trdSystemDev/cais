@@ -39,24 +39,26 @@ func (c *Core) githubApp() (github.App, error) {
 	return github.App{ID: cfg.GitHub.AppID, Key: key, BaseURL: c.deps.GitHubURL}, nil
 }
 
-// repoApp confere que o repositorio serve de app: o CI usa o nome do
-// repositorio como nome do app e da imagem, entao os dois sao o mesmo.
-func repoApp(link string) (github.Repo, error) {
+// repoApp le o link e da o nome do app: o do repositorio convertido
+// (apps.NameFromRepo), o mesmo que o cais deploy calcula do nome que o CI
+// manda. So falha se o nome convertido nao serve (vazio ou de uma stack).
+func repoApp(link string) (github.Repo, string, error) {
 	repo, err := github.ParseRepo(link)
 	if err != nil {
-		return repo, err
+		return repo, "", err
 	}
-	if err := apps.CheckName(repo.Name); err != nil {
-		return repo, fmt.Errorf("o repositorio %s nao serve de nome de app (%v); o CI usa o nome do repositorio como nome do app e da imagem: renomeie o repositorio no GitHub", repo, err)
+	name := apps.NameFromRepo(repo.Name)
+	if err := apps.CheckName(name); err != nil {
+		return repo, "", fmt.Errorf("o repositorio %s vira o app %q, que nao serve (%v): renomeie o repositorio no GitHub", repo, name, err)
 	}
-	return repo, nil
+	return repo, name, nil
 }
 
 // PlanAppFromGitHub le do repositorio (privado, pelo GitHub App) so os
 // arquivos da analise e devolve a proposta de configuracao. O app tem o
 // nome do repositorio. Nao grava nada.
 func (c *Core) PlanAppFromGitHub(ctx context.Context, link string) (apps.Plan, error) {
-	repo, err := repoApp(link)
+	repo, name, err := repoApp(link)
 	if err != nil {
 		return apps.Plan{}, err
 	}
@@ -68,15 +70,27 @@ func (c *Core) PlanAppFromGitHub(ctx context.Context, link string) (apps.Plan, e
 	if err != nil {
 		return apps.Plan{}, err
 	}
-	files, err := s.ReadFiles(ctx, detect.Wanted)
+	files, err := detect.Collect(func(p string) ([]byte, bool, error) {
+		data, err := s.ReadFile(ctx, p)
+		if github.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return data, err == nil, err
+	})
 	if err != nil {
 		return apps.Plan{}, err
 	}
-	plan, err := c.PlanApp(ctx, repo.Name, files)
+	plan, err := c.PlanApp(ctx, name, files)
+	if err != nil {
+		return plan, err
+	}
+	cfg, err := config.Load(c.deps.ConfigPath)
 	if err != nil {
 		return plan, err
 	}
 	plan.Repo = repo.String()
+	// a imagem e a que o pipeline publica: o nome do repositorio em minusculas
+	plan.Spec.Image = apps.ImageFromRepo(cfg.RegistryHost(), repo.Name)
 	return plan, nil
 }
 
@@ -90,7 +104,7 @@ func (c *Core) ProposeAppCI(ctx context.Context, name string) (string, error) {
 	if a.Repo == "" {
 		return "", fmt.Errorf("app %s nao veio do GitHub: copie o pipeline com cais ci pipeline > .woodpecker.yml", name)
 	}
-	repo, err := repoApp(a.Repo)
+	repo, _, err := repoApp(a.Repo)
 	if err != nil {
 		return "", err
 	}
@@ -105,7 +119,12 @@ func (c *Core) ProposeAppCI(ctx context.Context, name string) (string, error) {
 	body := "Pipeline do cais: build do Dockerfile, push no registry e deploy da tag do commit na VPS.\n\n" +
 		"A configuracao do app (porta, banco, variaveis, secrets) fica no cais; o CI so escolhe a tag.\n" +
 		"Antes do merge, cadastre no Woodpecker os secrets `registry_password` e `deploy_ssh_key` (`cais ci setup`)."
-	link, err := s.ProposeFile(ctx, "cais/ci", ".woodpecker.yml", ci.Pipeline(), "CI do cais (build e deploy)", body)
+	pipeline := ci.Pipeline()
+	if a.Spec != nil {
+		b := a.Spec.Build
+		pipeline = ci.PipelineFor(ci.Build{Context: b.Context, Dockerfile: b.Dockerfile, Args: b.Args})
+	}
+	link, err := s.ProposeFile(ctx, "cais/ci", ".woodpecker.yml", pipeline, "CI do cais (build e deploy)", body)
 	if err != nil {
 		var gerr *github.Error
 		if errors.As(err, &gerr) && (gerr.Status == 403 || gerr.Status == 404) {

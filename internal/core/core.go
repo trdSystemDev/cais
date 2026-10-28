@@ -63,6 +63,9 @@ type Core struct {
 	// todos os apps.
 	appLocks sync.Map // nome -> *sync.Mutex
 	routes   sync.Mutex
+	// appsCheck serializa o CheckApps: duas checagens juntas (fim de dois
+	// deploys) publicariam fora de ordem e a mais velha apagaria a nova
+	appsCheck sync.Mutex
 }
 
 // New cria o Core. Nenhuma acao roda aqui: quem decide quando checar o

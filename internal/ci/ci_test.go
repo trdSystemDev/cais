@@ -67,3 +67,28 @@ func TestChaveDeDeploy(t *testing.T) {
 		t.Errorf("sshd nao leria a linha: %v %v", opts, err)
 	}
 }
+
+func TestPipelineComBuildDoApp(t *testing.T) {
+	var doc struct {
+		Steps []struct {
+			Settings map[string]any
+		}
+	}
+	out := PipelineFor(Build{Context: "app", Dockerfile: "app/Dockerfile",
+		Args: map[string]string{"NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN": "pk.abc", "NEXT_PUBLIC_X": "a$b"}})
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	set := doc.Steps[0].Settings
+	if set["context"] != "app" || set["dockerfile"] != "app/Dockerfile" {
+		t.Errorf("settings %v", set)
+	}
+	args, _ := set["build-args"].([]any)
+	if len(args) != 2 || args[0] != "NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN=pk.abc" || args[1] != "NEXT_PUBLIC_X=a$$b" {
+		t.Errorf("build-args %v", args)
+	}
+	// sem build proprio, o pipeline e o padrao (sem context/dockerfile/args)
+	if def := string(Pipeline()); strings.Contains(def, "context:") || strings.Contains(def, "build-args") || strings.Contains(def, "{{") {
+		t.Errorf("pipeline padrao:\n%s", def)
+	}
+}

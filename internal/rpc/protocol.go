@@ -137,10 +137,8 @@ type deployParams struct {
 }
 
 type dbParams struct {
-	Name     string            `json:"name"`
-	Engine   string            `json:"engine"`
-	Services []string          `json:"services,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
+	Name     string        `json:"name"`
+	Database apps.Database `json:"database"`
 }
 
 type planParams struct {

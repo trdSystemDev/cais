@@ -2,7 +2,8 @@
 # app -- copie pra raiz do repositorio como .woodpecker.yml (cais ci pipeline
 # > .woodpecker.yml). O repositorio so precisa do Dockerfile.
 #
-# - o nome do repositorio e o nome do app no cais (CI_REPO_NAME)
+# - o app no cais tem o nome do repositorio em minusculas (MeuApp
+#   -> meuapp); a imagem tambem, que o registry exige minusculas
 # - CAIS_REGISTRY vem do proprio Woodpecker (variavel global que o cais
 #   configura): nada de dominio aqui
 # - os secrets registry_password e deploy_ssh_key sao cadastrados no
@@ -19,8 +20,21 @@ steps:
     image: woodpeckerci/plugin-kaniko
     settings:
       registry: ${CAIS_REGISTRY}
-      repo: ${CAIS_REGISTRY}/${CI_REPO_NAME}
+      repo: ${CAIS_REGISTRY}/${CI_REPO_NAME,,}
       tags: ${CI_COMMIT_SHA}
+{{- if .Context}}
+      context: {{.Context}}
+{{- end}}
+{{- if .Dockerfile}}
+      dockerfile: {{.Dockerfile}}
+{{- end}}
+{{- if .Args}}
+      # build args sao publicos (ficam na imagem): o cais recusa segredo aqui
+      build-args:
+{{- range .Args}}
+        - {{.}}
+{{- end}}
+{{- end}}
       username: ci
       password:
         from_secret: registry_password

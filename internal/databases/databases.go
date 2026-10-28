@@ -3,6 +3,7 @@ package databases
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -54,18 +55,24 @@ type Exec func(ctx context.Context, container string, input []byte, args ...stri
 // Provision cria (ou acerta) o database e o usuario do app com a senha
 // dada. Idempotente: rodar de novo nao apaga nada e reaplica a senha.
 // O usuario so acessa o proprio database; os dos outros apps nem conecta.
-func Provision(ctx context.Context, exec Exec, e Engine, name string, password []byte) error {
+//
+// extensions (so Postgres) sao criadas no database do app como superusuario:
+// o usuario do app nao tem permissao pra CREATE EXTENSION.
+func Provision(ctx context.Context, exec Exec, e Engine, name string, password []byte, extensions []string) error {
 	if err := checkIdentifier(name); err != nil {
 		return err
 	}
 	if err := checkPassword(password); err != nil {
 		return err
 	}
+	if err := CheckExtensions(e.Name, extensions); err != nil {
+		return err
+	}
 	var err error
 	switch e.Name {
 	case Postgres:
 		// socket local do container: o usuario postgres entra sem senha
-		_, err = exec(ctx, e.Container, []byte(postgresSQL(name, password)),
+		_, err = exec(ctx, e.Container, []byte(postgresSQL(name, password, extensions)),
 			"psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres", "-d", "postgres")
 	case MySQL:
 		// a senha do root e lida do secret dentro do proprio container
@@ -105,8 +112,39 @@ func checkPassword(pw []byte) error {
 	return nil
 }
 
-func postgresSQL(name string, password []byte) string {
-	// nome e senha ja passaram por checkIdentifier e checkPassword
+// Extensions sao as extensoes do Postgres que um app pode pedir. Lista
+// fechada: o nome entra no SQL, e cada uma precisa existir na imagem da
+// stack postgres (postgis/postgis traz as de PostGIS e as do contrib).
+var Extensions = []string{
+	"postgis", "postgis_topology", "postgis_raster", "fuzzystrmatch",
+	"pg_trgm", "uuid-ossp", "citext", "unaccent", "hstore", "pgcrypto", "btree_gist", "btree_gin",
+}
+
+// CheckExtensions recusa extensao fora da lista ou em MySQL.
+func CheckExtensions(engine string, exts []string) error {
+	if len(exts) == 0 {
+		return nil
+	}
+	if engine != Postgres {
+		return fmt.Errorf("extensoes so existem no Postgres")
+	}
+	for _, x := range exts {
+		if !slices.Contains(Extensions, x) {
+			return fmt.Errorf("extensao %q nao suportada (use: %s)", x, strings.Join(Extensions, ", "))
+		}
+	}
+	return nil
+}
+
+func postgresSQL(name string, password []byte, extensions []string) string {
+	// nome, senha e extensoes ja foram conferidos
+	var ext strings.Builder
+	if len(extensions) > 0 {
+		fmt.Fprintf(&ext, "\\connect \"%s\"\n", name)
+		for _, x := range extensions {
+			fmt.Fprintf(&ext, "CREATE EXTENSION IF NOT EXISTS \"%s\";\n", x)
+		}
+	}
 	return fmt.Sprintf(`DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = '%[1]s') THEN
@@ -121,7 +159,7 @@ SELECT 'CREATE DATABASE "%[1]s" OWNER "%[1]s"'
 ALTER DATABASE "%[1]s" OWNER TO "%[1]s";
 REVOKE ALL ON DATABASE "%[1]s" FROM PUBLIC;
 GRANT ALL ON DATABASE "%[1]s" TO "%[1]s";
-`, name, password)
+`, name, password) + ext.String()
 }
 
 func mysqlSQL(name string, password []byte) string {

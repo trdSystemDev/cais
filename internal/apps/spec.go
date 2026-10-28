@@ -34,6 +34,59 @@ type Spec struct {
 	Secrets []string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	// Workers sao processos extras com a mesma imagem: nome -> comando.
 	Workers map[string]string `yaml:"workers,omitempty" json:"workers,omitempty"`
+	// Command troca o comando do Dockerfile no service web (vazio mantem).
+	Command []string `yaml:"command,omitempty" json:"command,omitempty"`
+	// Build e como o CI constroi a imagem (vai pro .woodpecker.yml do app).
+	Build Build `yaml:"build,omitempty" json:"build"`
+}
+
+// Build e como o CI constroi a imagem, a partir da raiz do repositorio.
+type Build struct {
+	// Context e a pasta de build; vazio e a raiz.
+	Context string `yaml:"context,omitempty" json:"context,omitempty"`
+	// Dockerfile e o caminho a partir da raiz; vazio e o Dockerfile da raiz.
+	Dockerfile string `yaml:"dockerfile,omitempty" json:"dockerfile,omitempty"`
+	// Args sao build args. So valores publicos: ficam gravados na imagem
+	// (docker history), entao segredo aqui e recusado.
+	Args map[string]string `yaml:"args,omitempty" json:"args,omitempty"`
+}
+
+var (
+	repoPath = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+	// o plugin do kaniko junta os args por virgula e passa sem aspas pro
+	// shell: espaco, virgula, aspas ou glob (* ? [) quebrariam o build sem avisar
+	buildArgValue = regexp.MustCompile(`^[A-Za-z0-9._:/@+=%~#-]*$`)
+)
+
+func safeRepoPath(p string) bool {
+	if p == "" || p == "." {
+		return true
+	}
+	c := path.Clean(p)
+	return c == p && repoPath.MatchString(p) && !strings.HasPrefix(p, "/") && c != ".." && !strings.HasPrefix(c, "../")
+}
+
+// CheckBuild confere o build: caminhos dentro do repositorio e build args
+// publicos e sem caracteres que o plugin do kaniko nao aguenta.
+func CheckBuild(b Build) error {
+	var errs []error
+	if !safeRepoPath(b.Context) {
+		errs = append(errs, fmt.Errorf("pasta de build invalida %q (relativa a raiz do repositorio)", b.Context))
+	}
+	if !safeRepoPath(b.Dockerfile) {
+		errs = append(errs, fmt.Errorf("Dockerfile invalido %q (caminho a partir da raiz do repositorio)", b.Dockerfile))
+	}
+	for k, v := range b.Args {
+		switch {
+		case !envName.MatchString(k):
+			errs = append(errs, fmt.Errorf("build arg invalido %q", k))
+		case detect.LooksSecret(k):
+			errs = append(errs, fmt.Errorf("build arg %s parece segredo: fica gravado na imagem (docker history); passe em execucao, por arquivo", k))
+		case !buildArgValue.MatchString(v):
+			errs = append(errs, fmt.Errorf("build arg %s: o valor nao pode ter espaco, virgula, aspas nem * ? [ (o build do CI quebraria)", k))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // WebService e o nome do service principal no compose gerado.
@@ -79,6 +132,15 @@ func CheckSpec(s Spec) error {
 			errs = append(errs, fmt.Errorf("secret %q: o prefixo cais_ e reservado", n))
 		}
 	}
+	if err := CheckBuild(s.Build); err != nil {
+		errs = append(errs, err)
+	}
+	for _, c := range s.Command {
+		if c == "" || strings.ContainsAny(c, "\x00\n") {
+			errs = append(errs, fmt.Errorf("comando invalido %q", strings.Join(s.Command, " ")))
+			break
+		}
+	}
 	for name, cmd := range s.Workers {
 		if name == WebService || !serviceName.MatchString(name) {
 			errs = append(errs, fmt.Errorf("worker com nome invalido %q", name))
@@ -106,24 +168,48 @@ func Render(s Spec, tag string) ([]byte, error) {
 		return nil, fmt.Errorf("tag invalida %q", tag)
 	}
 
+	type logging struct {
+		Driver  string            `yaml:"driver"`
+		Options map[string]string `yaml:"options"`
+	}
 	type service struct {
 		Image       string            `yaml:"image"`
-		Command     string            `yaml:"command,omitempty"`
+		Command     any               `yaml:"command,omitempty"`
 		Restart     string            `yaml:"restart"`
 		Environment map[string]string `yaml:"environment,omitempty"`
 		Secrets     []string          `yaml:"secrets,omitempty"`
 		Volumes     []string          `yaml:"volumes,omitempty"`
+		Logging     logging           `yaml:"logging"`
 	}
-	base := service{Image: s.Image + ":" + tag, Restart: "unless-stopped", Environment: s.Env, Secrets: s.Secrets}
+	// $ e interpolacao pro compose: o valor literal vai escapado ($$)
+	esc := func(v string) string { return strings.ReplaceAll(v, "$", "$$") }
+	env := map[string]string{}
+	for k, v := range s.Env {
+		env[k] = esc(v)
+	}
+	if len(env) == 0 {
+		env = nil
+	}
+	base := service{Image: s.Image + ":" + tag, Restart: "unless-stopped", Environment: env, Secrets: s.Secrets,
+		// sem limite, o log de um app enche o disco da VPS
+		Logging: logging{Driver: "json-file", Options: map[string]string{"max-size": "20m", "max-file": "5"}}}
 	vols := map[string]any{}
 	for _, v := range s.Volumes {
 		base.Volumes = append(base.Volumes, volumeName(v)+":"+v)
 		vols[volumeName(v)] = map[string]any{}
 	}
-	services := map[string]service{WebService: base}
+	web := base
+	if len(s.Command) > 0 {
+		cmd := make([]string, len(s.Command))
+		for i, c := range s.Command {
+			cmd[i] = esc(c)
+		}
+		web.Command = cmd
+	}
+	services := map[string]service{WebService: web}
 	for name, cmd := range s.Workers {
 		w := base
-		w.Command = cmd
+		w.Command = esc(cmd)
 		services[name] = w
 	}
 
@@ -348,7 +434,17 @@ type Plan struct {
 // no ambiente, segredo em arquivo, banco pelo cais).
 func PlanFromAnalysis(name, registryHost, domain string, r detect.Result) Plan {
 	p := Plan{App: name, Analysis: r}
-	p.Spec = Spec{Image: registryHost + "/" + name, Port: r.Port, Volumes: r.Volumes, Env: map[string]string{}}
+	p.Spec = Spec{Image: registryHost + "/" + name, Port: r.Port, Volumes: r.Volumes, Env: map[string]string{},
+		Command: r.Command}
+	if r.Build.Context != "." || r.Build.Dockerfile != "Dockerfile" || len(r.Build.Args) > 0 {
+		p.Spec.Build = Build{Context: r.Build.Context, Dockerfile: r.Build.Dockerfile, Args: r.Build.Args}
+		if p.Spec.Build.Context == "." {
+			p.Spec.Build.Context = ""
+		}
+		if p.Spec.Build.Dockerfile == "Dockerfile" {
+			p.Spec.Build.Dockerfile = ""
+		}
+	}
 	for _, v := range r.Vars {
 		switch v.Kind {
 		case detect.VarPlain:
@@ -364,14 +460,45 @@ func PlanFromAnalysis(name, registryHost, domain string, r detect.Result) Plan {
 	if r.Port > 0 {
 		p.Spec.Env["PORT"] = fmt.Sprint(r.Port)
 		if domain != "" {
-			p.Routes = []Route{{Host: name + "." + domain, Service: WebService, Port: r.Port}}
+			host := name + "." + domain
+			// a URL do app no exemplo de producao (AUTH_URL...) ja diz o
+			// dominio real: vira a rota se for do dominio do cais
+			for _, k := range appURLVars {
+				if h := urlHost(p.Spec.Env[k]); h != "" && (h == domain || strings.HasSuffix(h, "."+domain)) {
+					host = h
+					break
+				}
+			}
+			p.Routes = []Route{{Host: host, Service: WebService, Port: r.Port}}
+			for _, k := range appURLVars {
+				if _, ok := p.Spec.Env[k]; ok {
+					p.Spec.Env[k] = "https://" + host
+				}
+			}
 		}
 	}
 	if len(p.Spec.Env) == 0 {
 		p.Spec.Env = nil
 	}
 	if r.Database != nil && r.Database.Engine != "" {
-		p.Database = &Database{Engine: r.Database.Engine, Env: r.Database.Env}
+		p.Database = &Database{Engine: r.Database.Engine, Env: r.Database.Env, Extensions: r.Database.Extensions}
 	}
 	return p
+}
+
+// appURLVars sao variaveis com a URL publica do app (login, links em e-mail):
+// apontam pra rota.
+var appURLVars = []string{"AUTH_URL", "NEXTAUTH_URL", "APP_URL", "PUBLIC_URL", "BASE_URL", "SITE_URL", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SITE_URL"}
+
+func urlHost(v string) string {
+	rest, ok := strings.CutPrefix(v, "https://")
+	if !ok {
+		rest, ok = strings.CutPrefix(v, "http://")
+	}
+	if !ok {
+		return ""
+	}
+	host, _, _ := strings.Cut(rest, "/")
+	host, _, _ = strings.Cut(host, ":")
+	return host
 }

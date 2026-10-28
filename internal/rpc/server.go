@@ -271,7 +271,7 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		if err := params(m, &p); err != nil {
 			return nil, err
 		}
-		return ok(s.api.SetAppDatabase(s.ctx, p.Name, p.Engine, p.Services, p.Env))
+		return ok(s.api.SetAppDatabase(s.ctx, p.Name, p.Database))
 
 	case MethodAppDatabaseOff:
 		var p appParams

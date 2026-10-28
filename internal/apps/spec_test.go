@@ -245,3 +245,87 @@ func TestSecretNovoEMontado(t *testing.T) {
 		t.Fatalf("o compose no ar nao monta o secret novo:\n%s", last)
 	}
 }
+
+func TestRenderComComandoLogsEDolar(t *testing.T) {
+	s := Spec{Image: "registry.exemplo.com.br/portal", Port: 3000,
+		Command: []string{"sh", "-c", "pnpm run start:prod"},
+		Env:     map[string]string{"PRECO": "R$10"},
+		Build:   Build{Args: map[string]string{"NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN": "pk.abc"}}}
+	data, err := Render(s, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compose.Validate(data, compose.Policy{App: "portal", Networks: Networks}); err != nil {
+		t.Fatalf("compose gerado recusado:\n%v\n%s", err, data)
+	}
+	text := string(data)
+	for _, want := range []string{"pnpm run start:prod", "max-size: 20m", "max-file: \"5\"", "R$$10"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("compose sem %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "NEXT_PUBLIC_MAPBOX") {
+		t.Error("build arg vazou pro compose de execucao")
+	}
+	if _, err := exec.LookPath("docker"); err == nil {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, ComposeFile), data, 0o644)
+		out, err := exec.Command("docker", "compose", "-p", "portal", "-f", filepath.Join(dir, ComposeFile), "config").CombinedOutput()
+		if err != nil {
+			t.Fatalf("docker compose recusou: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "PRECO: R$$10") && !strings.Contains(string(out), "R$10") {
+			t.Errorf("o docker compose nao leu o $ literal:\n%s", out)
+		}
+	}
+}
+
+func TestCheckBuildRecusa(t *testing.T) {
+	bad := map[string]Build{
+		"pasta fora":          {Context: "../outro"},
+		"pasta absoluta":      {Context: "/etc"},
+		"dockerfile fora":     {Dockerfile: "../Dockerfile"},
+		"arg com segredo":     {Args: map[string]string{"NPM_TOKEN": "x"}},
+		"arg com espaco":      {Args: map[string]string{"NEXT_PUBLIC_X": "a b"}},
+		"arg com virgula":     {Args: map[string]string{"NEXT_PUBLIC_X": "a,b"}},
+		"arg com aspas":       {Args: map[string]string{"NEXT_PUBLIC_X": `a"b`}},
+		"arg com glob":        {Args: map[string]string{"NEXT_PUBLIC_X": "a?b*"}},
+		"arg com nome errado": {Args: map[string]string{"1X": "a"}},
+	}
+	for name, b := range bad {
+		if err := CheckBuild(b); err == nil {
+			t.Errorf("%s: aceitou %+v", name, b)
+		}
+	}
+	ok := Build{Context: "app", Dockerfile: "app/Dockerfile", Args: map[string]string{
+		"NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN": "pk.eyJ1Ijoi.abc-_", "NEXT_PUBLIC_URL": "https://x.com/a"}}
+	if err := CheckBuild(ok); err != nil {
+		t.Errorf("recusou build valido: %v", err)
+	}
+}
+
+func TestPlanUsaODominioDaURLDoApp(t *testing.T) {
+	r := detect.Result{Port: 3000, Build: detect.Build{Context: "app", Dockerfile: "app/Dockerfile"},
+		Vars: []detect.Var{{Name: "AUTH_URL", Example: "https://studio.trds.com.br", Kind: detect.VarPlain},
+			{Name: "NODE_ENV", Example: "production", Kind: detect.VarPlain}},
+		Database: &detect.Database{Engine: "postgres", Env: map[string]string{"DATABASE_URL_FILE": "url_file"}, Extensions: []string{"postgis"}}}
+	p := PlanFromAnalysis("studio", "registry.trds.com.br", "trds.com.br", r)
+	if len(p.Routes) != 1 || p.Routes[0].Host != "studio.trds.com.br" {
+		t.Errorf("rota %+v (devia ser o dominio da AUTH_URL)", p.Routes)
+	}
+	if p.Spec.Build.Context != "app" || p.Spec.Build.Dockerfile != "app/Dockerfile" {
+		t.Errorf("build %+v", p.Spec.Build)
+	}
+	if p.Database == nil || strings.Join(p.Database.Extensions, ",") != "postgis" {
+		t.Errorf("banco %+v", p.Database)
+	}
+
+	// dominio de outra VPS (teste local): rota padrao e a AUTH_URL acompanha
+	p = PlanFromAnalysis("studio", "registry.trd.localhost", "trd.localhost", r)
+	if p.Routes[0].Host != "studio.trd.localhost" || p.Spec.Env["AUTH_URL"] != "https://studio.trd.localhost" {
+		t.Errorf("rota %+v AUTH_URL %q", p.Routes, p.Spec.Env["AUTH_URL"])
+	}
+	if err := CheckSpec(p.Spec); err != nil {
+		t.Fatalf("plano gerou spec invalida: %v", err)
+	}
+}

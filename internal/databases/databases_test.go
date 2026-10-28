@@ -24,7 +24,7 @@ const pw = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 func TestProvisionPostgres(t *testing.T) {
 	var calls []call
 	e, _ := Get(Postgres)
-	if err := Provision(context.Background(), fakeExec(&calls), e, "meu_app", []byte(pw)); err != nil {
+	if err := Provision(context.Background(), fakeExec(&calls), e, "meu_app", []byte(pw), nil); err != nil {
 		t.Fatal(err)
 	}
 	c := calls[0]
@@ -45,7 +45,7 @@ func TestProvisionPostgres(t *testing.T) {
 func TestProvisionMySQL(t *testing.T) {
 	var calls []call
 	e, _ := Get(MySQL)
-	if err := Provision(context.Background(), fakeExec(&calls), e, "meu_app", []byte(pw)); err != nil {
+	if err := Provision(context.Background(), fakeExec(&calls), e, "meu_app", []byte(pw), nil); err != nil {
 		t.Fatal(err)
 	}
 	c := calls[0]
@@ -63,12 +63,12 @@ func TestProvisionRecusaEntradaQueQuebraOSQL(t *testing.T) {
 	var calls []call
 	e, _ := Get(Postgres)
 	for _, name := range []string{"", "a-b", `x"; DROP DATABASE postgres; --`, "Maiusculo", strings.Repeat("a", 33)} {
-		if err := Provision(context.Background(), fakeExec(&calls), e, name, []byte(pw)); err == nil {
+		if err := Provision(context.Background(), fakeExec(&calls), e, name, []byte(pw), nil); err == nil {
 			t.Errorf("aceitou nome %q", name)
 		}
 	}
 	for _, bad := range []string{"curta", pw + "'", pw + "$$"} {
-		if err := Provision(context.Background(), fakeExec(&calls), e, "meu_app", []byte(bad)); err == nil {
+		if err := Provision(context.Background(), fakeExec(&calls), e, "meu_app", []byte(bad), nil); err == nil {
 			t.Errorf("aceitou senha %q", bad)
 		}
 	}
@@ -87,5 +87,30 @@ func TestURLEIdentificador(t *testing.T) {
 	}
 	if _, err := Get("mongo"); err == nil {
 		t.Error("aceitou mongo")
+	}
+}
+
+func TestProvisionComExtensao(t *testing.T) {
+	var calls []call
+	e, _ := Get(Postgres)
+	if err := Provision(context.Background(), fakeExec(&calls), e, "portal", []byte(pw), []string{"postgis"}); err != nil {
+		t.Fatal(err)
+	}
+	sql := calls[0].input
+	// a extensao e criada no database do app, depois de criado, como superusuario
+	iConnect := strings.Index(sql, "\\connect \"portal\"")
+	iExt := strings.Index(sql, `CREATE EXTENSION IF NOT EXISTS "postgis";`)
+	if iConnect < 0 || iExt < iConnect || iConnect < strings.Index(sql, "CREATE DATABASE") {
+		t.Fatalf("SQL das extensoes:\n%s", sql)
+	}
+
+	for _, bad := range [][]string{{"postgis; DROP DATABASE x"}, {"plpython3u"}, {`"x"`}} {
+		if err := Provision(context.Background(), fakeExec(&calls), e, "portal", []byte(pw), bad); err == nil {
+			t.Errorf("aceitou extensao %q", bad)
+		}
+	}
+	my, _ := Get(MySQL)
+	if err := Provision(context.Background(), fakeExec(&calls), my, "portal", []byte(pw), []string{"postgis"}); err == nil {
+		t.Error("aceitou extensao no MySQL")
 	}
 }

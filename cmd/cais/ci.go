@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/ci"
 	"github.com/trdSystemDev/cais/internal/rpc"
 )
@@ -30,7 +31,9 @@ func runDeploy(args []string) error {
 	if len(fields) != 2 {
 		return errors.New("uso: cais deploy <app> <tag> (no CI: ssh cais-deploy@vps \"<app> <tag>\")")
 	}
-	app, tag := fields[0], fields[1]
+	// o CI manda o nome do repositorio como esta (TRDSmartPodCast): o app
+	// tem o nome convertido, igual ao do import
+	app, tag := apps.NameFromRepo(fields[0]), fields[1]
 
 	if err := rpc.CheckSocketPath(*socket); err != nil {
 		return err

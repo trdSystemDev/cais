@@ -76,6 +76,7 @@ func runApp(args []string) error {
 	sub, args := subcommand(args)
 	fs, socket := newFlags("app " + sub)
 	dbServices := fs.String("services", "", "services que usam o banco (padrao: todos)")
+	dbExtensions := fs.String("extensions", "", "extensoes do Postgres, separadas por virgula (ex: postgis)")
 	tag := fs.String("tag", "", "deploy da imagem nessa tag, com a spec do app")
 	yes := fs.Bool("yes", false, "aplica o plano sem perguntar")
 	unset := fs.String("unset", "", "variaveis a remover, separadas por virgula")
@@ -216,7 +217,7 @@ func runApp(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := c.SetAppDatabase(ctx, name, engine, splitList(*dbServices), env); err != nil {
+		if err := c.SetAppDatabase(ctx, name, apps.Database{Engine: engine, Services: splitList(*dbServices), Env: env, Extensions: splitList(*dbExtensions)}); err != nil {
 			return err
 		}
 		fmt.Printf("Database %s criado no %s e ligado ao app.\n", strings.ReplaceAll(name, "-", "_"), engine)
@@ -333,16 +334,9 @@ func confirm(yes bool, prompt string) bool {
 // appInit le da pasta so os arquivos da analise, pede o plano ao daemon,
 // mostra e aplica com confirmacao.
 func appInit(ctx context.Context, c *rpc.Client, name, dir string, yes bool) error {
-	files := detect.Files{}
-	for _, p := range detect.Wanted {
-		data, err := os.ReadFile(filepath.Join(dir, p))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		files[p] = data
+	files, err := detect.Collect(readLocal(dir))
+	if err != nil {
+		return err
 	}
 	if len(files) == 0 {
 		return fmt.Errorf("nenhum arquivo do app em %s (Dockerfile, .env.example, package.json...)", dir)
@@ -385,6 +379,20 @@ func printAppPlan(p apps.Plan) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Printf("Plano pra %s\n\n", p.App)
 	fmt.Fprintf(w, "  imagem\t%s:<tag do build>\n", p.Spec.Image)
+	if b := p.Spec.Build; b.Context != "" || b.Dockerfile != "" {
+		fmt.Fprintf(w, "  build\tpasta %s, %s\n", orDefault(b.Context, "raiz"), orDefault(b.Dockerfile, "Dockerfile"))
+	}
+	argKeys := make([]string, 0, len(p.Spec.Build.Args))
+	for k := range p.Spec.Build.Args {
+		argKeys = append(argKeys, k)
+	}
+	sort.Strings(argKeys)
+	for _, k := range argKeys {
+		fmt.Fprintf(w, "  build arg\t%s=%s (publico: fica na imagem)\n", k, p.Spec.Build.Args[k])
+	}
+	if len(p.Spec.Command) > 0 {
+		fmt.Fprintf(w, "  comando\t%s\n", strings.Join(p.Spec.Command, " "))
+	}
 	if p.Spec.Port > 0 {
 		fmt.Fprintf(w, "  porta\t%d (%s)\n", p.Spec.Port, p.Analysis.PortSource)
 	} else {
@@ -398,6 +406,9 @@ func printAppPlan(p apps.Plan) {
 	}
 	if p.Database != nil {
 		fmt.Fprintf(w, "  banco\t%s (%s)\n", p.Database.Engine, p.Analysis.Database.Why)
+		if len(p.Database.Extensions) > 0 {
+			fmt.Fprintf(w, "  \t  extensoes: %s\n", strings.Join(p.Database.Extensions, ", "))
+		}
 		keys := make([]string, 0, len(p.Database.Env))
 		for k := range p.Database.Env {
 			keys = append(keys, k)
@@ -502,4 +513,22 @@ func appEnv(ctx context.Context, c *rpc.Client, name string, set, unset []string
 		fmt.Printf("Variaveis de %s gravadas; valem no proximo deploy (ou use -apply).\n", name)
 	}
 	return nil
+}
+
+// readLocal le arquivos da analise de uma pasta local.
+func readLocal(dir string) func(string) ([]byte, bool, error) {
+	return func(p string) ([]byte, bool, error) {
+		data, err := os.ReadFile(filepath.Join(dir, p))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return data, err == nil, err
+	}
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
