@@ -426,6 +426,7 @@ func TestAppPeloSocket(t *testing.T) {
 		ConfigPath:  filepath.Join(root, "config.yaml"),
 		AppsDir:     filepath.Join(root, "apps"),
 		AppDocker:   ad,
+		AppSettle:   -1,
 		AppSource:   fakeSource{},
 	})
 	c := dial(t, d.path)

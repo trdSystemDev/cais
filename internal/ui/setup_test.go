@@ -124,6 +124,7 @@ func openSetupGitHub(t *testing.T) (*model, *githubtest.Server) {
 	c := core.New(core.Deps{CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
 		SecretsDir: filepath.Join(root, "secrets"), AppsDir: filepath.Join(root, "apps"), GitHubURL: gh.URL,
 		AppDocker: &fakeApps{up: map[string]bool{}},
+		AppSettle: -1,
 		ComposePS: func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
 	m := open(t, c)
 	click(t, m, "tab:Setup")

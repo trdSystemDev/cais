@@ -50,9 +50,10 @@ func (f *fakeSource) Download(_ context.Context, _, commit, dir string) error {
 // (pra saber de qual pasta subiu).
 type fakeDocker struct {
 	calls   []string
-	config  string            // json do compose resolvido
-	failUp  map[string]bool   // compose (conteudo) cujo up falha
-	envSeen map[string]string // .env lido no Config
+	config  string                        // json do compose resolvido
+	failUp  map[string]bool               // compose (conteudo) cujo up falha
+	envSeen map[string]string             // .env lido no Config
+	ps      map[string][]docker.Container // compose -> containers depois do up
 }
 
 func (f *fakeDocker) compose(p docker.Project) string {
@@ -84,7 +85,10 @@ func (f *fakeDocker) Up(_ context.Context, p docker.Project) error {
 	return nil
 }
 
-func (f *fakeDocker) PS(context.Context, docker.Project) ([]docker.Container, error) {
+func (f *fakeDocker) PS(_ context.Context, p docker.Project) ([]docker.Container, error) {
+	if cs, ok := f.ps[f.compose(p)]; ok {
+		return cs, nil
+	}
 	return []docker.Container{{Name: "x-web-1", State: "running"}}, nil
 }
 
@@ -403,5 +407,36 @@ func TestGuide(t *testing.T) {
 		if !strings.Contains(g, want) {
 			t.Errorf("guia sem %q:\n%s", want, g)
 		}
+	}
+}
+
+// sem healthcheck o up volta "running" na hora; o deploy observa um pouco e
+// container que reinicia ou para com erro e falha (e a anterior volta)
+func TestDeployObservaOsContainersDepoisDoUp(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Settle = 30 * time.Millisecond
+	m.Create(App{Name: "web", Repo: "o/web"})
+	d.ps = map[string][]docker.Container{
+		"v1": {{Name: "web-init-1", State: "exited", ExitCode: 0}, {Name: "web-web-1", State: "running"}},
+		"v2": {{Name: "web-web-1", State: "restarting", Status: "Restarting (1) 2 seconds ago"}},
+	}
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
+		t.Fatalf("init que saiu com 0 nao e falha: %v", err)
+	}
+	d.calls = nil
+	_, err := m.Deploy(context.Background(), "web", "c2")
+	if err == nil || !strings.Contains(err.Error(), "reinicia sem parar") || !strings.Contains(err.Error(), "restaurada") {
+		t.Fatalf("erro %v", err)
+	}
+	if !slices.Equal(d.calls, []string{"config v2", "build v2", "up v2", "build v1", "up v1"}) {
+		t.Errorf("chamadas %v", d.calls)
+	}
+
+	d.ps["v2"] = []docker.Container{{Name: "web-web-1", State: "exited", ExitCode: 1}}
+	if _, err := m.Deploy(context.Background(), "web", "c2"); err == nil || !strings.Contains(err.Error(), "parou com erro (codigo 1)") {
+		t.Fatalf("erro %v", err)
+	}
+	if a, _ := m.Get("web"); a.Commit != "c1" {
+		t.Errorf("commit no ar %s", a.Commit)
 	}
 }

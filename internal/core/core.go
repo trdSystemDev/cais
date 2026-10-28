@@ -36,6 +36,9 @@ type Deps struct {
 	AppsDir   string
 	AppSource apps.Source
 	AppDocker apps.Docker
+	// AppSettle e quanto o deploy observa os containers depois do up
+	// (padrao 15s; negativo nao observa).
+	AppSettle time.Duration
 	Exec      func(ctx context.Context, container string, args ...string) (string, error)
 	// ExecInput e o Exec com stdin: SQL com senha nunca vai na linha de comando.
 	ExecInput func(ctx context.Context, container string, input []byte, args ...string) (string, error)
@@ -98,6 +101,9 @@ func New(d Deps) *Core {
 	}
 	if d.AppsDir == "" {
 		d.AppsDir = filepath.Join(config.DataDir(), "apps")
+	}
+	if d.AppSettle == 0 {
+		d.AppSettle = 15 * time.Second
 	}
 	if d.AppDocker == nil {
 		d.AppDocker = docker.CLI{}

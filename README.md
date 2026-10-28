@@ -270,7 +270,10 @@ O deploy:
    labels do Traefik sem `proxy_network`, `.env` fora do `.dockerignore`...;
 5. `docker compose -p <app> build --pull` com a versao atual ainda no ar;
 6. troca `src` por `src.next` e `up -d --wait`;
-7. se o `up` falhar, volta o commit anterior (`src.prev`) e sobe ele de novo.
+7. observa os containers por 15 segundos: reiniciando, parado com erro ou
+   unhealthy conta como falha (sem healthcheck, "running" na hora do `up` nao
+   garante que o app fica de pe);
+8. se falhar, volta o commit anterior (`src.prev`) e sobe ele de novo.
 
 O compose do app publica o dominio pelo Traefik e usa as redes da infra; a
 **Ajuda** (`cais app guide`) gera o trecho pronto pra colar:

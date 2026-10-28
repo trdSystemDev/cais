@@ -73,6 +73,7 @@ func appsCore(t *testing.T) (*core.Core, *fakeApps, *githubtest.Server) {
 		StackDir:      func(n string) string { return filepath.Join(root, "stacks", n) },
 		AppsDir:       filepath.Join(root, "apps"),
 		AppDocker:     fa,
+		AppSettle:     -1,
 		GitHubURL:     gh.URL,
 		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil },
 		ContainerLogs: func(_ context.Context, name string) (string, error) { return "log do " + name, nil },

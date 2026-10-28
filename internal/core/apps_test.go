@@ -83,6 +83,7 @@ func newAppsCore(t *testing.T) (*Core, *appDocker, *githubtest.Server) {
 		StackDir:    func(n string) string { return filepath.Join(root, "stacks", n) },
 		AppsDir:     filepath.Join(root, "apps"),
 		AppDocker:   d,
+		AppSettle:   -1,
 		GitHubURL:   gh.URL,
 		ContainerLogs: func(_ context.Context, name string) (string, error) {
 			return "log de " + name, nil

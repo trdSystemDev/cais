@@ -99,6 +99,10 @@ type Manager struct {
 	Source Source
 	Docker Docker
 	Now    func() time.Time
+	// Settle e quanto tempo o deploy observa os containers depois do up:
+	// sem healthcheck, "running" na hora do up nao garante que o app fica
+	// de pe (migracao que falha, crash na subida). Zero nao observa.
+	Settle time.Duration
 }
 
 var (
@@ -312,6 +316,9 @@ func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, er
 	}
 
 	upErr := m.Docker.Up(ctx, m.project(a, SrcDir))
+	if upErr == nil {
+		upErr = m.settle(ctx, a)
+	}
 	last := Deploy{At: m.Now(), Commit: commit, Warnings: res.Warnings}
 	if upErr != nil {
 		last.Error = upErr.Error()
@@ -329,6 +336,41 @@ func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, er
 	a.Commit = commit
 	m.record(a, last)
 	return res, nil
+}
+
+// settle observa os containers por m.Settle: reiniciando, parado com erro ou
+// unhealthy e falha do deploy (e a versao anterior volta). Parado com codigo
+// 0 e servico de uma vez so (init, migracao separada) e esta certo.
+func (m Manager) settle(ctx context.Context, a App) error {
+	if m.Settle <= 0 {
+		return nil
+	}
+	tick := min(2*time.Second, m.Settle)
+	deadline := time.Now().Add(m.Settle)
+	for {
+		cs, err := m.Docker.PS(ctx, m.project(a, SrcDir))
+		if err != nil {
+			return err
+		}
+		for _, c := range cs {
+			switch {
+			case c.State == "restarting":
+				return fmt.Errorf("o container %s reinicia sem parar (%s); veja o motivo em cais app logs %s %s", c.Name, c.Status, a.Name, c.Name)
+			case (c.State == "exited" || c.State == "dead") && c.ExitCode != 0:
+				return fmt.Errorf("o container %s parou com erro (codigo %d); veja o motivo em cais app logs %s %s", c.Name, c.ExitCode, a.Name, c.Name)
+			case c.Health == "unhealthy":
+				return fmt.Errorf("o container %s ficou unhealthy; veja cais app logs %s %s", c.Name, a.Name, c.Name)
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(tick):
+		}
+	}
 }
 
 // rollback volta src.prev pro lugar e sobe de novo. O build da versao

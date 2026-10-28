@@ -47,6 +47,8 @@ type Container struct {
 	Health string `json:"health,omitempty"`
 	// Status e o texto do docker ("Up 5 minutes (healthy)").
 	Status string `json:"status"`
+	// ExitCode e o codigo de saida de um container parado.
+	ExitCode int `json:"exit_code,omitempty"`
 }
 
 // ComposePS lista os containers do projeto do arquivo, inclusive parados.
@@ -63,6 +65,7 @@ func ComposePS(ctx context.Context, file string) ([]Container, error) {
 func parsePS(out string) ([]Container, error) {
 	type raw struct {
 		Name, Service, Image, State, Health, Status string
+		ExitCode                                    int
 	}
 	var rows []raw
 	out = strings.TrimSpace(out)
@@ -83,7 +86,7 @@ func parsePS(out string) ([]Container, error) {
 	}
 	cs := make([]Container, 0, len(rows))
 	for _, r := range rows {
-		cs = append(cs, Container{Name: r.Name, Service: r.Service, Image: r.Image, State: r.State, Health: r.Health, Status: r.Status})
+		cs = append(cs, Container{Name: r.Name, Service: r.Service, Image: r.Image, State: r.State, Health: r.Health, Status: r.Status, ExitCode: r.ExitCode})
 	}
 	return cs, nil
 }

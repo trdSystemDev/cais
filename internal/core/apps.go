@@ -17,7 +17,7 @@ func (c *Core) appManager() apps.Manager {
 	if src == nil {
 		src = githubSource{c}
 	}
-	return apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now}
+	return apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now, Settle: c.deps.AppSettle}
 }
 
 // lockApp pega a trava do app sem esperar: um segundo deploy (ou restart)
