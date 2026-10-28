@@ -265,9 +265,9 @@ O deploy:
    hora so pro repositorio; caminhos e symlinks que saem da pasta sao recusados);
 3. grava o `.env` ao lado do compose: as variaveis do app mais `CAIS_APP`,
    `CAIS_COMMIT` e `CAIS_SECRETS` (a pasta dos secrets);
-4. `docker compose config`: confere o compose resolvido e **avisa** (nao
-   bloqueia) de privileged, porta publicada, `docker.sock`, bind fora da pasta,
-   labels do Traefik sem `proxy_network`, `.env` fora do `.dockerignore`...;
+4. `docker compose config`: confere o compose resolvido contra o formato do
+   cais e **recusa** (antes do build, sem tocar no que esta no ar) o que
+   foge dele, dizendo o motivo e o jeito certo de cada item (veja abaixo);
 5. `docker compose -p <app> build --pull` com a versao atual ainda no ar;
 6. troca `src` por `src.next` e `up -d --wait`;
 7. observa os containers por 15 segundos: reiniciando, parado com erro ou
@@ -297,6 +297,26 @@ secrets:
   jwt_secret:
     file: ${CAIS_SECRETS}/jwt_secret   # no container: /run/secrets/jwt_secret
 ```
+
+O que o deploy recusa (a mensagem de cada item diz como fazer; o MCP recebe
+a lista em `problems`):
+
+- porta publicada (`ports`): o acesso e pelo dominio, via Traefik; use `expose`
+  entre services;
+- `docker.sock`, bind de pasta do host fora do app, `driver_opts device`:
+  dados vao em volume nomeado; arquivos, no repositorio ou em secret do app;
+- `secrets`/`configs`/`env_file` lendo arquivo fora do app: secret do app em
+  `${CAIS_SECRETS}/<nome>`, variaveis no `.env`;
+- privileged, `cap_add`, `devices`, rede/pid/ipc/uts do host ou de outro
+  container, `security_opt` `unconfined`;
+- `container_name`, `external_links`, rede ou volume externo/de outro projeto
+  (so `proxy_network` e as redes das stacks ligadas), build de fora do
+  repositorio ou com `ssh`;
+- labels do Traefik sem `proxy_network`, ou router/service/middleware com nome
+  que nao comeca pelo nome do app (um app nao pode pisar na rota de outro).
+
+Avisos (nao bloqueiam): `.env` fora do `.dockerignore`, bind com escrita
+dentro do codigo (some no proximo deploy).
 
 Variaveis vao no `.env` (`env_file: .env` ou `${VAR}` no compose) e valem no
 proximo deploy. Secret em arquivo e opcional, pra quem nao quer o valor no

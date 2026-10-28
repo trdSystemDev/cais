@@ -71,6 +71,9 @@ type Deploy struct {
 	RolledBack bool `yaml:"rolled_back,omitempty" json:"rolled_back,omitempty"`
 	// Warnings sao os avisos sobre o compose (nao impedem o deploy).
 	Warnings []string `yaml:"warnings,omitempty" json:"warnings,omitempty"`
+	// Problems sao o que tira o compose do formato do cais: o deploy parou
+	// antes do build. Cada um diz o motivo e o jeito certo.
+	Problems []string `yaml:"problems,omitempty" json:"problems,omitempty"`
 }
 
 // Source e de onde vem o codigo (o GitHub, pelo GitHub App).
@@ -99,6 +102,9 @@ type Manager struct {
 	Source Source
 	Docker Docker
 	Now    func() time.Time
+	// Networks sao as redes da infra que os apps podem usar agora (as das
+	// stacks ligadas); a proxy_network vale sempre.
+	Networks []string
 	// Settle e quanto tempo o deploy observa os containers depois do up:
 	// sem healthcheck, "running" na hora do up nao garante que o app fica
 	// de pe (migracao que falha, crash na subida). Zero nao observa.
@@ -251,6 +257,8 @@ type DeployResult struct {
 	App      string   `json:"app"`
 	Commit   string   `json:"commit"`
 	Warnings []string `json:"warnings,omitempty"`
+	// Problems e por que o compose foi recusado (vazio se passou).
+	Problems []string `json:"problems,omitempty"`
 }
 
 // Deploy baixa o commit de ref (vazio = o mais novo da branch do app),
@@ -284,7 +292,7 @@ func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, er
 	}
 	fail := func(err error) (DeployResult, error) {
 		os.RemoveAll(filepath.Join(dir, next))
-		m.record(a, Deploy{At: m.Now(), Commit: commit, Error: err.Error(), Warnings: res.Warnings})
+		m.record(a, Deploy{At: m.Now(), Commit: commit, Error: err.Error(), Warnings: res.Warnings, Problems: res.Problems})
 		return res, err
 	}
 	if _, err := os.Stat(filepath.Join(dir, next, a.ComposeFile())); err != nil {
@@ -298,7 +306,11 @@ func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, er
 	if err != nil {
 		return fail(err)
 	}
-	res.Warnings = Warnings(cfg, filepath.Join(dir, next), m.SecretsPath(name), m.dotEnvPath(a, next))
+	res.Problems, res.Warnings = CheckCompose(cfg, Rules{App: name, Src: filepath.Join(dir, next),
+		SecretsDir: m.SecretsPath(name), DotEnv: m.dotEnvPath(a, next), Networks: m.Networks})
+	if len(res.Problems) > 0 {
+		return fail(&ComposeError{App: name, Problems: res.Problems})
+	}
 	if err := m.Docker.Build(ctx, p); err != nil {
 		return fail(err)
 	}

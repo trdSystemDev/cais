@@ -191,15 +191,21 @@ func TestAppsDeployPeloBotao(t *testing.T) {
 	}
 }
 
-func TestAppsDeployMostraAvisos(t *testing.T) {
+// compose fora do formato: o deploy e recusado e a tela diz o motivo e o
+// jeito certo
+func TestAppsDeployRecusadoMostraOMotivo(t *testing.T) {
 	m, fa, _ := openApps(t)
-	fa.config = `{"services": {"web": {"privileged": true}}}`
+	fa.config = `{"services": {"web": {"ports": [{"published": "8080", "target": 3000}]}}}`
 	m.api.CreateApp(context.Background(), apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
 	waitFor(t, m, "sem deploy")
 	click(t, m, "app:loja")
 	click(t, m, "deploy")
-	waitFor(t, m, "no ar no commit")
-	waitFor(t, m, "privileged da acesso total")
+	waitFor(t, m, "nao segue o formato do cais")
+	waitFor(t, m, "publica a porta 3000")
+	waitFor(t, m, "cais app guide loja")
+	if fa.ups.Load() != 0 {
+		t.Fatal("subiu o compose recusado")
+	}
 }
 
 func TestAppsVariaveis(t *testing.T) {

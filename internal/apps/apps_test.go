@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -359,36 +360,138 @@ func TestEnvIdaEVolta(t *testing.T) {
 	}
 }
 
-func TestWarnings(t *testing.T) {
+func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
 	src, secretsDir := "/var/lib/cais/apps/web/src.next", "/var/lib/cais/apps/web/secrets"
-	ctx := t.TempDir() // contexto de build sem .dockerignore
-	cfg := `{"services": {
-		"web": {"labels": {"traefik.enable": "true"}, "networks": {"default": null},
-			"ports": [{"published": "8080", "target": 3000}],
-			"build": {"context": "` + ctx + `"},
-			"volumes": [{"type": "bind", "source": "/var/run/docker.sock"}, {"type": "bind", "source": "/etc"},
-				{"type": "bind", "source": "` + src + `/worker"}, {"type": "bind", "source": "` + secretsDir + `/jwt"}]},
-		"db": {"privileged": true, "container_name": "postgres", "network_mode": "host"}
-	}}`
-	got := strings.Join(Warnings([]byte(cfg), src, secretsDir, filepath.Join(ctx, ".env")), "\n")
-	for _, want := range []string{"privileged", "stack do cais", "rede ou os processos", "8080:3000 em todas",
-		"docker.sock", "monta /etc", "proxy_network", ".dockerignore"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("faltou aviso sobre %q:\n%s", want, got)
-		}
+	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}}
+	cases := map[string]struct{ svc, top, want string }{
+		"porta":             {`"ports": [{"published": "8080", "target": 3000}]`, "", "tire o ports"},
+		"porta aleatoria":   {`"ports": [{"target": 3000}]`, "", "porta aleatoria"},
+		"docker.sock":       {`"volumes": [{"type": "bind", "source": "/var/run/docker.sock"}]`, "", "docker.sock"},
+		"bind fora":         {`"volumes": [{"type": "bind", "source": "/etc", "target": "/x"}]`, "", "volume nomeado"},
+		"privileged":        {`"privileged": true`, "", "privileged"},
+		"cap_add":           {`"cap_add": ["SYS_ADMIN"]`, "", "cap_add"},
+		"devices":           {`"devices": ["/dev/sda"]`, "", "devices"},
+		"rede do host":      {`"network_mode": "host"`, "", "network_mode: host"},
+		"pid do host":       {`"pid": "host"`, "", "pid: host"},
+		"ipc de fora":       {`"ipc": "container:postgres"`, "", "container de fora"},
+		"seccomp":           {`"security_opt": ["seccomp=unconfined"]`, "", "seccomp=unconfined"},
+		"container_name":    {`"container_name": "web"`, "", "container_name"},
+		"external_links":    {`"external_links": ["postgres"]`, "", "external_links"},
+		"env_file fora":     {`"env_file": [{"path": "/etc/shadow"}]`, "", "env_file: .env"},
+		"build fora":        {`"build": {"context": "/home"}`, "", "fora do repositorio"},
+		"build remoto":      {`"build": {"context": "https://github.com/x/y.git"}`, "", "proprio repositorio"},
+		"build ssh":         {`"build": {"context": "` + src + `", "ssh": ["default"]}`, "", "ssh"},
+		"router de outro":   {`"labels": {"traefik.http.routers.loja.rule": "Host(` + "`x`" + `)"}, "networks": {"proxy_network": null}`, "", "comecam com o nome do app"},
+		"traefik sem rede":  {`"labels": {"traefik.enable": "true"}`, "", "nao esta na proxy_network"},
+		"rede de outro app": {"", `"networks": {"outra": {"name": "loja_default", "external": true}}`, "nao e da infra"},
+		"rede com name":     {"", `"networks": {"outra": {"name": "loja_default"}}`, "Tire o name"},
+		"infra desligada":   {"", `"networks": {"mysql_network": {"name": "mysql_network", "external": true}}`, "Ligue o mysql"},
+		"volume external":   {"", `"volumes": {"pg": {"name": "postgres_data", "external": true}}`, "external"},
+		"volume device":     {"", `"volumes": {"d": {"name": "web_d", "driver_opts": {"device": "/etc", "o": "bind"}}}`, "driver_opts"},
+		"secret fora":       {"", `"secrets": {"chave": {"file": "/root/.ssh/id_rsa"}}`, "cais app secret web chave"},
+		"config fora":       {"", `"configs": {"c": {"file": "/etc/hosts"}}`, "fora do app"},
 	}
-	for _, bad := range []string{"/worker", "/jwt"} {
-		if strings.Contains(got, bad) {
-			t.Errorf("avisou de bind esperado %s:\n%s", bad, got)
-		}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := `{"services": {"app": {` + tc.svc + `}}`
+			if tc.top != "" {
+				cfg += ", " + tc.top
+			}
+			problems, _ := CheckCompose([]byte(cfg+"}"), r)
+			if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), tc.want) {
+				t.Fatalf("esperava problema com %q, veio %v", tc.want, problems)
+			}
+		})
 	}
+}
 
-	os.WriteFile(filepath.Join(ctx, ".dockerignore"), []byte("node_modules\n.env\n"), 0o644)
-	if got := Warnings([]byte(cfg), src, secretsDir, filepath.Join(ctx, ".env")); slices.ContainsFunc(got, func(w string) bool { return strings.Contains(w, ".dockerignore") }) {
-		t.Errorf("avisou com .env no .dockerignore: %v", got)
+func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
+	src, secretsDir := "/var/lib/cais/apps/web/src.next", "/var/lib/cais/apps/web/secrets"
+	cfg := `{"services": {
+		"web": {"build": {"context": "` + src + `/app", "dockerfile": "Dockerfile"},
+			"env_file": [{"path": "` + src + `/.env"}],
+			"labels": {"traefik.enable": "true", "traefik.http.routers.web.rule": "Host(` + "`web.x`" + `)",
+				"traefik.http.routers.web-api.rule": "PathPrefix(` + "`/api`" + `)", "traefik.http.services.web.loadbalancer.server.port": "3000"},
+			"networks": {"default": null, "proxy_network": null, "postgres_network": null},
+			"volumes": [{"type": "volume", "source": "dados", "target": "/data"},
+				{"type": "bind", "source": "` + src + `/worker", "target": "/worker", "read_only": true},
+				{"type": "bind", "source": "` + secretsDir + `/jwt", "target": "/jwt", "read_only": true}]},
+		"init": {"image": "alpine", "volumes": [{"type": "bind", "source": "` + src + `/data"}]}},
+	"networks": {"default": {"name": "web_default"}, "proxy_network": {"name": "proxy_network", "external": true},
+		"postgres_network": {"name": "postgres_network", "external": true}},
+	"volumes": {"dados": {"name": "web_dados"}},
+	"secrets": {"jwt": {"file": "` + secretsDir + `/jwt"}, "env": {}}}`
+	problems, warnings := CheckCompose([]byte(cfg), Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}})
+	if len(problems) != 0 {
+		t.Fatalf("recusou o formato do cais: %v", problems)
 	}
-	if got := Warnings([]byte(`{"services": {"web": {}}}`), src, secretsDir, ""); len(got) != 0 {
-		t.Errorf("compose limpo com avisos: %v", got)
+	// bind com escrita no codigo: os dados somem no proximo deploy
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "some no proximo deploy") {
+		t.Errorf("avisos %v", warnings)
+	}
+}
+
+func TestCheckComposeAvisaDoEnvNoBuild(t *testing.T) {
+	ctx := t.TempDir()
+	cfg := []byte(`{"services": {"web": {"build": {"context": "` + ctx + `"}}}}`)
+	r := Rules{App: "web", Src: ctx, DotEnv: filepath.Join(ctx, ".env")}
+	if _, w := CheckCompose(cfg, r); len(w) != 1 || !strings.Contains(w[0], ".dockerignore") {
+		t.Errorf("sem .dockerignore: %v", w)
+	}
+	os.WriteFile(filepath.Join(ctx, ".dockerignore"), []byte("node_modules\n.env\n"), 0o644)
+	if _, w := CheckCompose(cfg, r); len(w) != 0 {
+		t.Errorf("com .env no .dockerignore: %v", w)
+	}
+}
+
+func TestDeployRecusaComposeForaDoFormato(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	m.Deploy(context.Background(), "web", "c1")
+	d.calls = nil
+	d.config = `{"services": {"web": {"ports": [{"published": "80", "target": 80}], "privileged": true}}}`
+
+	res, err := m.Deploy(context.Background(), "web", "c2")
+	var ce *ComposeError
+	if !errors.As(err, &ce) || len(ce.Problems) != 2 || len(res.Problems) != 2 {
+		t.Fatalf("erro %v, res %+v", err, res)
+	}
+	if !strings.Contains(err.Error(), "nada foi buildado") || !strings.Contains(err.Error(), "cais app guide web") {
+		t.Errorf("mensagem %v", err)
+	}
+	// para antes do build: o que esta no ar nem e tocado
+	if !slices.Equal(d.calls, []string{"config v2"}) {
+		t.Errorf("chamadas %v", d.calls)
+	}
+	a, _ := m.Get("web")
+	if a.Commit != "c1" || len(a.Last.Problems) != 2 {
+		t.Errorf("app %+v %+v", a, a.Last)
+	}
+}
+
+// o modelo da Ajuda, resolvido pelo docker compose de verdade, passa na
+// checagem: o jeito certo que o cais ensina e aceito
+func TestModeloDaAjudaPassaNaChecagem(t *testing.T) {
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skip("docker compose nao instalado")
+	}
+	root := t.TempDir()
+	src, secretsDir := filepath.Join(root, "src"), filepath.Join(root, "secrets")
+	os.MkdirAll(src, 0o755)
+	os.MkdirAll(secretsDir, 0o700)
+	os.WriteFile(filepath.Join(secretsDir, "jwt"), []byte("x"), 0o444)
+	os.WriteFile(filepath.Join(src, ".env"), []byte("CAIS_SECRETS="+secretsDir+"\nDATABASE_URL=x\n"), 0o600)
+	g := Guide(GuideInput{App: "web", Host: "web.exemplo.com.br", Networks: []string{"postgres_network"},
+		Env: []string{"DATABASE_URL"}, Secrets: []string{"jwt"}})
+	os.WriteFile(filepath.Join(src, "docker-compose.yml"), []byte(g), 0o644)
+	cmd := exec.Command("docker", "compose", "-p", "web", "-f", filepath.Join(src, "docker-compose.yml"), "config", "--format", "json", "--no-env-resolution")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("o modelo nao e um compose valido: %v\n%s", err, g)
+	}
+	problems, _ := CheckCompose(out, Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}})
+	if len(problems) != 0 {
+		t.Fatalf("o modelo da Ajuda foi recusado: %v\n%s", problems, g)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 
@@ -324,7 +325,12 @@ func forwardStates(c *conn, states <-chan core.State, unsubscribe func()) {
 
 func wrap[T any](v T, err error) (any, *Error) {
 	if err != nil {
-		return nil, actionError(err)
+		e := actionError(err)
+		// o que a acao conseguiu dizer antes de falhar vai junto
+		if !reflect.ValueOf(&v).Elem().IsZero() {
+			e.Data, _ = json.Marshal(v)
+		}
+		return nil, e
 	}
 	return v, nil
 }

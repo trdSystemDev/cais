@@ -942,6 +942,12 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 			line += ")"
 		}
 		fmt.Fprintf(b, "  %-14s %s\n", "ult. deploy", t.fg(c).Render(line))
+		if len(l.Problems) > 0 {
+			b.WriteString(lipgloss.NewStyle().Width(w).Foreground(t.danger).Render("    compose recusado (corrija no repositorio; modelo na Ajuda):") + "\n")
+		}
+		for _, pr := range l.Problems {
+			b.WriteString(lipgloss.NewStyle().Width(w).Foreground(t.danger).Render("    - "+pr) + "\n")
+		}
 		for _, wn := range l.Warnings {
 			b.WriteString(lipgloss.NewStyle().Width(w).Foreground(t.warn).Render("    aviso: "+wn) + "\n")
 		}

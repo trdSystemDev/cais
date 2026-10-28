@@ -17,7 +17,22 @@ func (c *Core) appManager() apps.Manager {
 	if src == nil {
 		src = githubSource{c}
 	}
-	return apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now, Settle: c.deps.AppSettle}
+	m := apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now, Settle: c.deps.AppSettle}
+	if cfg, err := config.Load(c.deps.ConfigPath); err == nil {
+		m.Networks = infraNetworks(cfg)
+	}
+	return m
+}
+
+// infraNetworks sao as redes das stacks ligadas que um app pode usar.
+func infraNetworks(cfg config.Config) []string {
+	var out []string
+	for _, st := range []string{"postgres", "mysql", "garage"} {
+		if cfg.HasStack(st) {
+			out = append(out, st+"_network")
+		}
+	}
+	return out
 }
 
 // lockApp pega a trava do app sem esperar: um segundo deploy (ou restart)
@@ -229,12 +244,7 @@ func (c *Core) AppGuide(_ context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	in := apps.GuideInput{App: a.Name, Host: a.Name + "." + cfg.Domain}
-	for _, st := range []string{"postgres", "mysql", "garage"} {
-		if cfg.HasStack(st) {
-			in.Networks = append(in.Networks, st+"_network")
-		}
-	}
+	in := apps.GuideInput{App: a.Name, Host: a.Name + "." + cfg.Domain, Networks: infraNetworks(cfg)}
 	env, err := m.Env(name)
 	if err != nil {
 		return "", err

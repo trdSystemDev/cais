@@ -182,6 +182,9 @@ func (c *Client) call(ctx context.Context, method string, in, out any) error {
 			return ErrDisconnected
 		}
 		if m.Error != nil {
+			if out != nil && len(m.Error.Data) > 0 {
+				json.Unmarshal(m.Error.Data, out)
+			}
 			return m.Error
 		}
 		if out == nil {

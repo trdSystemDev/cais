@@ -62,6 +62,9 @@ var ErrDisconnected = errors.New("conexao com o daemon encerrada")
 type Error struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	// Data e o resultado parcial de uma acao que falhou, quando ha (ex: o
+	// deploy recusado traz a lista problems, um motivo por item).
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // Error de uma acao que falhou e so a mensagem dela, que ja diz o que

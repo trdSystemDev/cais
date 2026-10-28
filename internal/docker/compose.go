@@ -142,7 +142,7 @@ func (CLI) Up(ctx context.Context, p Project) error {
 // Config devolve o compose resolvido (interpolado, com ancoras e extends
 // aplicados) em JSON, como o docker compose vai usar.
 func (CLI) Config(ctx context.Context, p Project) ([]byte, error) {
-	out, err := execRunner(ctx, "docker", p.args("config", "--format", "json")...)
+	out, err := execRunner(ctx, "docker", p.args("config", "--format", "json", "--no-env-resolution")...)
 	if err != nil {
 		return nil, fmt.Errorf("o compose do app tem erro (%s): %w", p.Name, lastLines(err.Error(), 10))
 	}

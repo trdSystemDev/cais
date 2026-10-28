@@ -396,10 +396,16 @@ func TestContainerLogsPeloSocket(t *testing.T) {
 	}
 }
 
-type fakeAppDocker struct{ ups atomic.Int32 }
+type fakeAppDocker struct {
+	ups    atomic.Int32
+	config atomic.Value // json do compose resolvido
+}
 
 func (f *fakeAppDocker) Config(context.Context, docker.Project) ([]byte, error) {
-	return []byte(`{"services": {"web": {"privileged": true}}}`), nil
+	if v, ok := f.config.Load().(string); ok {
+		return []byte(v), nil
+	}
+	return []byte(`{"services": {"web": {}}}`), nil
 }
 func (f *fakeAppDocker) Build(context.Context, docker.Project) error { return nil }
 func (f *fakeAppDocker) Up(context.Context, docker.Project) error    { f.ups.Add(1); return nil }
@@ -444,13 +450,17 @@ func TestAppPeloSocket(t *testing.T) {
 	if err := c.SetAppSecret(ctx, "meu-app", "jwt", "x"); err != nil {
 		t.Fatal(err)
 	}
+	// compose fora do formato: recusado, com o motivo na mensagem e a lista
+	// em Problems (o MCP le os dois)
+	ad.config.Store(`{"services": {"web": {"privileged": true}}}`)
 	res, err := c.DeployApp(ctx, "meu-app", "")
+	if err == nil || !strings.Contains(err.Error(), "privileged") || len(res.Problems) != 1 || ad.ups.Load() != 0 {
+		t.Fatalf("deploy recusado: %+v %v (ups %d)", res, err, ad.ups.Load())
+	}
+	ad.config.Store(`{"services": {"web": {}}}`)
+	res, err = c.DeployApp(ctx, "meu-app", "")
 	if err != nil || res.Commit != "c0ffee" || ad.ups.Load() != 1 {
 		t.Fatalf("deploy: %+v %v (ups %d)", res, err, ad.ups.Load())
-	}
-	// aviso volta junto, sem impedir o deploy
-	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "privileged") {
-		t.Errorf("avisos %v", res.Warnings)
 	}
 	list, err := c.CheckApps(ctx)
 	if err != nil || len(list.List) != 1 || list.List[0].Commit != "c0ffee" || len(list.List[0].Secrets) != 1 {
