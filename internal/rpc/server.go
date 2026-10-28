@@ -150,6 +150,51 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		}
 		return wrap(s.api.ContainerLogs(c.ctx, p.Stack, p.Container))
 
+	case MethodAppsCheck:
+		return wrap(s.api.CheckApps(s.ctx))
+
+	case MethodAppCreate:
+		var p appParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.CreateApp(s.ctx, p.Name))
+
+	case MethodAppRoutes:
+		var p routesParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetAppRoutes(s.ctx, p.Name, p.Routes))
+
+	case MethodAppDeploy:
+		var p deployParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.DeployApp(s.ctx, p.Name, p.Compose))
+
+	case MethodAppRestart:
+		var p appParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.RestartApp(s.ctx, p.Name, p.Service))
+
+	case MethodAppStop:
+		var p appParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.StopApp(s.ctx, p.Name))
+
+	case MethodAppLogs:
+		var p appParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.AppLogs(s.ctx, p.Name, p.Container))
+
 	case MethodInfraCheck:
 		return wrap(s.api.CheckStacks(s.ctx))
 

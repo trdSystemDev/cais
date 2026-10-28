@@ -2,9 +2,11 @@ package core
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
@@ -25,8 +27,12 @@ type Deps struct {
 	ComposeDown   func(ctx context.Context, file string) error
 	ContainerLogs func(context.Context, string) (string, error)
 	ComposePS     func(ctx context.Context, file string) ([]docker.Container, error)
-	Exec          func(ctx context.Context, container string, args ...string) (string, error)
-	Login         func(ctx context.Context, host, user string, password []byte) error
+
+	// Apps: pasta dos apps e as operacoes de projeto compose deles.
+	AppsDir   string
+	AppDocker apps.Docker
+	Exec      func(ctx context.Context, container string, args ...string) (string, error)
+	Login     func(ctx context.Context, host, user string, password []byte) error
 }
 
 // Core guarda o estado e executa as acoes. E seguro pra uso concorrente:
@@ -44,6 +50,14 @@ type Core struct {
 	nextSub     int
 	checks      int // checagens de ambiente em andamento
 	infraChecks int // checagens das stacks em andamento
+	appChecks   int // checagens dos apps em andamento
+
+	// appLocks tem uma trava por app: dois deploys do mesmo app nunca rodam
+	// juntos, mas apps diferentes sim (o CI pode publicar varios ao mesmo
+	// tempo). routes serializa a troca de rotas, que confere dominios entre
+	// todos os apps.
+	appLocks sync.Map // nome -> *sync.Mutex
+	routes   sync.Mutex
 }
 
 // New cria o Core. Nenhuma acao roda aqui: quem decide quando checar o
@@ -75,6 +89,12 @@ func New(d Deps) *Core {
 	}
 	if d.ComposePS == nil {
 		d.ComposePS = docker.ComposePS
+	}
+	if d.AppsDir == "" {
+		d.AppsDir = filepath.Join(config.DataDir(), "apps")
+	}
+	if d.AppDocker == nil {
+		d.AppDocker = docker.CLI{}
 	}
 	if d.Exec == nil {
 		d.Exec = docker.Exec

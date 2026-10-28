@@ -184,6 +184,15 @@ func (c Config) Validate() error {
 	return errors.Join(errs...)
 }
 
+// ValidHost confere um nome de dominio (ex: a rota de um app).
+func ValidHost(h string) error { return validHost(h) }
+
+// ReservedHosts sao os nomes das stacks publicas: nenhum app pode usar,
+// mesmo com a stack desligada (ela pode ser ligada depois).
+func (c Config) ReservedHosts() []string {
+	return []string{c.CIHost(), c.RegistryHost(), c.S3Host()}
+}
+
 func validHost(h string) error {
 	if h == "" {
 		return errors.New("vazio")

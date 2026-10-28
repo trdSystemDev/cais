@@ -3,6 +3,7 @@ package core
 import (
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
@@ -19,6 +20,7 @@ type State struct {
 	Environment Environment `json:"environment"`
 	Setup       Setup       `json:"setup"`
 	Infra       Infra       `json:"infra"`
+	Apps        Apps        `json:"apps"`
 }
 
 // Infra e o estado das stacks base, como o docker ve.
@@ -28,6 +30,23 @@ type Infra struct {
 	Stacks    []StackStatus `json:"stacks,omitempty"`
 	// Error e problema lendo a config (as stacks ainda sao listadas).
 	Error string `json:"error,omitempty"`
+}
+
+// Apps e o estado dos apps: o que o cais guarda de cada um e como o docker
+// ve os containers dele.
+type Apps struct {
+	Checking  bool        `json:"checking"`
+	CheckedAt time.Time   `json:"checked_at,omitzero"`
+	List      []AppStatus `json:"list,omitempty"`
+	Error     string      `json:"error,omitempty"`
+}
+
+// AppStatus e um app, os containers dele e se ha um deploy em andamento.
+type AppStatus struct {
+	apps.App
+	Deploying  bool               `json:"deploying,omitempty"`
+	Containers []docker.Container `json:"containers,omitempty"`
+	Error      string             `json:"error,omitempty"`
 }
 
 // StackStatus e uma stack base e os containers dela.

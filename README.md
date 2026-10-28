@@ -239,6 +239,22 @@ confiar nela (`/etc/docker/certs.d/<registry>/ca.crt` pro docker, `trust anchor`
 pro sistema). Use `CAIS_SOCKET`, `CAIS_CONFIG` e `CAIS_DATA_DIR` numa pasta
 persistente (nao `/tmp`: os volumes sobrevivem ao reboot e os secrets nao).
 
+Apps (cada um em `/var/lib/cais/apps/<app>`, projeto compose com o nome do app):
+
+```sh
+cais app create meu-app
+cais app deploy meu-app < docker-compose.yml       # valida, sobe e espera os healthchecks
+cais app routes meu-app app.exemplo.com.br=web:3000 app.exemplo.com.br/api=api:8080
+cais apps                                          # estado de todos
+cais app logs meu-app meu-app-web-1
+```
+
+O compose do app vem do repositorio e passa pela validacao de `internal/compose`
+(lista de permitidos: nada de privilegiado, caminho do host, rede ou volume de
+outra stack, porta publicada nem label do Traefik). O roteamento e do cais: as
+rotas viram um `cais.override.yml` com os labels, e um dominio pertence a um app
+so. Se o deploy falha e havia versao no ar, ela volta sozinha.
+
 Acesso ao registry de imagens:
 
 ```sh

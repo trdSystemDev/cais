@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 )
@@ -53,6 +54,23 @@ type API interface {
 	AddRegistryUser(ctx context.Context, user string) (string, error)
 	// RemoveRegistryUser tira o acesso de uma pessoa.
 	RemoveRegistryUser(ctx context.Context, user string) error
+
+	// CheckApps le os apps e os containers deles e publica em State.Apps.
+	CheckApps(ctx context.Context) (Apps, error)
+	// CreateApp cria um app vazio (pasta, secrets/); o primeiro deploy sobe.
+	CreateApp(ctx context.Context, name string) (apps.App, error)
+	// SetAppRoutes troca as rotas (dominio -> service:porta) do app. Um
+	// dominio pertence a um app so; app no ar e atualizado na hora.
+	SetAppRoutes(ctx context.Context, name string, routes []apps.Route) error
+	// DeployApp valida e sobe um compose novo do app. Se falhar com uma
+	// versao no ar, ela volta e o erro diz isso.
+	DeployApp(ctx context.Context, name, compose string) (apps.DeployResult, error)
+	// RestartApp reinicia um service do app (ou todos, com service vazio).
+	RestartApp(ctx context.Context, name, service string) error
+	// StopApp para o app sem apagar nada.
+	StopApp(ctx context.Context, name string) error
+	// AppLogs le as ultimas linhas de um container do app.
+	AppLogs(ctx context.Context, name, container string) (string, error)
 }
 
 // ConfigInfo e o config.yaml atual.

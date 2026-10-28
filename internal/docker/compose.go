@@ -123,3 +123,61 @@ func lastLines(s string, n int) error {
 	}
 	return fmt.Errorf("%s", strings.Join(lines, "\n"))
 }
+
+// Project e um projeto compose de app: nome fixo (o -p tem prioridade sobre
+// qualquer name: no arquivo) e os arquivos na ordem do merge. A pasta do
+// primeiro arquivo e a base dos caminhos relativos (./secrets, ./app.env).
+type Project struct {
+	Name  string
+	Files []string
+}
+
+func (p Project) args(cmd ...string) []string {
+	args := []string{"compose", "-p", p.Name}
+	for _, f := range p.Files {
+		args = append(args, "-f", f)
+	}
+	return append(args, cmd...)
+}
+
+// CLI implementa as operacoes de projeto com o docker compose da maquina.
+type CLI struct{}
+
+// Up sobe o projeto e espera os servicos ficarem saudaveis. Imagem que
+// ainda nao existe na maquina e baixada (tags de commit nunca mudam).
+func (CLI) Up(ctx context.Context, p Project) error {
+	_, err := execRunner(ctx, "docker", p.args("up", "-d", "--wait", "--wait-timeout", "300", "--remove-orphans")...)
+	if err != nil {
+		return fmt.Errorf("docker compose up (%s): %w", p.Name, lastLines(err.Error(), 15))
+	}
+	return nil
+}
+
+// PS lista os containers do projeto, inclusive parados.
+func (CLI) PS(ctx context.Context, p Project) ([]Container, error) {
+	out, err := execRunner(ctx, "docker", p.args("ps", "-a", "--format", "json")...)
+	if err != nil {
+		return nil, fmt.Errorf("docker compose ps (%s): %w", p.Name, lastLines(err.Error(), 5))
+	}
+	return parsePS(out)
+}
+
+// Restart reinicia um service do projeto, ou todos se service for vazio.
+func (CLI) Restart(ctx context.Context, p Project, service string) error {
+	cmd := []string{"restart"}
+	if service != "" {
+		cmd = append(cmd, service)
+	}
+	if _, err := execRunner(ctx, "docker", p.args(cmd...)...); err != nil {
+		return fmt.Errorf("docker compose restart (%s): %w", p.Name, lastLines(err.Error(), 5))
+	}
+	return nil
+}
+
+// Stop para os containers do projeto sem remover nada.
+func (CLI) Stop(ctx context.Context, p Project) error {
+	if _, err := execRunner(ctx, "docker", p.args("stop")...); err != nil {
+		return fmt.Errorf("docker compose stop (%s): %w", p.Name, lastLines(err.Error(), 5))
+	}
+	return nil
+}

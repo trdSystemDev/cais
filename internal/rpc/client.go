@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
@@ -274,5 +275,39 @@ func (c *Client) publish(st core.State) {
 
 func (c *Client) ContainerLogs(ctx context.Context, stack, container string) (out string, err error) {
 	err = c.call(ctx, MethodContainerLogs, logsParams{Stack: stack, Container: container}, &out)
+	return
+}
+
+func (c *Client) CheckApps(ctx context.Context) (a core.Apps, err error) {
+	err = c.call(ctx, MethodAppsCheck, nil, &a)
+	return
+}
+
+func (c *Client) CreateApp(ctx context.Context, name string) (a apps.App, err error) {
+	err = c.call(ctx, MethodAppCreate, appParams{Name: name}, &a)
+	return
+}
+
+func (c *Client) SetAppRoutes(ctx context.Context, name string, routes []apps.Route) error {
+	return c.call(ctx, MethodAppRoutes, routesParams{Name: name, Routes: routes}, nil)
+}
+
+// DeployApp bloqueia ate o deploy terminar (espera os healthchecks). Se o
+// cliente desistir, o deploy continua no daemon.
+func (c *Client) DeployApp(ctx context.Context, name, compose string) (r apps.DeployResult, err error) {
+	err = c.call(ctx, MethodAppDeploy, deployParams{Name: name, Compose: compose}, &r)
+	return
+}
+
+func (c *Client) RestartApp(ctx context.Context, name, service string) error {
+	return c.call(ctx, MethodAppRestart, appParams{Name: name, Service: service}, nil)
+}
+
+func (c *Client) StopApp(ctx context.Context, name string) error {
+	return c.call(ctx, MethodAppStop, appParams{Name: name}, nil)
+}
+
+func (c *Client) AppLogs(ctx context.Context, name, container string) (out string, err error) {
+	err = c.call(ctx, MethodAppLogs, appParams{Name: name, Container: container}, &out)
 	return
 }

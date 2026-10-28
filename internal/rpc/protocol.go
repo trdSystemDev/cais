@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/trdSystemDev/cais/internal/apps"
 )
 
 // Metodos aceitos pelo daemon.
@@ -28,6 +30,13 @@ const (
 	MethodRegistryUsers    = "registry.users"
 	MethodRegistryUserAdd  = "registry.user.add"    // params: userParams
 	MethodRegistryUserDel  = "registry.user.remove" // params: userParams
+	MethodAppsCheck        = "apps.check"
+	MethodAppCreate        = "app.create"  // params: appParams
+	MethodAppRoutes        = "app.routes"  // params: routesParams
+	MethodAppDeploy        = "app.deploy"  // params: deployParams
+	MethodAppRestart       = "app.restart" // params: appParams (service opcional)
+	MethodAppStop          = "app.stop"    // params: appParams
+	MethodAppLogs          = "app.logs"    // params: appParams (container)
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -94,4 +103,20 @@ type serviceParams struct {
 type logsParams struct {
 	Stack     string `json:"stack"`
 	Container string `json:"container"`
+}
+
+type appParams struct {
+	Name      string `json:"name"`
+	Service   string `json:"service,omitempty"`
+	Container string `json:"container,omitempty"`
+}
+
+type routesParams struct {
+	Name   string       `json:"name"`
+	Routes []apps.Route `json:"routes"`
+}
+
+type deployParams struct {
+	Name    string `json:"name"`
+	Compose string `json:"compose"`
 }

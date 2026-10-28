@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
@@ -403,5 +404,47 @@ func TestContainerLogsPeloSocket(t *testing.T) {
 	}
 	if _, err := c.ContainerLogs(context.Background(), "garage", "mysql"); err == nil {
 		t.Fatal("aceitou container de outra stack")
+	}
+}
+
+type fakeAppDocker struct{ ups atomic.Int32 }
+
+func (f *fakeAppDocker) Up(context.Context, docker.Project) error { f.ups.Add(1); return nil }
+func (f *fakeAppDocker) PS(_ context.Context, p docker.Project) ([]docker.Container, error) {
+	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running"}}, nil
+}
+func (f *fakeAppDocker) Restart(context.Context, docker.Project, string) error { return nil }
+func (f *fakeAppDocker) Stop(context.Context, docker.Project) error            { return nil }
+
+func TestAppPeloSocket(t *testing.T) {
+	root := t.TempDir()
+	ad := &fakeAppDocker{}
+	d := startDaemonDeps(t, core.Deps{
+		CheckDocker: okStatus,
+		ConfigPath:  filepath.Join(root, "config.yaml"),
+		AppsDir:     filepath.Join(root, "apps"),
+		AppDocker:   ad,
+	})
+	c := dial(t, d.path)
+	ctx := context.Background()
+
+	if _, err := c.CreateApp(ctx, "meu-app"); err != nil {
+		t.Fatal(err)
+	}
+	routes := []apps.Route{{Host: "app.exemplo.com.br", Service: "web", Port: 3000}}
+	if err := c.SetAppRoutes(ctx, "meu-app", routes); err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.DeployApp(ctx, "meu-app", "services:\n  web:\n    image: x/meu-app:v1\n")
+	if err != nil || len(res.Images) != 1 || ad.ups.Load() != 1 {
+		t.Fatalf("deploy: %+v %v (ups %d)", res, err, ad.ups.Load())
+	}
+	_, err = c.DeployApp(ctx, "meu-app", "services:\n  web:\n    image: x\n    privileged: true\n")
+	if err == nil || !strings.Contains(err.Error(), "privileged") {
+		t.Fatalf("deploy com privileged: %v", err)
+	}
+	list, err := c.CheckApps(ctx)
+	if err != nil || len(list.List) != 1 || len(list.List[0].Routes) != 1 || list.List[0].Last == nil {
+		t.Fatalf("apps: %+v %v", list, err)
 	}
 }

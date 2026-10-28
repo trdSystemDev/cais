@@ -40,6 +40,17 @@ Setup da VPS:
 Servicos opcionais (proxy, registry e woodpecker sobem sempre):
   cais service <nome> on|off         liga ou desliga postgres, mysql ou garage e aplica
 
+Apps:
+  cais apps                          lista os apps e o estado dos containers
+  cais app create <nome>             cria um app (o nome do repositorio no GitHub)
+  cais app routes <nome> [rota...]   mostra ou troca as rotas; rota: dominio[/caminho]=service:porta
+                                     ex: app.exemplo.com.br=web:3000 app.exemplo.com.br/api=api:8080
+  cais app deploy <nome> < docker-compose.yml
+                                     valida e sobe; se falhar, a versao anterior volta
+  cais app restart <nome> [service]  reinicia o app (ou um service)
+  cais app stop <nome>               para o app sem apagar nada
+  cais app logs <nome> <container>   ultimas linhas do log
+
 Registry de imagens:
   cais registry users                lista quem pode entrar
   cais registry add <usuario>        cria o acesso e mostra a senha (uma vez so)
@@ -68,6 +79,10 @@ func main() {
 		err = runSetup(args)
 	case "registry":
 		err = runRegistry(args)
+	case "apps":
+		err = runApps(args)
+	case "app":
+		err = runApp(args)
 	case "service":
 		err = runService(args)
 	case "version":
