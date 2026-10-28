@@ -20,6 +20,7 @@ var tabs = []string{"Dashboard", "Apps", "Secrets", "Bancos", "Infra", "Setup"}
 
 const (
 	tabDashboard = 0
+	tabApps      = 1
 	tabInfra     = 4
 	tabSetup     = 5
 )
@@ -29,7 +30,6 @@ var placeholders = map[int]struct {
 	phase int
 	desc  string
 }{
-	1: {3, "Criar app pelo link do GitHub, deploy, logs ao vivo, restart."},
 	2: {3, "Secrets centrais e por app: gerar, copiar, propagar."},
 	3: {4, "Databases e usuarios no Postgres/MySQL, instancias dedicadas."},
 }
@@ -37,6 +37,7 @@ var placeholders = map[int]struct {
 // helps sao os atalhos de cada aba, no rodape.
 var helps = map[int]string{
 	tabDashboard: "enter/r verifica · ",
+	tabApps:      "↑↓ app · ←→ secao · enter/tab entra no formulario · esc volta · n novo app · ",
 	tabInfra:     "↑↓ card · ←→ container · espaco liga/desliga · r atualiza · ",
 	tabSetup:     "tab/↑↓ campo · espaco marca · ctrl+s salva · ctrl+r executa · ",
 }
@@ -75,6 +76,7 @@ type model struct {
 	// a conexao com o daemon caiu: nada na tela e confiavel, so sair
 	disconnected bool
 	setup        *setupPage
+	apps         *appsPage
 
 	selectionGeneration uint64
 	logSelection        logSelection
@@ -104,6 +106,7 @@ type (
 func newModel(api core.API, states <-chan core.State) *model {
 	m := &model{api: api, zones: zone.New(), th: newTheme(true), states: states}
 	m.setup = newSetupPage(api, m.zones, m.th)
+	m.apps = newAppsPage(api, m.zones, m.th)
 	return m
 }
 
@@ -146,11 +149,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.th = newTheme(msg.IsDark())
 		m.setup.setTheme(m.th)
+		m.apps.setTheme(m.th)
 		return m, nil
 	case stateMsg:
 		m.state = core.State(msg)
 		m.setup.onState(m.state)
-		return m, tea.Batch(m.waitState(), m.syncInfraLogs(false))
+		appsCmd := m.apps.onState(m.state)
+		return m, tea.Batch(m.waitState(), m.syncInfraLogs(false), appsCmd, m.syncAppLogs(false))
 	case closedMsg:
 		m.disconnected = true
 		return m, nil
@@ -172,6 +177,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		m.logSelection = logSelection{}
 
+		if m.tab == tabApps && !m.disconnected && m.zones.Get("app-logs").InBounds(msg) {
+			m.scrollLogs(msg.Button == tea.MouseWheelUp)
+			return m, nil
+		}
+		if m.tab == tabApps && !m.disconnected && m.zones.Get("app-detail").InBounds(msg) {
+			m.apps.wheel(msg.Button == tea.MouseWheelUp)
+			return m, nil
+		}
 		if m.tab != tabInfra || m.disconnected {
 			return m, nil
 		}
@@ -221,6 +234,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetchInfraLogs()
 	case serviceDoneMsg:
 		return m, m.onServiceDone(msg)
+	case appLogsMsg:
+		return m, m.onAppLogs(msg)
+	case appLogsTick:
+		return m, m.onAppLogsTick(msg)
+	}
+	if cmd, ok := m.apps.update(msg); ok {
+		return m, tea.Batch(cmd, m.syncAppLogs(false))
 	}
 	// respostas das acoes da aba Setup
 	cmd := m.setup.update(msg)
@@ -242,6 +262,9 @@ func (m *model) setTab(i int) tea.Cmd {
 	if i == tabInfra && !m.state.Infra.Checking {
 		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
 	}
+	if i == tabApps {
+		return tea.Batch(m.apps.checkCmd(), m.syncAppLogs(true))
+	}
 	return nil
 }
 
@@ -262,6 +285,8 @@ func (m *model) click(msg tea.MouseMsg) tea.Cmd {
 		if m.zones.Get("check").InBounds(msg) && !m.state.Environment.Checking {
 			return m.checkCmd()
 		}
+	case tabApps:
+		return m.appsClick(msg)
 	case tabInfra:
 		return m.infraClick(msg)
 	case tabSetup:
@@ -282,7 +307,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	// numeros trocam de aba, menos quando o foco esta num campo de texto
-	typing := m.tab == tabSetup && m.setup.typing()
+	typing := (m.tab == tabSetup && m.setup.typing()) || (m.tab == tabApps && m.apps.typing())
 	if !typing && len(k) == 1 && k[0] >= '1' && int(k[0]-'1') < len(tabs) {
 		return m.setTab(int(k[0] - '1'))
 	}
@@ -291,6 +316,8 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		if (k == "enter" || k == "r") && !m.state.Environment.Checking {
 			return m.checkCmd()
 		}
+	case tabApps:
+		return m.appsKey(msg)
 	case tabInfra:
 		return m.infraKey(k)
 	case tabSetup:
@@ -313,13 +340,19 @@ func (m *model) View() tea.View {
 	}
 
 	header := m.viewTabs()
-	footer := m.th.fg(m.th.muted).Render(" clique ou 1-6 troca de aba · " + helps[m.tab] + "ctrl+q sai")
+	help := helps[m.tab]
+	if m.tab == tabApps && m.apps.inForm {
+		help = "tab/↑↓ campo · ←→ escolhe · enter/espaco ativa · esc volta pra lista · roda rola · "
+	}
+	footer := m.th.fg(m.th.muted).Render(" clique ou 1-6 troca de aba · " + help + "ctrl+q sai")
 	bodyH := m.h - lipgloss.Height(header) - lipgloss.Height(footer)
 
 	var body string
 	switch m.tab {
 	case tabDashboard:
 		body = m.viewDashboard(bodyH)
+	case tabApps:
+		body = m.viewApps(bodyH)
 	case tabInfra:
 		body = m.viewInfra(bodyH)
 	case tabSetup:

@@ -290,10 +290,23 @@ func (m *model) viewInfraLogs(w, h int) string {
 		b.WriteString(t.fg(color).Render(ansi.Truncate(m.infraMsg, w-6, "…")) + "\n")
 	}
 	b.WriteString("\n")
+	empty := ""
+	if len(st.Containers) == 0 {
+		empty = "Nenhum container disponivel. Ligue o servico ou execute o Setup."
+	}
+	m.writeLogs(&b, empty, w, h)
+	return t.panel(false, w-2, h).MaxHeight(h + 2).Render(b.String())
+}
+
+// writeLogs escreve o texto dos logs (m.logsText) no fim de b, com a
+// rolagem e a selecao pra copiar, e registra a area na tela (m.logArea).
+// empty, quando nao vazio, substitui o texto (nada pra mostrar). Serve as
+// abas Infra e Apps: so uma fica aberta por vez.
+func (m *model) writeLogs(b *strings.Builder, empty string, w, h int) {
 	text := m.logsText
 	switch {
-	case len(st.Containers) == 0:
-		text = "Nenhum container disponivel. Ligue o servico ou execute o Setup."
+	case empty != "":
+		text = empty
 	case m.logsError != "":
 		text = "Erro ao ler logs: " + m.logsError
 	case text == "":
@@ -327,7 +340,6 @@ func (m *model) viewInfraLogs(w, h int) string {
 	}
 	m.logArea = logArea{x: m.w - w + 2, y: lipgloss.Height(m.viewTabs()) + lipgloss.Height(b.String()), width: w - 6, height: available, lines: append([]string(nil), visibleLines...), allLines: lines, start: start}
 	b.WriteString(visible)
-	return t.panel(false, w-2, h).MaxHeight(h + 2).Render(b.String())
 }
 
 // runningStep e a descricao do passo do Setup em andamento.

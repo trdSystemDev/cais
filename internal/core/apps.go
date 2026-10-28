@@ -59,6 +59,9 @@ func (c *Core) CheckApps(ctx context.Context) (Apps, error) {
 		if st.Containers, err = m.Status(ctx, a.Name); err != nil {
 			st.Error = err.Error()
 		}
+		if st.Secrets, err = m.Secrets(a.Name); err != nil && st.Error == "" {
+			st.Error = err.Error()
+		}
 		result.List = append(result.List, st)
 	}
 

@@ -99,6 +99,9 @@ func run(t *testing.T, m *model, cmd tea.Cmd) tea.Msg {
 		if _, ok := msg.(infraLogsMsg); ok {
 			return last
 		}
+		if _, ok := msg.(appLogsMsg); ok {
+			return last
+		}
 		if _, ok := msg.(stateMsg); ok {
 			return last
 		}
@@ -256,7 +259,7 @@ func TestCliqueTrocaDeAba(t *testing.T) {
 	waitFor(t, m, "Pronto.")
 
 	click(t, m, "tab:Apps")
-	waitFor(t, m, "chega na fase 3")
+	waitFor(t, m, "+ Novo app")
 
 	click(t, m, "tab:Setup")
 	waitFor(t, m, "Configuracao")
