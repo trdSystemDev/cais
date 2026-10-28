@@ -188,6 +188,25 @@ func (CLI) Stop(ctx context.Context, p Project) error {
 	return nil
 }
 
+// Down remove o projeto pelo nome (containers, redes e as imagens que o
+// build dele criou), sem precisar do compose: funciona com o arquivo
+// quebrado ou ja apagado. Com volumes, apaga tambem os volumes (os dados).
+func (CLI) Down(ctx context.Context, name string, volumes bool) error {
+	args := []string{"compose", "-p", name, "down", "--remove-orphans"}
+	if volumes {
+		args = append(args, "--volumes")
+	}
+	if _, err := execRunner(ctx, "docker", args...); err != nil {
+		return fmt.Errorf("docker compose down (%s): %w", name, lastLines(err.Error(), 5))
+	}
+	out, err := execRunner(ctx, "docker", "image", "ls", "-q", "--filter", "label=com.docker.compose.project="+name)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return nil // imagem que sobrar nao impede a exclusao
+	}
+	execRunner(ctx, "docker", append([]string{"image", "rm", "-f"}, strings.Fields(out)...)...)
+	return nil
+}
+
 // ExecInput roda um comando num container mandando input pelo stdin. Use
 // pra qualquer coisa com senha (SQL de criar usuario): pela linha de
 // comando ela apareceria no ps do host enquanto o comando roda.

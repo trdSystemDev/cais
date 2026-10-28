@@ -190,6 +190,13 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		}
 		return ok(s.api.StopApp(s.ctx, p.Name))
 
+	case MethodAppDelete:
+		var p deleteParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.DeleteApp(s.ctx, p.Name, p.Volumes))
+
 	case MethodAppLogs:
 		var p appParams
 		if err := params(m, &p); err != nil {

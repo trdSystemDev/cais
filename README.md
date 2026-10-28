@@ -252,6 +252,7 @@ cais apps                                    # estado de todos
 cais app logs meu-app meu-app-web-1
 cais app restart meu-app [service]
 cais app stop meu-app
+cais app delete meu-app [-volumes]           # pede o nome pra confirmar; -volumes apaga os dados
 ```
 
 Na TUI, aba **Apps**: **+ Novo app** com o link do repositorio; cada app tem

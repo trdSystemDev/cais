@@ -73,6 +73,8 @@ type appsPage struct {
 	secretValue *textinput.Model
 	guide       string
 	guideFor    string
+	delConfirm  *textinput.Model // nome do app digitado pra excluir
+	delVolumes  bool             // excluir apaga tambem os volumes
 
 	// app novo
 	newName, newRepo, newBranch, newCompose *textinput.Model
@@ -126,6 +128,7 @@ func newAppsPage(api core.API, zones *zone.Manager, th theme) *appsPage {
 	p.secretName = p.input("nome (ex: jwt_secret)", 26)
 	p.secretValue = p.input("valor", 30)
 	p.secretValue.EchoMode = textinput.EchoPassword
+	p.delConfirm = p.input("digite o nome do app", 24)
 	p.newName = p.input("nome do app (minusculas)", 30)
 	p.newRepo = p.input("https://github.com/dono/repo", 40)
 	p.newBranch = p.input("a principal do repositorio", 28)
@@ -156,7 +159,7 @@ func (p *appsPage) style(ti *textinput.Model) {
 func (p *appsPage) setTheme(th theme) {
 	p.th = th
 	for _, ti := range []*textinput.Model{p.repo, p.branch, p.compose, p.ref, p.secretName, p.secretValue,
-		p.newName, p.newRepo, p.newBranch, p.newCompose} {
+		p.newName, p.newRepo, p.newBranch, p.newCompose, p.delConfirm} {
 		p.style(ti)
 	}
 	for _, r := range p.envRows {
@@ -226,6 +229,8 @@ func (p *appsPage) loadSelected(force bool) tea.Cmd {
 	p.ref.SetValue("")
 	p.secretName.SetValue("")
 	p.secretValue.SetValue("")
+	p.delConfirm.SetValue("")
+	p.delVolumes = false
 	p.envRows, p.envLoaded, p.guide, p.guideFor = nil, "", "", ""
 	p.rebuild()
 	return tea.Batch(p.envCmd(a.Name), p.guideCmd(a.Name))
@@ -293,6 +298,12 @@ func (p *appsPage) rebuild() {
 		add(&field{id: "branch", label: "Branch", input: p.branch})
 		add(&field{id: "compose", label: "Compose", input: p.compose})
 		add(btn("app-save", "Salvar", p.saveApp))
+		add(&field{id: "delete-confirm", label: "Confirmar", input: p.delConfirm})
+		add(btn("delete-volumes", "", func() tea.Cmd { p.delVolumes = !p.delVolumes; return nil }))
+		name := a.Name
+		add(&field{id: "delete", label: "Excluir app", press: p.deleteApp, disabled: func() bool {
+			return p.busy != "" || strings.TrimSpace(p.delConfirm.Value()) != name
+		}})
 	case secEnv:
 		for i, r := range p.envRows {
 			add(&field{id: fmt.Sprintf("env-name:%d", i), input: r.name})
@@ -332,6 +343,13 @@ func (p *appsPage) setFocus(i int) tea.Cmd {
 	for j, f := range p.fields {
 		if f.input == nil {
 			continue
+		}
+		// valor de variavel costuma ser segredo: so aparece no campo em foco
+		if strings.HasPrefix(f.id, "env-value:") {
+			f.input.EchoMode = textinput.EchoPassword
+			if p.inForm && j == p.focus {
+				f.input.EchoMode = textinput.EchoNormal
+			}
 		}
 		if p.inForm && j == p.focus {
 			cmd = f.input.Focus()
@@ -400,6 +418,21 @@ func (p *appsPage) stop() tea.Cmd {
 	name := a.Name
 	return p.do(name, "Parando "+name, name+" parado (Reiniciar volta).", func(ctx context.Context) error {
 		return p.api.StopApp(ctx, name)
+	})
+}
+
+func (p *appsPage) deleteApp() tea.Cmd {
+	a := p.selected()
+	if a == nil || strings.TrimSpace(p.delConfirm.Value()) != a.Name {
+		return nil
+	}
+	name, volumes := a.Name, p.delVolumes
+	msg := name + " excluido (o database da infra fica)."
+	if volumes {
+		msg = name + " excluido, com os volumes (o database da infra fica)."
+	}
+	return p.do(name, "Excluindo "+name, msg, func(ctx context.Context) error {
+		return p.api.DeleteApp(ctx, name, volumes)
 	})
 }
 
@@ -736,10 +769,13 @@ func (p *appsPage) viewList(w, h int) string {
 // appStatus resume o app num simbolo, texto e cor.
 func appStatus(a core.AppStatus, t theme) (string, string, color.Color) {
 	running, total := 0, len(a.Containers)
-	healthy := true
+	healthy, restarting := true, false
 	for _, c := range a.Containers {
 		if c.State == "running" {
 			running++
+		}
+		if c.State == "restarting" {
+			restarting = true
 		}
 		if c.State != "running" || c.Health == "unhealthy" {
 			healthy = false
@@ -754,6 +790,10 @@ func appStatus(a core.AppStatus, t theme) (string, string, color.Color) {
 		return "·", "sem deploy", t.muted
 	case total == 0:
 		return "✗", "fora do ar", t.danger
+	case restarting:
+		return "✗", "reiniciando", t.danger
+	case running == 0:
+		return "■", "parado", t.muted
 	case healthy:
 		return "✓", fmt.Sprintf("%d/%d no ar", running, total), t.ok
 	default:
@@ -971,6 +1011,19 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 	p.row(b, "branch")
 	p.row(b, "compose")
 	p.inline(b, "app-save")
+
+	b.WriteString("\n" + t.bold().Render("Excluir app") + "\n")
+	b.WriteString(muted.Width(w).Render("Apaga containers, imagens, codigo, variaveis e secrets do app. O database da infra fica (aba Infra). Digite "+a.Name+" pra confirmar.") + "\n")
+	p.row(b, "delete-confirm")
+	for _, f := range p.fields {
+		if f.id == "delete-volumes" {
+			f.label = "Volumes (dados): manter"
+			if p.delVolumes {
+				f.label = "Volumes (dados): APAGAR"
+			}
+		}
+	}
+	p.inline(b, "delete-volumes", "delete")
 }
 
 func (p *appsPage) viewEnv(b *strings.Builder, w int) {

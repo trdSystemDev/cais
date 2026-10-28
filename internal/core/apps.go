@@ -173,6 +173,17 @@ func (c *Core) StopApp(ctx context.Context, name string) error {
 	return err
 }
 
+func (c *Core) DeleteApp(ctx context.Context, name string, volumes bool) error {
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = c.appManager().Delete(ctx, name, volumes)
+	c.CheckApps(ctx)
+	return err
+}
+
 // AppLogs so aceita containers do proprio app (nunca de uma stack ou de
 // outro app).
 func (c *Core) AppLogs(ctx context.Context, name, container string) (string, error) {

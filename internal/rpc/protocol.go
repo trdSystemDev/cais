@@ -31,6 +31,7 @@ const (
 	MethodAppDeploy        = "app.deploy"        // params: deployParams
 	MethodAppRestart       = "app.restart"       // params: appParams (service opcional)
 	MethodAppStop          = "app.stop"          // params: appParams
+	MethodAppDelete        = "app.delete"        // params: deleteParams
 	MethodAppLogs          = "app.logs"          // params: appParams (container)
 	MethodAppEnvGet        = "app.env.get"       // params: appParams
 	MethodAppEnvSet        = "app.env.set"       // params: envParams
@@ -107,6 +108,12 @@ type appParams struct {
 	Name      string `json:"name"`
 	Service   string `json:"service,omitempty"`
 	Container string `json:"container,omitempty"`
+}
+
+type deleteParams struct {
+	Name string `json:"name"`
+	// Volumes apaga tambem os volumes do compose (os dados do app).
+	Volumes bool `json:"volumes,omitempty"`
 }
 
 type deployParams struct {

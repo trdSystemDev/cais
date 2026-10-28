@@ -98,6 +98,11 @@ func (f *fakeDocker) Restart(_ context.Context, p docker.Project, service string
 	return nil
 }
 
+func (f *fakeDocker) Down(_ context.Context, name string, volumes bool) error {
+	f.calls = append(f.calls, fmt.Sprintf("down %s volumes=%v", name, volumes))
+	return nil
+}
+
 func (f *fakeDocker) Stop(context.Context, docker.Project) error {
 	f.calls = append(f.calls, "stop")
 	return nil
@@ -541,5 +546,27 @@ func TestDeployObservaOsContainersDepoisDoUp(t *testing.T) {
 	}
 	if a, _ := m.Get("web"); a.Commit != "c1" {
 		t.Errorf("commit no ar %s", a.Commit)
+	}
+}
+
+func TestDeleteApagaOAppEDerrubaOProjeto(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	m.SetSecret("web", "jwt", []byte("x"))
+	m.Deploy(context.Background(), "web", "")
+	if err := m.Delete(context.Background(), "web", true); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(d.calls, "down web volumes=true") {
+		t.Errorf("chamadas %v", d.calls)
+	}
+	if _, err := os.Stat(filepath.Join(m.Root, "web")); !os.IsNotExist(err) {
+		t.Error("a pasta do app ficou")
+	}
+	if _, err := m.Get("web"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get depois de excluir: %v", err)
+	}
+	if err := m.Delete(context.Background(), "web", false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("excluir de novo: %v", err)
 	}
 }

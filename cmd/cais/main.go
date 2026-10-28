@@ -59,6 +59,10 @@ Apps (repositorio no GitHub com o compose de producao pronto):
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
+  cais app delete <nome> [-volumes] [-yes]
+                                     exclui o app (containers, imagens, codigo, variaveis,
+                                     secrets); -volumes apaga tambem os dados. O database
+                                     da infra fica
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET).
 `

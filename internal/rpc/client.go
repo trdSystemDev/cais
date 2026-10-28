@@ -295,6 +295,10 @@ func (c *Client) StopApp(ctx context.Context, name string) error {
 	return c.call(ctx, MethodAppStop, appParams{Name: name}, nil)
 }
 
+func (c *Client) DeleteApp(ctx context.Context, name string, volumes bool) error {
+	return c.call(ctx, MethodAppDelete, deleteParams{Name: name, Volumes: volumes}, nil)
+}
+
 func (c *Client) AppLogs(ctx context.Context, name, container string) (out string, err error) {
 	err = c.call(ctx, MethodAppLogs, appParams{Name: name, Container: container}, &out)
 	return

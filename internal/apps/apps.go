@@ -93,6 +93,8 @@ type Docker interface {
 	PS(ctx context.Context, p docker.Project) ([]docker.Container, error)
 	Restart(ctx context.Context, p docker.Project, service string) error
 	Stop(ctx context.Context, p docker.Project) error
+	// Down remove o projeto pelo nome; volumes apaga tambem os dados.
+	Down(ctx context.Context, name string, volumes bool) error
 }
 
 // Manager cuida dos apps em Root (/var/lib/cais/apps). Nao tem trava:
@@ -453,6 +455,19 @@ func (m Manager) Stop(ctx context.Context, name string) error {
 		return err
 	}
 	return m.Docker.Stop(ctx, m.project(a, SrcDir))
+}
+
+// Delete remove o app: containers, redes e imagens dele, e a pasta (codigo,
+// variaveis e secrets). Com volumes, apaga tambem os volumes do compose (os
+// dados). Database criado na infra nao e do app e fica.
+func (m Manager) Delete(ctx context.Context, name string, volumes bool) error {
+	if _, err := m.Get(name); err != nil {
+		return err
+	}
+	if err := m.Docker.Down(ctx, name, volumes); err != nil {
+		return err
+	}
+	return os.RemoveAll(m.dir(name))
 }
 
 func (m Manager) requireDeployed(name string) (App, error) {

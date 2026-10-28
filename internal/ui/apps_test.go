@@ -22,11 +22,12 @@ import (
 // fakeApps e o docker dos apps nos testes: todo projeto que subiu aparece
 // com um container web rodando.
 type fakeApps struct {
-	mu     sync.Mutex
-	up     map[string]bool
-	ups    atomic.Int32
-	upErr  error
-	config string
+	mu      sync.Mutex
+	up      map[string]bool
+	stopped map[string]bool // parados: aparecem com state exited
+	ups     atomic.Int32
+	upErr   error
+	config  string
 }
 
 func (f *fakeApps) Config(context.Context, docker.Project) ([]byte, error) {
@@ -52,10 +53,19 @@ func (f *fakeApps) PS(_ context.Context, p docker.Project) ([]docker.Container, 
 	if !f.up[p.Name] {
 		return nil, nil
 	}
+	if f.stopped[p.Name] {
+		return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "exited"}}, nil
+	}
 	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running", Health: "healthy"}}, nil
 }
 func (f *fakeApps) Restart(context.Context, docker.Project, string) error { return nil }
 func (f *fakeApps) Stop(context.Context, docker.Project) error            { return nil }
+func (f *fakeApps) Down(_ context.Context, name string, _ bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.up, name)
+	return nil
+}
 
 // appsCore e um core com config pronta (dominio, Postgres ligado), o GitHub
 // App falso com o repositorio trdSystemDev/loja e o docker fingido.
@@ -304,4 +314,48 @@ func TestAppsTrocaRepositorioECompose(t *testing.T) {
 	if a := appState(t, m, "loja"); a.Compose != "docker-compose.producao.yaml" {
 		t.Fatalf("compose %q", a.Compose)
 	}
+}
+
+// excluir pede o nome do app digitado; os volumes so saem se pedir
+func TestAppsExcluirComConfirmacao(t *testing.T) {
+	m, _, _ := openApps(t)
+	m.api.CreateApp(context.Background(), apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	waitFor(t, m, "sem deploy")
+	click(t, m, "app:loja")
+	reach(t, m, "delete")
+	click(t, m, "delete") // sem confirmar: nada acontece
+	if a := appState(t, m, "loja"); a.Name != "loja" {
+		t.Fatal("excluiu sem confirmar")
+	}
+	reach(t, m, "delete-confirm")
+	typeIn(t, m, "delete-confirm", "loja")
+	reach(t, m, "delete")
+	click(t, m, "delete")
+	waitFor(t, m, "loja excluido")
+	waitFor(t, m, "Nenhum app ainda")
+}
+
+func TestAppsParadoEVariaveisEscondidas(t *testing.T) {
+	m, fa, _ := openApps(t)
+	ctx := context.Background()
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	m.api.SetAppEnv(ctx, "loja", map[string]string{"SENHA_DO_BANCO": "nao-pode-aparecer"})
+	if _, err := m.api.DeployApp(ctx, "loja", ""); err != nil {
+		t.Fatal(err)
+	}
+	m.api.StopApp(ctx, "loja")
+	fa.mu.Lock()
+	fa.stopped = map[string]bool{"loja": true}
+	fa.mu.Unlock()
+	m.api.CheckApps(ctx)
+	waitFor(t, m, "parado")
+
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Variaveis")
+	waitFor(t, m, "SENHA_DO_BANCO")
+	if strings.Contains(screen(m), "nao-pode-aparecer") {
+		t.Fatal("valor da variavel aparece sem foco")
+	}
+	click(t, m, "env-value:0")
+	waitFor(t, m, "nao-pode-aparecer")
 }

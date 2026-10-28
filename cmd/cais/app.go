@@ -82,6 +82,8 @@ func runApp(args []string) error {
 	composeFile := fs.String("compose", "", "compose de producao, a partir da raiz (padrao docker-compose.yml)")
 	ref := fs.String("ref", "", "branch ou commit do deploy (padrao: o mais novo da branch do app)")
 	unset := fs.String("unset", "", "variaveis a remover, separadas por virgula")
+	volumes := fs.Bool("volumes", false, "delete: apaga tambem os volumes do compose (os dados)")
+	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
 	pos := parseInterspersed(fs, args)
 	arg := func(i int) string {
 		if i < len(pos) {
@@ -91,7 +93,7 @@ func runApp(args []string) error {
 	}
 	need := map[string][2]int{ // minimo e maximo de argumentos
 		"create": {2, 2}, "deploy": {1, 1}, "guide": {1, 1}, "env": {1, -1},
-		"secrets": {1, 1}, "secret": {2, 2}, "restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2},
+		"secrets": {1, 1}, "secret": {2, 2}, "restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "delete": {1, 1},
 	}
 	lim, ok := need[sub]
 	if !ok {
@@ -171,6 +173,23 @@ func runApp(args []string) error {
 			return err
 		}
 		fmt.Printf("%s parado. Volta com: cais app restart %s\n", name, name)
+	case "delete":
+		what := "containers, imagens, codigo, variaveis e secrets"
+		if *volumes {
+			what += " e os VOLUMES (dados)"
+		}
+		if !*yes {
+			fmt.Printf("Excluir %s apaga %s. O database da infra fica.\nDigite o nome do app pra confirmar: ", name, what)
+			var typed string
+			fmt.Scanln(&typed)
+			if strings.TrimSpace(typed) != name {
+				return errors.New("nome diferente: nada foi apagado")
+			}
+		}
+		if err := c.DeleteApp(ctx, name, *volumes); err != nil {
+			return err
+		}
+		fmt.Printf("%s excluido.\n", name)
 	case "logs":
 		out, err := c.AppLogs(ctx, name, arg(1))
 		if err != nil {

@@ -36,6 +36,9 @@ type runner func(ctx context.Context, name string, args ...string) (string, erro
 
 func execRunner(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	// pasta neutra: comando do compose sem -f nunca pega um arquivo da
+	// pasta de onde o daemon foi iniciado
+	cmd.Dir = "/"
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,11 @@ func (d *appDocker) PS(context.Context, docker.Project) ([]docker.Container, err
 
 func (d *appDocker) Restart(_ context.Context, p docker.Project, service string) error {
 	d.add("restart " + p.Name + " " + service)
+	return nil
+}
+
+func (d *appDocker) Down(_ context.Context, name string, volumes bool) error {
+	d.add(fmt.Sprintf("down %s %v", name, volumes))
 	return nil
 }
 
@@ -303,5 +309,24 @@ func TestCreateDatabase(t *testing.T) {
 	c.infra.Unlock()
 	if !errors.Is(err, ErrBusy) {
 		t.Errorf("durante o Setup: %v", err)
+	}
+}
+
+func TestDeleteAppSaiDoEstado(t *testing.T) {
+	c, d, _ := newAppsCore(t)
+	ctx := context.Background()
+	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"})
+	if err := c.DeleteApp(ctx, "meu-app", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(d.calls, ","), "down meu-app false") {
+		t.Errorf("chamadas %v", d.calls)
+	}
+	if s := snap(t, c).Apps; len(s.List) != 0 {
+		t.Fatalf("app continua no estado: %+v", s.List)
+	}
+	// o nome fica livre pra criar de novo
+	if _, err := c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"}); err != nil {
+		t.Fatal(err)
 	}
 }

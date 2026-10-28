@@ -61,6 +61,10 @@ type API interface {
 	RestartApp(ctx context.Context, name, service string) error
 	// StopApp para o app sem apagar nada.
 	StopApp(ctx context.Context, name string) error
+	// DeleteApp remove o app (containers, imagens, codigo, variaveis e
+	// secrets). Com volumes, apaga tambem os dados dos volumes. O database
+	// da infra fica (aba Infra).
+	DeleteApp(ctx context.Context, name string, volumes bool) error
 	// AppLogs le as ultimas linhas de um container do app.
 	AppLogs(ctx context.Context, name, container string) (string, error)
 	// AppEnv le as variaveis do app (o .env do projeto no deploy).
