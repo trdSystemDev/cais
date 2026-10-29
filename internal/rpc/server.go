@@ -262,7 +262,7 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		if err := params(m, &p); err != nil {
 			return nil, err
 		}
-		return ok(s.api.LinkAppDatabase(s.ctx, p.App, p.Engine, p.Name, p.Env))
+		return ok(s.api.LinkAppDatabase(s.ctx, p.App, p.Engine, p.Name))
 
 	case MethodAppDBUnlink:
 		var p appDBParams
@@ -270,6 +270,30 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 			return nil, err
 		}
 		return ok(s.api.UnlinkAppDatabase(s.ctx, p.App, p.Engine, p.Name))
+
+	case MethodBucketCreate:
+		var p bucketParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.CreateBucket(s.ctx, p.Name))
+
+	case MethodBuckets:
+		return wrap(s.api.Buckets(s.ctx))
+
+	case MethodAppBucketLink:
+		var p appBucketParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.LinkAppBucket(s.ctx, p.App, p.Bucket))
+
+	case MethodAppBucketUnlink:
+		var p appBucketParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.UnlinkAppBucket(s.ctx, p.App, p.Bucket))
 
 	case MethodInfraCheck:
 		return wrap(s.api.CheckStacks(s.ctx))

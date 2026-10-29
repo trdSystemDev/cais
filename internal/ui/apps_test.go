@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"maps"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -88,10 +89,11 @@ func appsCore(t *testing.T) (*core.Core, *fakeApps, *githubtest.Server) {
 		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil },
 		ContainerLogs: func(_ context.Context, name string) (string, error) { return "log do " + name, nil },
 		ExecInput:     func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
+		Exec:          fakeGarage,
 	})
 	cfg := config.Default()
 	cfg.Domain, cfg.Email, cfg.TLS = "trd.localhost", "a@trd.localhost", config.TLSSelfSigned
-	cfg.Stacks = []string{"postgres"}
+	cfg.Stacks = []string{"postgres", "garage"}
 	cfg.GitHub.AppID = gh.AppID
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
@@ -336,11 +338,11 @@ func TestAppsExcluirComConfirmacao(t *testing.T) {
 	waitFor(t, m, "Nenhum app ainda")
 }
 
-func TestAppsParadoEVariaveisEscondidas(t *testing.T) {
+func TestAppsParadoEVariaveisAparecem(t *testing.T) {
 	m, fa, _ := openApps(t)
 	ctx := context.Background()
 	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
-	m.api.SetAppEnv(ctx, "loja", map[string]string{"SENHA_DO_BANCO": "nao-pode-aparecer"})
+	m.api.SetAppEnv(ctx, "loja", map[string]string{"DOMINIO": "loja.exemplo.com"})
 	if _, err := m.api.DeployApp(ctx, "loja", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -353,39 +355,126 @@ func TestAppsParadoEVariaveisEscondidas(t *testing.T) {
 
 	click(t, m, "app:loja")
 	click(t, m, "app-sec:Variaveis")
-	waitFor(t, m, "SENHA_DO_BANCO")
-	if strings.Contains(screen(m), "nao-pode-aparecer") {
-		t.Fatal("valor da variavel aparece sem foco")
-	}
-	click(t, m, "env-value:0")
-	waitFor(t, m, "nao-pode-aparecer")
+	waitFor(t, m, "loja.exemplo.com") // valor visivel sem foco
 }
 
-// o banco da infra ligado aparece em Secrets; outro banco liga pelo seletor
+// Importar .env: o texto colado entra nos editores e so grava no Salvar
+func TestAppsImportarEnv(t *testing.T) {
+	m, _, _ := openApps(t)
+	ctx := context.Background()
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	m.api.SetAppEnv(ctx, "loja", map[string]string{"DOMINIO": "velho", "FICA": "1"})
+	waitFor(t, m, "sem deploy")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Variaveis")
+	waitFor(t, m, "velho")
+	click(t, m, "env-import")
+	waitFor(t, m, "aguardando o texto colado")
+	m.Update(tea.PasteMsg{Content: "# comentario\nexport DOMINIO=novo\nNODE_ENV='production'\n"})
+	waitFor(t, m, "troca o valor")
+	click(t, m, "env-import-apply")
+	waitFor(t, m, "1 novas, 1 com valor trocado")
+	waitFor(t, m, "alteracoes nao salvas")
+	if env, _ := m.api.AppEnv(ctx, "loja"); env["DOMINIO"] != "velho" {
+		t.Fatal("gravou antes do Salvar")
+	}
+	click(t, m, "env-save")
+	waitFor(t, m, "salvas; valem no proximo deploy")
+	env, _ := m.api.AppEnv(ctx, "loja")
+	if !maps.Equal(env, map[string]string{"DOMINIO": "novo", "FICA": "1", "NODE_ENV": "production"}) {
+		t.Errorf("env %v", env)
+	}
+	if strings.Contains(screen(m), "alteracoes nao salvas") {
+		t.Error("aviso ficou depois de salvar")
+	}
+
+	// texto invalido: o motivo aparece e nada muda
+	click(t, m, "env-import")
+	m.Update(tea.PasteMsg{Content: "isso nao e env"})
+	waitFor(t, m, "linha 1 invalida")
+	click(t, m, "env-import-cancel")
+}
+
+// o banco da infra liga pelo seletor em Secrets e aparece com os secrets dele
 func TestAppsBancoLigadoAparece(t *testing.T) {
 	m, _, _ := openApps(t)
 	ctx := context.Background()
 	c := m.api.(*core.Core)
 	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
-	if _, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "loja", App: "loja"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "relatorios"}); err != nil {
+	if _, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "loja"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, m, "sem deploy")
 	click(t, m, "app:loja")
 	click(t, m, "app-sec:Secrets")
-	waitFor(t, m, "postgres/loja")
-	waitFor(t, m, "URL do banco postgres/loja")
-	waitFor(t, m, "‹ postgres/relatorios ›")
-	typeIn(t, m, "db-env", "RELATORIOS_URL")
+	waitFor(t, m, "‹ postgres/loja ›")
 	click(t, m, "db-link")
-	waitFor(t, m, "loja ligado a postgres/relatorios")
-	if a := appState(t, m, "loja"); len(a.Databases) != 2 {
+	waitFor(t, m, "loja ligado a postgres/loja")
+	if a := appState(t, m, "loja"); len(a.Databases) != 1 {
 		t.Fatalf("bancos %+v", a.Databases)
 	}
-	waitFor(t, m, "e ${CAIS_SECRETS}/relatorios_url") // a lista chega pelo estado
-	click(t, m, "db-unlink:postgres/relatorios")
-	waitFor(t, m, "desligado de postgres/relatorios")
+	waitFor(t, m, "credencial de postgres/loja") // os secrets chegam pelo estado
+	waitFor(t, m, "postgres_loja_user e postgres_loja_pass")
+	click(t, m, "db-unlink:postgres/loja")
+	waitFor(t, m, "desligado de postgres/loja")
+}
+
+// o bucket do Garage liga pelo seletor em Secrets e aparece com os secrets dele
+func TestAppsBucketLigado(t *testing.T) {
+	m, _, _ := openApps(t)
+	ctx := context.Background()
+	c := m.api.(*core.Core)
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	if _, err := c.CreateBucket(ctx, "loja-fotos"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "sem deploy")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Secrets")
+	waitFor(t, m, "‹ loja-fotos ›")
+	click(t, m, "bucket-link")
+	waitFor(t, m, "loja ligado ao bucket loja-fotos")
+	waitFor(t, m, "credencial de s3/loja-fotos")
+	click(t, m, "bucket-unlink:loja-fotos")
+	waitFor(t, m, "desligado do bucket loja-fotos")
+}
+
+// o valor do secret aparece enquanto digita
+func TestAppsSecretVisivelAoDigitar(t *testing.T) {
+	m, _, _ := openApps(t)
+	m.api.CreateApp(context.Background(), apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	waitFor(t, m, "sem deploy")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Secrets")
+	typeIn(t, m, "secret-value", "valor-visivel")
+	waitFor(t, m, "valor-visivel")
+}
+
+// banco e bucket criados com o app ja aberto aparecem ao voltar pra aba Apps
+// ou pra secao Secrets, sem reabrir a TUI
+func TestAppsListaDeLigarAtualiza(t *testing.T) {
+	m, _, _ := openApps(t)
+	ctx := context.Background()
+	c := m.api.(*core.Core)
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	waitFor(t, m, "sem deploy")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Secrets")
+	waitFor(t, m, "nenhum bucket criado")
+
+	// criado na Infra: volta pra aba Apps
+	if _, err := c.CreateBucket(ctx, "loja-fotos"); err != nil {
+		t.Fatal(err)
+	}
+	click(t, m, "tab:Infra")
+	click(t, m, "tab:Apps")
+	waitFor(t, m, "‹ loja-fotos ›")
+
+	// criado pelo CLI: troca de secao e volta pra Secrets
+	if _, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "loja"}); err != nil {
+		t.Fatal(err)
+	}
+	click(t, m, "app-sec:Geral")
+	click(t, m, "app-sec:Secrets")
+	waitFor(t, m, "‹ postgres/loja ›")
 }

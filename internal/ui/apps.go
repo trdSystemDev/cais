@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -69,14 +70,20 @@ type appsPage struct {
 	compose     *textinput.Model
 	ref         *textinput.Model
 	envRows     []*envRow
-	envLoaded   string // app cujas variaveis estao nos editores
+	envLoaded   string            // app cujas variaveis estao nos editores
+	envSaved    map[string]string // como estao gravadas (pra avisar o que falta salvar)
+	envPending  map[string]string // enviadas no Salvar, gravadas quando der certo
+	importing   bool              // "Importar .env" aberto: o colar vai pra ele
+	importText  string            // .env colado, ainda nao aplicado
+	importErr   string
 	secretName  *textinput.Model
 	secretValue *textinput.Model
 	guide       string
 	guideFor    string
 	dbs         []core.DatabaseInfo // bancos da infra (pra ligar no app)
 	dbPick      int
-	dbEnv       *textinput.Model
+	buckets     []core.BucketInfo // buckets do Garage (pra ligar no app)
+	bucketPick  int
 	delConfirm  *textinput.Model // nome do app digitado pra excluir
 	delVolumes  bool             // excluir apaga tambem os volumes
 
@@ -112,8 +119,9 @@ type (
 		err error
 	}
 	appDBsMsg struct {
-		list []core.DatabaseInfo
-		err  error
+		list    []core.DatabaseInfo
+		buckets []core.BucketInfo
+		err     error
 	}
 	appGuideMsg struct {
 		app  string
@@ -135,9 +143,7 @@ func newAppsPage(api core.API, zones *zone.Manager, th theme) *appsPage {
 	p.ref = p.input("vazio = mais novo da branch", 30)
 	p.secretName = p.input("nome (ex: jwt_secret)", 26)
 	p.secretValue = p.input("valor", 30)
-	p.secretValue.EchoMode = textinput.EchoPassword
 	p.delConfirm = p.input("digite o nome do app", 24)
-	p.dbEnv = p.input(apps.DefaultDBEnv, 22)
 	p.newName = p.input("nome do app (minusculas)", 30)
 	p.newRepo = p.input("https://github.com/dono/repo", 40)
 	p.newBranch = p.input("a principal do repositorio", 28)
@@ -168,7 +174,7 @@ func (p *appsPage) style(ti *textinput.Model) {
 func (p *appsPage) setTheme(th theme) {
 	p.th = th
 	for _, ti := range []*textinput.Model{p.repo, p.branch, p.compose, p.ref, p.secretName, p.secretValue,
-		p.newName, p.newRepo, p.newBranch, p.newCompose, p.delConfirm, p.dbEnv} {
+		p.newName, p.newRepo, p.newBranch, p.newCompose, p.delConfirm} {
 		p.style(ti)
 	}
 	for _, r := range p.envRows {
@@ -240,18 +246,45 @@ func (p *appsPage) loadSelected(force bool) tea.Cmd {
 	p.secretValue.SetValue("")
 	p.delConfirm.SetValue("")
 	p.delVolumes = false
-	p.dbEnv.SetValue("")
-	p.dbPick = 0
-	p.envRows, p.envLoaded, p.guide, p.guideFor = nil, "", "", ""
+	p.dbPick, p.bucketPick = 0, 0
+	p.envRows, p.envLoaded, p.envSaved, p.guide, p.guideFor = nil, "", nil, "", ""
+	p.closeImport()
 	p.rebuild()
 	return tea.Batch(p.envCmd(a.Name), p.guideCmd(a.Name), p.dbsCmd())
 }
 
+// sectionCmd atualiza o que a secao aberta mostra: em Secrets, os bancos e
+// buckets que podem ser ligados (criados depois que o app foi aberto).
+func (p *appsPage) sectionCmd() tea.Cmd {
+	if p.section == secSecrets {
+		return p.dbsCmd()
+	}
+	return nil
+}
+
 func (p *appsPage) dbsCmd() tea.Cmd {
 	return func() tea.Msg {
-		list, err := p.api.Databases(context.Background())
-		return appDBsMsg{list, err}
+		ctx := context.Background()
+		list, err := p.api.Databases(ctx)
+		if err != nil {
+			return appDBsMsg{err: err}
+		}
+		buckets, err := p.api.Buckets(ctx)
+		return appDBsMsg{list, buckets, err}
 	}
+}
+
+// buckets que ainda nao estao ligados no app selecionado
+func (p *appsPage) linkableBuckets() []core.BucketInfo {
+	a := p.selected()
+	var out []core.BucketInfo
+	for _, bk := range p.buckets {
+		if a != nil && slices.ContainsFunc(a.Buckets, func(l apps.BucketLink) bool { return l.Name == bk.Name }) {
+			continue
+		}
+		out = append(out, bk)
+	}
+	return out
 }
 
 // bancos que ainda nao estao ligados no app selecionado
@@ -285,6 +318,7 @@ func (p *appsPage) newEnvRow(name, value string) *envRow {
 	r := &envRow{name: p.input("VARIAVEL", 22), value: p.input("valor", 40)}
 	r.name.SetValue(name)
 	r.value.SetValue(value)
+	r.value.CursorStart() // valor comprido mostra o comeco, nao o fim
 	return r
 }
 
@@ -339,14 +373,23 @@ func (p *appsPage) rebuild() {
 		for i, r := range p.envRows {
 			add(&field{id: fmt.Sprintf("env-name:%d", i), input: r.name})
 			add(&field{id: fmt.Sprintf("env-value:%d", i), input: r.value})
-			add(btn(fmt.Sprintf("env-del:%d", i), "x", func() tea.Cmd { p.envRows = del(p.envRows, i); p.rebuild(); return nil }))
+			add(btn(fmt.Sprintf("env-del:%d", i), "remover", func() tea.Cmd { p.envRows = del(p.envRows, i); p.rebuild(); return nil }))
 		}
-		add(btn("env-add", "+ variavel", func() tea.Cmd { p.envRows = append(p.envRows, p.newEnvRow("", "")); p.rebuild(); return nil }))
+		add(btn("env-add", "+ Nova variavel", func() tea.Cmd {
+			p.envRows = append(p.envRows, p.newEnvRow("", ""))
+			p.rebuild()
+			return p.setFocus(len(p.envRows)*3 - 3) // o nome da nova
+		}))
+		add(btn("env-import", "Importar .env", func() tea.Cmd { p.importing = true; p.importText, p.importErr = "", ""; p.rebuild(); return nil }))
 		add(btn("env-save", "Salvar", p.saveEnv))
+		if p.importing {
+			add(&field{id: "env-import-apply", label: "Aplicar", press: p.applyImport, disabled: func() bool { return p.importText == "" }})
+			add(btn("env-import-cancel", "Cancelar", func() tea.Cmd { p.closeImport(); p.rebuild(); return nil }))
+		}
 	case secSecrets:
 		for _, s := range a.Secrets {
-			if s.Database != "" {
-				continue // URL de banco: desliga pelo banco
+			if s.Infra != "" {
+				continue // credencial de banco ou bucket: desliga por ele
 			}
 			name := s.Name
 			add(btn("secret-del:"+name, "apagar", func() tea.Cmd { return p.deleteSecret(name) }))
@@ -361,8 +404,18 @@ func (p *appsPage) rebuild() {
 			}
 			return nil
 		}})
-		add(&field{id: "db-env", label: "Variavel", input: p.dbEnv})
 		add(btn("db-link", "Ligar banco", p.linkDB))
+		for _, l := range a.Buckets {
+			l := l
+			add(btn("bucket-unlink:"+l.Name, "desligar", func() tea.Cmd { return p.unlinkBucket(l) }))
+		}
+		add(&field{id: "bucket-pick", label: "Bucket", press: func() tea.Cmd {
+			if n := len(p.linkableBuckets()); n > 0 {
+				p.bucketPick = (p.bucketPick + 1) % n
+			}
+			return nil
+		}})
+		add(btn("bucket-link", "Ligar bucket", p.linkBucket))
 		add(&field{id: "secret-name", label: "Secret", input: p.secretName})
 		add(&field{id: "secret-value", label: "Valor", input: p.secretValue})
 		add(btn("secret-save", "Gravar", p.saveSecret))
@@ -389,13 +442,6 @@ func (p *appsPage) setFocus(i int) tea.Cmd {
 	for j, f := range p.fields {
 		if f.input == nil {
 			continue
-		}
-		// valor de variavel costuma ser segredo: so aparece no campo em foco
-		if strings.HasPrefix(f.id, "env-value:") {
-			f.input.EchoMode = textinput.EchoPassword
-			if p.inForm && j == p.focus {
-				f.input.EchoMode = textinput.EchoNormal
-			}
 		}
 		if p.inForm && j == p.focus {
 			cmd = f.input.Focus()
@@ -516,9 +562,56 @@ func (p *appsPage) saveEnv() tea.Cmd {
 		env[k] = r.value.Value()
 	}
 	name := a.Name
+	p.envPending = env
 	return p.do(name, "Salvando variaveis", "Variaveis de "+name+" salvas; valem no proximo deploy.", func(ctx context.Context) error {
 		return p.api.SetAppEnv(ctx, name, env)
 	})
+}
+
+// envNow sao as variaveis como estao nos editores (linhas sem nome ficam fora).
+func (p *appsPage) envNow() map[string]string {
+	env := map[string]string{}
+	for _, r := range p.envRows {
+		if k := strings.TrimSpace(r.name.Value()); k != "" {
+			env[k] = r.value.Value()
+		}
+	}
+	return env
+}
+
+func (p *appsPage) envDirty() bool {
+	return p.envSaved != nil && !maps.Equal(p.envNow(), p.envSaved)
+}
+
+func (p *appsPage) closeImport() { p.importing, p.importText, p.importErr = false, "", "" }
+
+// applyImport junta o .env colado nos editores: variavel que ja existe
+// recebe o valor novo, as outras entram no fim. So grava no Salvar.
+func (p *appsPage) applyImport() tea.Cmd {
+	env, err := apps.ParseEnv([]byte(p.importText))
+	if err != nil {
+		p.importErr = err.Error()
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(env))
+	changed, added := 0, 0
+	for _, k := range keys {
+		i := slices.IndexFunc(p.envRows, func(r *envRow) bool { return strings.TrimSpace(r.name.Value()) == k })
+		if i >= 0 {
+			if p.envRows[i].value.Value() != env[k] {
+				p.envRows[i].value.SetValue(env[k])
+				p.envRows[i].value.CursorStart()
+				changed++
+			}
+			continue
+		}
+		p.envRows = append(p.envRows, p.newEnvRow(k, env[k]))
+		added++
+	}
+	p.closeImport()
+	p.rebuild()
+	p.setStatus("warn", fmt.Sprintf("Importadas: %d novas, %d com valor trocado. Confira e clique Salvar.", added, changed))
+	return p.setFocus(slices.IndexFunc(p.fields, func(f *field) bool { return f.id == "env-save" }))
 }
 
 func (p *appsPage) saveSecret() tea.Cmd {
@@ -544,10 +637,33 @@ func (p *appsPage) linkDB() tea.Cmd {
 		return nil
 	}
 	d := list[min(p.dbPick, len(list)-1)]
-	name, env := a.Name, strings.TrimSpace(p.dbEnv.Value())
-	shown := cmpOrStr(env, apps.DefaultDBEnv)
-	return p.do(name, "Ligando "+d.Engine+"/"+d.Name, name+" ligado a "+d.Engine+"/"+d.Name+": a URL vai em "+shown+" no proximo deploy.", func(ctx context.Context) error {
-		return p.api.LinkAppDatabase(ctx, name, d.Engine, d.Name, env)
+	name := a.Name
+	return p.do(name, "Ligando "+d.Engine+"/"+d.Name, name+" ligado a "+d.Engine+"/"+d.Name+": os secrets valem no proximo deploy.", func(ctx context.Context) error {
+		return p.api.LinkAppDatabase(ctx, name, d.Engine, d.Name)
+	})
+}
+
+func (p *appsPage) linkBucket() tea.Cmd {
+	a := p.selected()
+	list := p.linkableBuckets()
+	if a == nil || len(list) == 0 {
+		return nil
+	}
+	bk := list[min(p.bucketPick, len(list)-1)]
+	name := a.Name
+	return p.do(name, "Ligando o bucket "+bk.Name, name+" ligado ao bucket "+bk.Name+": os secrets valem no proximo deploy.", func(ctx context.Context) error {
+		return p.api.LinkAppBucket(ctx, name, bk.Name)
+	})
+}
+
+func (p *appsPage) unlinkBucket(l apps.BucketLink) tea.Cmd {
+	a := p.selected()
+	if a == nil {
+		return nil
+	}
+	name := a.Name
+	return p.do(name, "Desligando o bucket "+l.Name, name+" desligado do bucket "+l.Name+" (o bucket e os arquivos ficam).", func(ctx context.Context) error {
+		return p.api.UnlinkAppBucket(ctx, name, l.Name)
 	})
 }
 
@@ -560,13 +676,6 @@ func (p *appsPage) unlinkDB(l apps.DBLink) tea.Cmd {
 	return p.do(name, "Desligando "+l.ID(), name+" desligado de "+l.ID()+" (o database e os dados ficam).", func(ctx context.Context) error {
 		return p.api.UnlinkAppDatabase(ctx, name, l.Engine, l.Name)
 	})
-}
-
-func cmpOrStr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func (p *appsPage) deleteSecret(secret string) tea.Cmd {
@@ -639,8 +748,11 @@ func (p *appsPage) update(msg tea.Msg) (tea.Cmd, bool) {
 			p.setStatus("ok", msg.ok)
 			p.secretName.SetValue("")
 			p.secretValue.SetValue("")
+			if p.envPending != nil {
+				p.envSaved = p.envPending
+			}
 		}
-		p.dbEnv.SetValue("")
+		p.envPending = nil
 		p.rebuild()
 		return tea.Batch(p.checkCmd(), p.guideCmd(msg.app), p.dbsCmd()), true
 	case appCreatedMsg:
@@ -674,13 +786,13 @@ func (p *appsPage) update(msg tea.Msg) (tea.Cmd, bool) {
 		for _, k := range keys {
 			p.envRows = append(p.envRows, p.newEnvRow(k, msg.env[k]))
 		}
-		p.envLoaded = msg.app
+		p.envLoaded, p.envSaved = msg.app, msg.env
 		p.rebuild()
 		return nil, true
 	case appDBsMsg:
 		if msg.err == nil {
-			p.dbs = msg.list
-			p.dbPick = 0
+			p.dbs, p.buckets = msg.list, msg.buckets
+			p.dbPick, p.bucketPick = 0, 0
 		}
 		return nil, true
 	case appGuideMsg:
@@ -723,7 +835,7 @@ func (p *appsPage) click(msg tea.MouseMsg) tea.Cmd {
 			if p.zones.Get("app-sec:" + s).InBounds(msg) {
 				p.section, p.focus, p.scroll = i, 0, 0
 				p.rebuild()
-				return nil
+				return p.sectionCmd()
 			}
 		}
 	}
@@ -765,6 +877,7 @@ func (p *appsPage) key(msg tea.KeyPressMsg) tea.Cmd {
 			p.section = (p.section + d + len(appSections)) % len(appSections)
 			p.focus, p.scroll = 0, 0
 			p.rebuild()
+			return p.sectionCmd()
 		case "n":
 			if p.busy == "" {
 				return p.startCreate()
@@ -814,6 +927,14 @@ func (p *appsPage) key(msg tea.KeyPressMsg) tea.Cmd {
 
 // paste entrega o texto colado ao campo de texto com foco.
 func (p *appsPage) paste(msg tea.PasteMsg) tea.Cmd {
+	// Importar .env aberto: o texto colado inteiro (com as quebras de linha)
+	if p.importing && p.section == secEnv && !p.creating && !p.typing() {
+		p.importText, p.importErr = msg.Content, ""
+		if _, err := apps.ParseEnv([]byte(p.importText)); err != nil {
+			p.importErr = err.Error()
+		}
+		return nil
+	}
 	if !p.typing() {
 		return nil
 	}
@@ -907,6 +1028,23 @@ func (p *appsPage) render(f *field, i int) string {
 		st = t.disabledPill()
 	}
 	return st.Render(f.label)
+}
+
+// picker escreve um seletor (clique ou enter troca a opcao) com o rotulo
+// do campo.
+func (p *appsPage) picker(b *strings.Builder, id, text string) {
+	t := p.th
+	for i, f := range p.fields {
+		if f.id != id {
+			continue
+		}
+		marker, ls := "  ", t.fg(t.text).Width(18)
+		if p.inForm && i == p.focus {
+			marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(18)
+			p.focusLine = strings.Count(b.String(), "\n")
+		}
+		b.WriteString(p.zones.Mark(f.id, marker+ls.Render(f.label)+p.render(&field{label: text}, i)) + "\n")
+	}
 }
 
 // row escreve um campo com rotulo, marcado pro clique.
@@ -1053,7 +1191,7 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 	fmt.Fprintf(b, "  %-14s github.com/%s\n", "repositorio", a.Repo)
 	fmt.Fprintf(b, "  %-14s %s\n", "compose", a.ComposeFile())
 	for _, l := range a.Databases {
-		fmt.Fprintf(b, "  %-14s %s em %s\n", "banco", l.ID(), l.Env)
+		fmt.Fprintf(b, "  %-14s %s\n", "banco", l.ID())
 	}
 	if a.Commit != "" {
 		fmt.Fprintf(b, "  %-14s %s\n", "no ar", shortCommit(a.Commit))
@@ -1115,20 +1253,69 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 }
 
 func (p *appsPage) viewEnv(b *strings.Builder, w int) {
-	muted := p.th.fg(p.th.muted)
-	b.WriteString(muted.Render("  variavel               valor") + "\n")
-	for i := range p.envRows {
-		p.inline(b, fmt.Sprintf("env-name:%d", i), fmt.Sprintf("env-value:%d", i), fmt.Sprintf("env-del:%d", i))
+	t := p.th
+	muted := t.fg(t.muted)
+	// o valor ocupa o que sobra da linha: nome (22+1), "remover" e as margens
+	valueW := max(20, w-23-14)
+	for _, r := range p.envRows {
+		if r.value.Width() != valueW {
+			r.value.SetWidth(valueW)
+			if !r.value.Focused() {
+				// o textinput so recalcula a janela visivel andando o cursor
+				r.value.CursorEnd()
+				r.value.CursorStart()
+			}
+		}
 	}
 	if len(p.envRows) == 0 {
-		b.WriteString(muted.Render("  nenhuma variavel") + "\n")
+		b.WriteString(muted.Render("  nenhuma variavel: adicione uma ou importe um .env") + "\n")
+	} else {
+		head := t.fg(t.muted).Bold(true)
+		b.WriteString("  " + head.Width(24).Render("Nome") + head.Render("Valor") + "\n\n")
 	}
-	p.inline(b, "env-add")
-	b.WriteString("\n")
-	p.inline(b, "env-save")
+	for i := range p.envRows {
+		p.inline(b, fmt.Sprintf("env-name:%d", i), fmt.Sprintf("env-value:%d", i), fmt.Sprintf("env-del:%d", i))
+		b.WriteString("\n")
+	}
+	p.inline(b, "env-add", "env-import", "env-save")
+	if p.envDirty() {
+		b.WriteString(t.fg(t.warn).Render("  alteracoes nao salvas: valem so depois do Salvar") + "\n")
+	}
+
+	if p.importing {
+		b.WriteString("\n" + t.bold().Render("Importar .env") + "\n")
+		b.WriteString(muted.Width(w).Render("Cole aqui o conteudo do .env (Ctrl+Shift+V ou o colar do terminal). "+
+			"Variavel que ja existe recebe o valor novo; nada e gravado antes do Salvar.") + "\n\n")
+		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(t.muted).Padding(0, 1).Width(w - 2)
+		if p.importText == "" {
+			b.WriteString(box.Render(muted.Italic(true).Render("aguardando o texto colado...")) + "\n")
+		} else if env, err := apps.ParseEnv([]byte(p.importText)); err == nil {
+			now := p.envNow()
+			var lines []string
+			for _, k := range slices.Sorted(maps.Keys(env)) {
+				tag := t.fg(t.ok).Render("nova")
+				if v, ok := now[k]; ok {
+					tag = muted.Render("igual")
+					if v != env[k] {
+						tag = t.fg(t.warn).Render("troca o valor")
+					}
+				}
+				lines = append(lines, fmt.Sprintf("%-24s %s", k, tag))
+			}
+			if len(lines) == 0 {
+				lines = []string{muted.Render("nenhuma variavel no texto colado")}
+			}
+			b.WriteString(box.Render(strings.Join(lines, "\n")) + "\n")
+		}
+		if p.importErr != "" {
+			b.WriteString(t.fg(t.danger).Width(w).Render("  "+p.importErr) + "\n")
+		}
+		p.inline(b, "env-import-apply", "env-import-cancel")
+	}
+
 	b.WriteString("\n" + muted.Width(w).Render(
 		"Viram o .env na pasta do projeto no deploy: o compose usa com env_file: .env ou ${VAR}. "+
-			"O cais acrescenta CAIS_APP, CAIS_COMMIT e CAIS_SECRETS.") + "\n")
+			"O cais acrescenta CAIS_APP, CAIS_COMMIT e CAIS_SECRETS. Senhas e chaves vao em Secrets, nao aqui.") + "\n")
 }
 
 func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
@@ -1151,7 +1338,7 @@ func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
 		b.WriteString(muted.Render("  nenhum banco ligado: o app nao usa o Postgres/MySQL da infra") + "\n")
 	}
 	for _, l := range a.Databases {
-		fmt.Fprintf(b, "  %-22s %-16s %s ", l.ID(), l.Env, muted.Render("e ${CAIS_SECRETS}/"+l.File()))
+		fmt.Fprintf(b, "  %-22s %s ", l.ID(), muted.Render(strings.Join(l.Secrets(), " e ")))
 		mark("db-unlink:" + l.ID())
 		b.WriteString("\n")
 	}
@@ -1161,29 +1348,44 @@ func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
 		d := list[min(p.dbPick, len(list)-1)]
 		pick = "‹ " + d.Engine + "/" + d.Name + " ›"
 	}
-	for i, f := range p.fields {
-		if f.id == "db-pick" {
-			marker, ls := "  ", t.fg(t.text).Width(18)
-			if p.inForm && i == p.focus {
-				marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(18)
-				p.focusLine = strings.Count(b.String(), "\n")
-			}
-			b.WriteString(p.zones.Mark(f.id, marker+ls.Render("Banco")+p.render(&field{label: pick}, i)) + "\n")
-		}
-	}
-	p.row(b, "db-env")
+	p.picker(b, "db-pick", pick)
 	p.inline(b, "db-link")
-	b.WriteString(muted.Width(w).Render("No deploy o cais le a credencial guardada e entrega a URL na variavel (padrao DATABASE_URL) "+
-		"e no arquivo ${CAIS_SECRETS}/<variavel em minusculas>. Desligar nao apaga o database.") + "\n")
+	b.WriteString(muted.Width(w).Render("No deploy o cais grava usuario e senha de cada banco ligado nos secrets "+
+		"<engine>_<nome>_user e <engine>_<nome>_pass (o database tem o nome do usuario); montar a URL e com o app. "+
+		"Desligar nao apaga o database.") + "\n")
+
+	b.WriteString("\n" + t.bold().Render("Buckets do Garage") + "\n")
+	if len(a.Buckets) == 0 {
+		b.WriteString(muted.Render("  nenhum bucket ligado: o app nao usa o S3 da infra") + "\n")
+	}
+	for _, l := range a.Buckets {
+		fmt.Fprintf(b, "  %-22s %s ", l.Name, muted.Render(strings.Join(l.Secrets(), " e ")))
+		mark("bucket-unlink:" + l.Name)
+		b.WriteString("\n")
+	}
+	bl := p.linkableBuckets()
+	pick = "nenhum bucket criado (aba Infra -> Garage -> Novo bucket)"
+	if len(bl) > 0 {
+		pick = "‹ " + bl[min(p.bucketPick, len(bl)-1)].Name + " ›"
+	}
+	p.picker(b, "bucket-pick", pick)
+	p.inline(b, "bucket-link")
+	b.WriteString(muted.Width(w).Render("No deploy o cais grava a chave de cada bucket ligado nos secrets "+
+		"s3_<bucket>_access_key e s3_<bucket>_secret_key. O app usa o endpoint http://garage:3900, regiao garage, "+
+		"path-style (rede garage_network). Desligar nao apaga o bucket.") + "\n")
 
 	b.WriteString("\n" + t.bold().Render("Secrets") + "\n")
 	if len(a.Secrets) == 0 {
 		b.WriteString(muted.Render("  nenhum secret") + "\n")
 	}
+	nameW := 0
 	for _, s := range a.Secrets {
-		fmt.Fprintf(b, "  %-26s %s ", s.Name, muted.Render("${CAIS_SECRETS}/"+s.Name))
-		if s.Database != "" {
-			b.WriteString(t.fg(t.accent).Render("URL do banco " + s.Database))
+		nameW = max(nameW, len(s.Name))
+	}
+	for _, s := range a.Secrets {
+		fmt.Fprintf(b, "  %-*s  ", nameW, s.Name)
+		if s.Infra != "" {
+			b.WriteString(t.fg(t.accent).Render("credencial de " + s.Infra))
 		} else {
 			mark("secret-del:" + s.Name)
 		}
@@ -1195,7 +1397,7 @@ func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
 	p.inline(b, "secret-save")
 	b.WriteString("\n" + muted.Width(w).Render(
 		"Cada secret e um arquivo em ${CAIS_SECRETS}/<nome>. No compose: secrets: {x: {file: ${CAIS_SECRETS}/x}} "+
-			"e o service le /run/secrets/x. O valor nunca aparece de novo; vale no proximo deploy.") + "\n")
+			"e o service le /run/secrets/x. O valor so aparece enquanto voce digita; vale no proximo deploy.") + "\n")
 }
 
 // integracao com o modelo (logs usam o visualizador comum com a Infra)

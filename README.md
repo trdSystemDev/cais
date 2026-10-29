@@ -157,24 +157,23 @@ cais db list
 ```
 
 O cais cria o database e um usuario de mesmo nome com senha nova, que so
-acessa esse database, e mostra a credencial: host (`postgres:5432` ou
-`mysql:3306`, pela rede `postgres_network`/`mysql_network`), usuario, senha e
-a URL completa, pra por nas variaveis ou num secret do app. A senha fica
-guardada no cais (`cais db list` mostra de novo, com os apps que usam cada
-database).
+acessa esse database. A senha fica guardada no cais e nao aparece na tela;
+`cais db list` mostra cada database com os secrets que o app recebe, o app
+ligado e o espaco ocupado.
 
-Ligue o database ao app (na hora de criar, com `-app` ou o campo App do Novo
-banco, ou depois em Apps -> Secrets -> Bancos da infra):
+Depois ligue o database ao app (Apps -> Secrets -> Ligar banco, ou pelo CLI):
 
 ```sh
-cais db create postgres portal -extensions postgis -app portal   # cria e ja liga
-cais app db portal postgres/portal -env DATABASE_URL             # liga um existente
-cais app db portal off postgres/portal                           # desliga (o database fica)
+cais app db portal postgres/portal       # liga
+cais app db portal off postgres/portal   # desliga (o database fica)
 ```
 
-A cada deploy o cais le a credencial guardada e entrega a URL na variavel
-(padrao `DATABASE_URL`, no `.env`) e no arquivo `${CAIS_SECRETS}/database_url`;
-ninguem cola senha a mao, e a aba Secrets mostra que o app usa o banco.
+A cada deploy o cais le a credencial guardada e grava os secrets
+`${CAIS_SECRETS}/<engine>_<database>_user` e `..._pass` (ex:
+`postgres_portal_user` e `postgres_portal_pass`). O app chega no banco
+por `postgres:5432` (ou `mysql:3306`) e o database tem o nome do usuario;
+montar a URL de conexao e com o app. Senha nova no cais vale no proximo
+deploy.
 
 O Garage publica a API S3 em `https://s3.<domain>` (ou `hosts.s3`), com
 regiao `garage` e enderecamento por caminho (path-style). O Setup prepara
@@ -182,18 +181,22 @@ o layout de no unico na primeira subida; execucoes seguintes preservam o
 layout. Os volumes `garage_meta` e `garage_data` persistem ao desligar.
 Esse layout nao oferece redundancia entre maquinas.
 
-Buckets e chaves ainda sao administrados pelo CLI do Garage:
+Crie os buckets na aba **Infra** (botao **Novo bucket** no card do Garage)
+ou pelo CLI. Cada bucket ganha uma chave so dele (leitura, escrita e dono),
+guardada no cais:
 
 ```sh
-cais service garage on
-docker exec garage /garage bucket create meu-bucket
-docker exec garage /garage key create minha-app
-docker exec garage /garage bucket allow --read --write --key minha-app meu-bucket
+cais bucket create portal-fotos
+cais bucket list                       # secrets, espaco e app de cada bucket
+cais app bucket portal portal-fotos        # liga ao app
+cais app bucket portal off portal-fotos    # desliga (o bucket e os arquivos ficam)
 ```
 
-Guarde a chave retornada em local seguro. Configure seu cliente S3 com o
-endpoint HTTPS, regiao `garage` e path-style; no teste local, use a CA gerada
-pelo cais. O secret RPC e o token de admin sao internos, nao sao chaves S3.
+A cada deploy o cais grava a chave nos secrets do app
+`${CAIS_SECRETS}/s3_<bucket>_access_key` e `..._secret_key` (`-` do nome vira
+`_`). Dentro da `garage_network` o app usa o endpoint `http://garage:3900`,
+regiao `garage` e path-style. O secret RPC e o token de admin sao internos,
+nao sao chaves S3.
 
 Os bancos nunca entram na `proxy_network`.
 

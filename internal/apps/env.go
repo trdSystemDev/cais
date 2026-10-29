@@ -15,6 +15,8 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // variavel por linha, valor entre aspas simples (literal) ou duplas.
 func ParseEnv(data []byte) (map[string]string, error) {
 	env := map[string]string{}
+	// \r\n (Windows) e \r sozinho (o colar de varios terminais) viram \n
+	data = bytes.ReplaceAll(bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n")), []byte("\r"), []byte("\n"))
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
 	for n := 1; sc.Scan(); n++ {
@@ -22,8 +24,10 @@ func ParseEnv(data []byte) (map[string]string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// "export VAR=valor" (.env escrito pra shell) vale igual
+		line = strings.TrimPrefix(line, "export ")
 		k, v, ok := strings.Cut(line, "=")
-		k = strings.TrimSpace(k)
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
 		if !ok || !envName.MatchString(k) {
 			return nil, fmt.Errorf("linha %d invalida no env", n)
 		}

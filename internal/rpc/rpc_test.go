@@ -343,10 +343,14 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	}
 
 	db, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "meu_app"})
-	if err != nil || db.Password == "" || !strings.HasPrefix(db.URL, "postgres://meu_app:") {
+	if err != nil || db.User != "meu_app" || len(db.Secrets) != 2 {
 		t.Fatalf("CreateDatabase: %+v, %v", db, err)
 	}
-	if list, err := c.Databases(ctx); err != nil || len(list) != 1 || !reflect.DeepEqual(list[0], db) {
+	list, err := c.Databases(ctx)
+	if err == nil && len(list) == 1 {
+		list[0].Size = nil
+	}
+	if err != nil || len(list) != 1 || !reflect.DeepEqual(list[0], db) {
 		t.Errorf("Databases: %+v, %v", list, err)
 	}
 

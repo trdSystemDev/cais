@@ -41,10 +41,13 @@ Servicos opcionais (o proxy sobe sempre):
   cais service <nome> on|off         liga ou desliga postgres, mysql ou garage e aplica
 
 Bancos (no Postgres/MySQL da infra):
-  cais db create postgres|mysql <nome> [-extensions postgis] [-app <app> [-env DATABASE_URL]]
-                                     database e usuario com senha nova; mostra a credencial;
-                                     com -app, ja liga no app
-  cais db list                       databases criados pelo cais, a credencial e os apps
+  cais db create postgres|mysql <nome> [-extensions postgis]
+                                     database e usuario com senha nova (guardada no cais)
+  cais db list                       databases criados pelo cais: secrets, espaco e app
+
+Buckets (no Garage da infra):
+  cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
+  cais bucket list                   buckets criados pelo cais: secrets, espaco e app
 
 Apps (repositorio no GitHub com o compose de producao pronto):
   cais apps                          lista os apps e o estado dos containers
@@ -53,11 +56,15 @@ Apps (repositorio no GitHub com o compose de producao pronto):
                                      baixa o commit, build com a versao no ar, sobe;
                                      se o up falhar, a versao anterior volta
   cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
-  cais app env <nome> [VAR=valor...] [-unset VAR,...]
-                                     mostra ou muda as variaveis (.env do projeto)
-  cais app db <nome> [postgres/<db> [-env VAR] | off postgres/<db>]
-                                     bancos da infra do app: o deploy entrega a URL em VAR
-                                     (padrao DATABASE_URL) e em ${CAIS_SECRETS}/<var>
+  cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
+                                     mostra ou muda as variaveis (.env do projeto);
+                                     -import junta um .env (- le do stdin)
+  cais app db <nome> [postgres/<db> | off postgres/<db>]
+                                     bancos da infra do app: o deploy grava os secrets
+                                     postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}
+  cais app bucket <nome> [<bucket> | off <bucket>]
+                                     buckets do app: o deploy grava os secrets
+                                     s3_<bucket>_access_key e s3_<bucket>_secret_key
   cais app secrets <nome>            lista os secrets do app (so nomes)
   cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
   cais app restart <nome> [service]  reinicia o app (ou um service)
@@ -95,6 +102,8 @@ func main() {
 		err = runApp(args)
 	case "db":
 		err = runDB(args)
+	case "bucket":
+		err = runBucket(args)
 	case "service":
 		err = runService(args)
 	case "version":

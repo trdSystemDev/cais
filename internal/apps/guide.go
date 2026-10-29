@@ -2,6 +2,7 @@ package apps
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -16,9 +17,10 @@ type GuideInput struct {
 	// Networks sao as redes das stacks ligadas que o app pode usar, alem
 	// da proxy_network (postgres_network, mysql_network, garage_network).
 	Networks  []string
-	Env       []string // nomes das variaveis do app
-	Secrets   []string // nomes dos secrets do app (fora os de banco)
-	Databases []DBLink // bancos da infra ligados
+	Env       []string     // nomes das variaveis do app
+	Secrets   []string     // nomes dos secrets do app (os dos bancos inclusive)
+	Databases []DBLink     // bancos da infra ligados
+	Buckets   []BucketLink // buckets do Garage ligados
 }
 
 // Guide e o texto que o cais devolve pra escrever o compose de producao do
@@ -108,11 +110,22 @@ func Guide(in GuideInput) string {
 		w("#   nenhum ligado ainda\n")
 	}
 	for _, l := range in.Databases {
-		w("#   banco %s ligado: URL em %s (no .env) e em ${CAIS_SECRETS}/%s\n", l.ID(), l.Env, l.File())
+		w("#   banco %s ligado: usuario em ${CAIS_SECRETS}/%s e senha em\n", l.ID(), l.UserSecret())
+		w("#   ${CAIS_SECRETS}/%s; o database tem o mesmo nome do usuario.\n", l.PassSecret())
 	}
 	if len(in.Databases) == 0 {
-		w("# Database do app: aba Infra -> Novo banco (com o app preenchido) ou\n")
-		w("# cais db create postgres <nome> -app %s: o deploy entrega a URL em DATABASE_URL.\n", in.App)
+		w("# Database do app: aba Infra -> Novo banco e depois Apps -> Secrets ->\n")
+		w("# Ligar banco (ou cais app db %s postgres/<nome>): o deploy grava os\n", in.App)
+		w("# secrets postgres_<nome>_user e postgres_<nome>_pass.\n")
+	}
+	for _, l := range in.Buckets {
+		w("#   bucket %s ligado: endpoint http://garage:3900, regiao garage, path-style;\n", l.Name)
+		w("#   chave em ${CAIS_SECRETS}/%s e ${CAIS_SECRETS}/%s.\n", l.AccessKeySecret(), l.SecretKeySecret())
+	}
+	if len(in.Buckets) == 0 && slices.Contains(in.Networks, "garage_network") {
+		w("# Bucket do app: aba Infra -> Garage -> Novo bucket e depois Apps -> Secrets ->\n")
+		w("# Ligar bucket (ou cais app bucket %s <nome>): o deploy grava os secrets\n", in.App)
+		w("# s3_<nome>_access_key e s3_<nome>_secret_key.\n")
 	}
 	w("#\n")
 	w("# Variaveis do cais no .env: CAIS_APP, CAIS_COMMIT (commit no ar) e\n")

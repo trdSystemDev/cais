@@ -77,11 +77,7 @@ func TestProvisionRecusaEntradaQueQuebraOSQL(t *testing.T) {
 	}
 }
 
-func TestURLEIdentificador(t *testing.T) {
-	e, _ := Get(Postgres)
-	if got := e.URL("meu_app", []byte("X")); got != "postgres://meu_app:X@postgres:5432/meu_app" {
-		t.Errorf("URL %s", got)
-	}
+func TestIdentificador(t *testing.T) {
 	if Identifier("meu-app") != "meu_app" {
 		t.Error("identificador")
 	}
@@ -112,5 +108,30 @@ func TestProvisionComExtensao(t *testing.T) {
 	my, _ := Get(MySQL)
 	if err := Provision(context.Background(), fakeExec(&calls), my, "portal", []byte(pw), []string{"postgis"}); err == nil {
 		t.Error("aceitou extensao no MySQL")
+	}
+}
+
+func TestSizes(t *testing.T) {
+	exec := func(_ context.Context, container string, input []byte, args ...string) (string, error) {
+		if container == "postgres" {
+			return "postgres\t7500259\nportal\t12345678\n", nil
+		}
+		return "loja\t49152", nil
+	}
+	pg, _ := Get(Postgres)
+	if got, err := Sizes(context.Background(), exec, pg); err != nil || got["portal"] != 12345678 || len(got) != 2 {
+		t.Errorf("postgres %v %v", got, err)
+	}
+	my, _ := Get(MySQL)
+	if got, err := Sizes(context.Background(), exec, my); err != nil || got["loja"] != 49152 {
+		t.Errorf("mysql %v %v", got, err)
+	}
+}
+
+func TestHumanSize(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 7500259: "7.2 MB", 3 << 30: "3.0 GB"} {
+		if got := HumanSize(n); got != want {
+			t.Errorf("HumanSize(%d) = %s, quer %s", n, got, want)
+		}
 	}
 }

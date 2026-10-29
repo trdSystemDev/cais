@@ -18,7 +18,7 @@ func (c *Core) appManager() apps.Manager {
 		src = githubSource{c}
 	}
 	m := apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now, Settle: c.deps.AppSettle,
-		DBCredentials: c.dbURL}
+		DBCredentials: c.dbCredentials, BucketCredentials: c.bucketCredentials}
 	if cfg, err := config.Load(c.deps.ConfigPath); err == nil {
 		m.Networks = infraNetworks(cfg)
 	}
@@ -270,10 +270,8 @@ func (c *Core) AppGuide(_ context.Context, name string) (string, error) {
 		return "", err
 	}
 	for _, s := range secrets {
-		if s.Database == "" {
-			in.Secrets = append(in.Secrets, s.Name)
-		}
+		in.Secrets = append(in.Secrets, s.Name)
 	}
-	in.Databases = a.Databases
+	in.Databases, in.Buckets = a.Databases, a.Buckets
 	return apps.Guide(in), nil
 }

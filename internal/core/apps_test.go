@@ -278,7 +278,7 @@ func TestCreateDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if info.Host != "postgres" || info.Port != 5432 || info.Network != "postgres_network" || info.User != "portal" ||
-		len(info.Password) < 20 || info.URL != "postgres://portal:"+info.Password+"@postgres:5432/portal" {
+		!reflect.DeepEqual(info.Secrets, []string{"postgres_portal_user", "postgres_portal_pass"}) {
 		t.Errorf("credencial %+v", info)
 	}
 	if len(sql) == 0 || !strings.HasPrefix(sql[0], "postgres: ") || !strings.Contains(strings.Join(sql, "\n"), "postgis") {
@@ -300,9 +300,21 @@ func TestCreateDatabase(t *testing.T) {
 		t.Error("aceitou nome invalido")
 	}
 
+	c.deps.ExecInput = func(context.Context, string, []byte, ...string) (string, error) {
+		return "postgres\t7500000\nportal\t12345678", nil
+	}
 	list, err := c.Databases(ctx)
-	if err != nil || len(list) != 1 || !reflect.DeepEqual(list[0], info) {
+	if err != nil || len(list) != 1 || list[0].Size == nil || *list[0].Size != 12345678 {
 		t.Fatalf("lista %+v %v", list, err)
+	}
+	list[0].Size = nil
+	if !reflect.DeepEqual(list[0], info) {
+		t.Errorf("lista %+v, criado %+v", list[0], info)
+	}
+	// postgres fora do ar: lista sem o tamanho
+	c.deps.ExecInput = func(context.Context, string, []byte, ...string) (string, error) { return "", errors.New("parado") }
+	if list, err := c.Databases(ctx); err != nil || len(list) != 1 || list[0].Size != nil {
+		t.Errorf("sem o postgres %+v %v", list, err)
 	}
 
 	c.infra.Lock()
@@ -332,29 +344,87 @@ func TestDeleteAppSaiDoEstado(t *testing.T) {
 	}
 }
 
-func TestCreateDatabaseJaLigaNoApp(t *testing.T) {
+func TestBancoLigadoNoApp(t *testing.T) {
 	c, _, _ := newAppsCore(t)
 	ctx := context.Background()
 	c.deps.ExecInput = func(context.Context, string, []byte, ...string) (string, error) { return "", nil }
 	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"})
-	if _, err := c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "outro", App: "nao-existe"}); err == nil {
-		t.Error("criou banco pra app que nao existe")
+	if _, err := c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "meu_app"}); err != nil {
+		t.Fatal(err)
 	}
-	info, err := c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "meu_app", App: "meu-app"})
-	if err != nil || len(info.Apps) != 1 || info.Apps[0].Env != "DATABASE_URL" {
-		t.Fatalf("%+v %v", info, err)
+	if err := c.LinkAppDatabase(ctx, "meu-app", "postgres", "meu_app"); err != nil {
+		t.Fatal(err)
 	}
 	s := snap(t, c).Apps.List[0]
-	if len(s.Databases) != 1 || s.Databases[0].ID() != "postgres/meu_app" || len(s.Secrets) != 1 || s.Secrets[0].Database == "" {
+	if len(s.Databases) != 1 || s.Databases[0].ID() != "postgres/meu_app" || len(s.Secrets) != 2 || s.Secrets[0].Infra == "" {
 		t.Fatalf("estado do app %+v %+v", s.Databases, s.Secrets)
 	}
 	list, _ := c.Databases(ctx)
-	if len(list) != 1 || len(list[0].Apps) != 1 || list[0].Apps[0].App != "meu-app" {
+	if len(list) != 1 || !reflect.DeepEqual(list[0].Apps, []string{"meu-app"}) {
 		t.Errorf("lista %+v", list)
 	}
 	// excluir o app nao apaga o database
 	c.DeleteApp(ctx, "meu-app", false)
 	if list, _ := c.Databases(ctx); len(list) != 1 || len(list[0].Apps) != 0 {
 		t.Errorf("depois de excluir o app %+v", list)
+	}
+}
+
+func TestCreateBucket(t *testing.T) {
+	c, _, _ := newAppsCore(t)
+	ctx := context.Background()
+	var calls []string
+	c.deps.Exec = func(_ context.Context, container string, args ...string) (string, error) {
+		calls = append(calls, container+" "+strings.Join(args, " "))
+		switch {
+		case len(args) > 2 && args[1] == "key":
+			return "Key ID:              GK5d0e\nSecret key:          6c9b79\n", nil
+		case len(args) > 2 && args[2] == "info":
+			return "Size:            1.2 MB (1.1 MiB)\n", nil
+		}
+		return "", nil
+	}
+	if _, err := c.CreateBucket(ctx, "fotos"); err == nil || !strings.Contains(err.Error(), "desligada") {
+		t.Errorf("garage desligado: %v", err)
+	}
+	cfg, err := config.Load(c.deps.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Stacks = append(cfg.Stacks, "garage")
+	if err := c.SaveConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := c.CreateBucket(ctx, "portal-fotos")
+	if err != nil || info.Endpoint != "http://garage:3900" ||
+		!reflect.DeepEqual(info.Secrets, []string{"s3_portal_fotos_access_key", "s3_portal_fotos_secret_key"}) {
+		t.Fatalf("%+v %v", info, err)
+	}
+	if _, err := c.CreateBucket(ctx, "portal-fotos"); err == nil || !strings.Contains(err.Error(), "ja existe") {
+		t.Errorf("repetido: %v", err)
+	}
+	if _, err := c.CreateBucket(ctx, "Nome_Ruim"); err == nil {
+		t.Error("aceitou nome invalido")
+	}
+
+	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"})
+	if err := c.LinkAppBucket(ctx, "meu-app", "portal-fotos"); err != nil {
+		t.Fatal(err)
+	}
+	list, err := c.Buckets(ctx)
+	if err != nil || len(list) != 1 || list[0].Name != "portal-fotos" || list[0].Size != "1.2 MB" ||
+		!reflect.DeepEqual(list[0].Apps, []string{"meu-app"}) {
+		t.Fatalf("lista %+v %v", list, err)
+	}
+	s := snap(t, c).Apps.List[0]
+	if len(s.Buckets) != 1 || len(s.Secrets) != 2 || s.Secrets[0].Infra != "s3/portal-fotos" {
+		t.Errorf("estado do app %+v %+v", s.Buckets, s.Secrets)
+	}
+	// a secret key nunca vai na linha de comando
+	for _, call := range calls {
+		if strings.Contains(call, "6c9b79") {
+			t.Errorf("secret key na linha de comando: %s", call)
+		}
 	}
 }

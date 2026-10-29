@@ -176,6 +176,9 @@ func (m *model) viewInfra(h int) string {
 			if (name == "postgres" || name == "mysql") && st.Enabled && st.Installed {
 				line += " " + m.zones.Mark("newdb:"+name, t.pill(m.db.engine == name).Render("Novo banco"))
 			}
+			if name == "garage" && st.Enabled && st.Installed {
+				line += " " + m.zones.Mark("newdb:"+name, t.pill(m.db.engine == name).Render("Novo bucket"))
+			}
 		}
 		card := t.panel(selected, leftW-4, 2).Render(ansi.Truncate(title, leftW-6, "…") + "\n" + line)
 		cards = append(cards, m.zones.Mark("stack:"+name, card))
@@ -401,8 +404,8 @@ func (m *model) infraKey(k string) tea.Cmd {
 	case "r":
 		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
 	case "b":
-		// Novo banco no Postgres/MySQL selecionado
-		if st := m.selectedStack(); (st.Name == "postgres" || st.Name == "mysql") && st.Enabled && st.Installed {
+		// Novo banco no Postgres/MySQL ou Novo bucket no Garage selecionado
+		if st := m.selectedStack(); (st.Name == "postgres" || st.Name == "mysql" || st.Name == "garage") && st.Enabled && st.Installed {
 			return m.db.show(st.Name)
 		}
 		return nil

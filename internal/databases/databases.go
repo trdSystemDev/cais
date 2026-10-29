@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -22,12 +23,11 @@ type Engine struct {
 	Network string
 	// Container e onde o cais roda os comandos de administracao.
 	Container string
-	scheme    string
 }
 
 var engines = map[string]Engine{
-	Postgres: {Name: Postgres, Host: "postgres", Port: 5432, Network: "postgres_network", Container: "postgres", scheme: "postgres"},
-	MySQL:    {Name: MySQL, Host: "mysql", Port: 3306, Network: "mysql_network", Container: "mysql", scheme: "mysql"},
+	Postgres: {Name: Postgres, Host: "postgres", Port: 5432, Network: "postgres_network", Container: "postgres"},
+	MySQL:    {Name: MySQL, Host: "mysql", Port: 3306, Network: "mysql_network", Container: "mysql"},
 }
 
 // Get devolve o engine pelo nome.
@@ -42,12 +42,6 @@ func Get(name string) (Engine, error) {
 // Identifier e o nome do database e do usuario de um app: o nome do app
 // com _ no lugar de - (valido sem aspas nos dois bancos e nas URLs).
 func Identifier(app string) string { return strings.ReplaceAll(app, "-", "_") }
-
-// URL e a URL de conexao no formato que a maioria dos frameworks aceita.
-// A senha do cais e A-Z2-7, entao entra sem escape.
-func (e Engine) URL(name string, password []byte) string {
-	return fmt.Sprintf("%s://%s:%s@%s:%d/%s", e.scheme, name, password, e.Host, e.Port, name)
-}
 
 // Exec roda um comando no container mandando input pelo stdin.
 type Exec func(ctx context.Context, container string, input []byte, args ...string) (string, error)
@@ -85,6 +79,52 @@ func Provision(ctx context.Context, exec Exec, e Engine, name string, password [
 		return fmt.Errorf("criando database %s no %s: %w", name, e.Name, err)
 	}
 	return nil
+}
+
+// Sizes devolve o espaco ocupado (bytes) de cada database da instancia.
+// No MySQL um database sem tabelas nao aparece (ocupa 0).
+func Sizes(ctx context.Context, exec Exec, e Engine) (map[string]int64, error) {
+	var out string
+	var err error
+	switch e.Name {
+	case Postgres:
+		out, err = exec(ctx, e.Container, []byte("SELECT datname, pg_database_size(datname) FROM pg_database;\n"),
+			"psql", "-v", "ON_ERROR_STOP=1", "-q", "-At", "-F", "\t", "-U", "postgres", "-d", "postgres")
+	case MySQL:
+		out, err = exec(ctx, e.Container, []byte("SELECT table_schema, COALESCE(SUM(data_length + index_length), 0) "+
+			"FROM information_schema.tables GROUP BY table_schema;\n"),
+			"sh", "-c", `MYSQL_PWD="$(cat /run/secrets/mysql_root_password)" exec mysql -uroot -N -B`)
+	default:
+		return nil, fmt.Errorf("banco %q nao suportado", e.Name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("tamanho dos databases do %s: %w", e.Name, err)
+	}
+	sizes := map[string]int64{}
+	for _, line := range strings.Split(out, "\n") {
+		name, n, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok {
+			continue
+		}
+		if v, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64); err == nil {
+			sizes[name] = v
+		}
+	}
+	return sizes, nil
+}
+
+// HumanSize escreve bytes como 12.3 MB.
+func HumanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // CheckIdentifier confere o nome de um database/usuario.

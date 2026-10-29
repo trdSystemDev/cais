@@ -53,8 +53,24 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 			return []docker.Container{{Name: name, Service: name, State: "running", Health: "healthy", Status: "Up 1 minute (healthy)"}}, nil
 		},
 		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
+		Exec:      fakeGarage,
 	})
 	return c, &ups, &pss
+}
+
+// fakeGarage responde o CLI do Garage como o container de verdade (layout
+// ja aplicado, chave nova, bucket vazio).
+func fakeGarage(_ context.Context, _ string, args ...string) (string, error) {
+	cmd := strings.Join(args, " ")
+	switch {
+	case strings.Contains(cmd, "layout show"):
+		return "Current cluster layout version: 1", nil
+	case strings.Contains(cmd, "key create"):
+		return "Key ID:              GK5d0e\nSecret key:          6c9b79\n", nil
+	case strings.Contains(cmd, "bucket info"):
+		return "Size:            0 B (0 B)\n", nil
+	}
+	return "", nil
 }
 
 // open monta a TUI sobre uma core.API, como o Run faz, numa tela de 130x34.
@@ -428,7 +444,7 @@ func TestInfraAtualizaDepoisDoSetup(t *testing.T) {
 	waitFor(t, m, "✓ proxy")
 }
 
-// Novo banco: database e usuario com senha nova, e a credencial na tela
+// Novo banco: database e usuario com senha nova, e a lista com secrets e espaco
 func TestInfraNovoBanco(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	setupDone(t, c, "postgres")
@@ -442,7 +458,7 @@ func TestInfraNovoBanco(t *testing.T) {
 	typeIn(t, m, "db-exts", "postgis")
 	click(t, m, "db-create")
 	waitFor(t, m, "Database loja criado")
-	waitFor(t, m, "postgres://loja:")
+	waitFor(t, m, "postgres_loja_user, postgres_loja_pass (sem app)")
 	list, err := c.Databases(context.Background())
 	if err != nil || len(list) != 1 || list[0].Name != "loja" {
 		t.Fatalf("databases %+v %v", list, err)
@@ -454,4 +470,22 @@ func TestInfraNovoBanco(t *testing.T) {
 	waitFor(t, m, "ja existe")
 	click(t, m, "db-close")
 	waitFor(t, m, "Logs · ")
+}
+
+// Novo bucket no Garage: bucket e chave, e a lista com os secrets do app
+func TestInfraNovoBucket(t *testing.T) {
+	c, _, _ := testCore(t, okChecker)
+	setupDone(t, c, "garage")
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Novo bucket")
+	click(t, m, "newdb:garage")
+	waitFor(t, m, "Novo bucket no garage")
+	typeIn(t, m, "db-name", "portal-fotos")
+	click(t, m, "db-create")
+	waitFor(t, m, "Bucket portal-fotos criado")
+	waitFor(t, m, "s3_portal_fotos_access_key, s3_portal_fotos_secret_key (sem app)")
+	if list, err := c.Buckets(context.Background()); err != nil || len(list) != 1 {
+		t.Fatalf("buckets %+v %v", list, err)
+	}
 }

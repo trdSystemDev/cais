@@ -43,6 +43,10 @@ const (
 	MethodDatabases        = "db.list"
 	MethodAppDBLink        = "app.db.link"   // params: appDBParams
 	MethodAppDBUnlink      = "app.db.unlink" // params: appDBParams
+	MethodBucketCreate     = "bucket.create" // params: bucketParams
+	MethodBuckets          = "bucket.list"
+	MethodAppBucketLink    = "app.bucket.link"   // params: appBucketParams
+	MethodAppBucketUnlink  = "app.bucket.unlink" // params: appBucketParams
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -139,7 +143,15 @@ type appDBParams struct {
 	App    string `json:"app"`
 	Engine string `json:"engine"`
 	Name   string `json:"name"`
-	Env    string `json:"env,omitempty"`
+}
+
+type bucketParams struct {
+	Name string `json:"name"`
+}
+
+type appBucketParams struct {
+	App    string `json:"app"`
+	Bucket string `json:"bucket"`
 }
 
 type textResult struct {

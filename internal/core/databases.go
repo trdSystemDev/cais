@@ -20,59 +20,53 @@ type DatabaseRequest struct {
 	Name string `json:"name"`
 	// Extensions sao extensoes do Postgres criadas no database (postgis).
 	Extensions []string `json:"extensions,omitempty"`
-	// App, se informado, ja fica ligado ao database: recebe a URL em Env
-	// (padrao DATABASE_URL) no proximo deploy.
-	App string `json:"app,omitempty"`
-	Env string `json:"env,omitempty"`
 }
 
-// DatabaseInfo e a credencial de um database criado pelo cais.
+// DatabaseInfo e um database criado pelo cais. A senha fica guardada no
+// cais e so chega no app, pelos secrets.
 type DatabaseInfo struct {
-	Engine   string `json:"engine"`
-	Name     string `json:"name"`
-	User     string `json:"user"`
-	Password string `json:"password"`
+	Engine string `json:"engine"`
+	Name   string `json:"name"`
+	User   string `json:"user"`
 	// Host e Port sao como o app chega no banco, pela rede Network.
 	Host    string `json:"host"`
 	Port    int    `json:"port"`
 	Network string `json:"network"`
-	// URL e a URL de conexao completa (postgres://... ou mysql://...).
-	URL string `json:"url"`
-	// Apps sao os apps ligados ao database (variavel de cada um).
-	Apps []DatabaseUse `json:"apps,omitempty"`
+	// Secrets sao os secrets que o app ligado recebe
+	// (<engine>_<nome>_user e <engine>_<nome>_pass).
+	Secrets []string `json:"secrets"`
+	// Apps sao os apps ligados ao database.
+	Apps []string `json:"apps,omitempty"`
+	// Size e o espaco ocupado em bytes; nil se a instancia nao respondeu.
+	Size *int64 `json:"size,omitempty"`
 }
 
-// DatabaseUse e um app que usa o database, com a variavel da URL.
-type DatabaseUse struct {
-	App string `json:"app"`
-	Env string `json:"env"`
-}
-
-// dbURL e a URL de um database criado pelo cais (o que o app recebe).
-func (c *Core) dbURL(engine, name string) (string, error) {
+// dbCredentials e o usuario e a senha de um database criado pelo cais (o
+// que o app recebe).
+func (c *Core) dbCredentials(engine, name string) (string, string, error) {
 	e, err := databases.Get(engine)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	pw, err := c.secretStore().Get(dbSecret(e.Name, name))
 	if errors.Is(err, secrets.ErrNotFound) {
-		return "", fmt.Errorf("o database %s/%s nao existe no cais (crie na aba Infra -> Novo banco)", engine, name)
+		return "", "", fmt.Errorf("o database %s/%s nao existe no cais (crie na aba Infra -> Novo banco)", engine, name)
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return e.URL(name, pw), nil
+	return name, string(pw), nil
 }
 
-// LinkAppDatabase liga o app a um database da infra: o deploy entrega a URL
-// em env (vazio = DATABASE_URL) e em ${CAIS_SECRETS}/<env em minusculas>.
-func (c *Core) LinkAppDatabase(ctx context.Context, app, engine, name, env string) error {
+// LinkAppDatabase liga o app a um database da infra: o deploy grava
+// ${CAIS_SECRETS}/<engine>_<nome>_user e <engine>_<nome>_pass.
+func (c *Core) LinkAppDatabase(ctx context.Context, app, engine, name string) error {
 	unlock, err := c.lockApp(app)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	err = c.appManager().LinkDB(app, apps.DBLink{Engine: engine, Name: name, Env: env})
+	err = c.appManager().LinkDB(app, apps.DBLink{Engine: engine, Name: name})
 	c.CheckApps(ctx)
 	return err
 }
@@ -92,33 +86,15 @@ func (c *Core) UnlinkAppDatabase(ctx context.Context, app, engine, name string) 
 // a senha de cada database fica num secret central: db_<engine>_<nome>
 func dbSecret(engine, name string) string { return "db_" + engine + "_" + name }
 
-func dbInfo(e databases.Engine, name string, pw []byte) DatabaseInfo {
-	return DatabaseInfo{Engine: e.Name, Name: name, User: name, Password: string(pw),
-		Host: e.Host, Port: e.Port, Network: e.Network, URL: e.URL(name, pw)}
+func dbInfo(e databases.Engine, name string) DatabaseInfo {
+	return DatabaseInfo{Engine: e.Name, Name: name, User: name, Host: e.Host, Port: e.Port, Network: e.Network,
+		Secrets: apps.DBLink{Engine: e.Name, Name: name}.Secrets()}
 }
 
 // CreateDatabase cria database e usuario com senha nova (o usuario so
 // acessa o proprio database). Nome que ja existe e recusado: nunca troca a
 // senha de um banco em uso sem pedir.
 func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (DatabaseInfo, error) {
-	if req.App != "" {
-		// o app tem que existir antes de criar o banco pra ele
-		if _, err := c.appManager().Get(req.App); err != nil {
-			return DatabaseInfo{}, err
-		}
-	}
-	info, err := c.createDatabase(ctx, req)
-	if err != nil || req.App == "" {
-		return info, err
-	}
-	if err := c.LinkAppDatabase(ctx, req.App, info.Engine, info.Name, req.Env); err != nil {
-		return info, fmt.Errorf("database criado, mas nao ligou no app %s: %w (ligue em Apps -> Secrets)", req.App, err)
-	}
-	info.Apps = []DatabaseUse{{App: req.App, Env: cmpOr(req.Env, apps.DefaultDBEnv)}}
-	return info, nil
-}
-
-func (c *Core) createDatabase(ctx context.Context, req DatabaseRequest) (DatabaseInfo, error) {
 	e, err := databases.Get(req.Engine)
 	if err != nil {
 		return DatabaseInfo{}, err
@@ -156,11 +132,12 @@ func (c *Core) createDatabase(ctx context.Context, req DatabaseRequest) (Databas
 	if err := store.Put(secret, pw); err != nil {
 		return DatabaseInfo{}, fmt.Errorf("database criado, mas a senha nao foi guardada: %w", err)
 	}
-	return dbInfo(e, name, pw), nil
+	return dbInfo(e, name), nil
 }
 
-// Databases lista os databases criados pelo cais, com a credencial.
-func (c *Core) Databases(context.Context) ([]DatabaseInfo, error) {
+// Databases lista os databases criados pelo cais, com os apps que usam
+// cada um e o espaco ocupado.
+func (c *Core) Databases(ctx context.Context) ([]DatabaseInfo, error) {
 	names, err := c.secretStore().List()
 	if err != nil {
 		return nil, err
@@ -168,19 +145,10 @@ func (c *Core) Databases(context.Context) ([]DatabaseInfo, error) {
 	var out []DatabaseInfo
 	for _, n := range names {
 		for _, engine := range []string{databases.Postgres, databases.MySQL} {
-			name, ok := strings.CutPrefix(n, "db_"+engine+"_")
-			if !ok {
-				continue
+			if name, ok := strings.CutPrefix(n, "db_"+engine+"_"); ok {
+				e, _ := databases.Get(engine)
+				out = append(out, dbInfo(e, name))
 			}
-			pw, err := c.secretStore().Get(n)
-			if errors.Is(err, secrets.ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			e, _ := databases.Get(engine)
-			out = append(out, dbInfo(e, name, pw))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Engine+out[i].Name < out[j].Engine+out[j].Name })
@@ -188,21 +156,25 @@ func (c *Core) Databases(context.Context) ([]DatabaseInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	sizes := map[string]map[string]int64{}
 	for i := range out {
 		for _, a := range list {
 			for _, l := range a.Databases {
 				if l.Engine == out[i].Engine && l.Name == out[i].Name {
-					out[i].Apps = append(out[i].Apps, DatabaseUse{App: a.Name, Env: l.Env})
+					out[i].Apps = append(out[i].Apps, a.Name)
 				}
 			}
 		}
+		e := out[i].Engine
+		if _, ok := sizes[e]; !ok {
+			// instancia fora do ar: lista sem o tamanho
+			eng, _ := databases.Get(e)
+			sizes[e], _ = databases.Sizes(ctx, c.deps.ExecInput, eng)
+		}
+		if sizes[e] != nil {
+			n := sizes[e][out[i].Name]
+			out[i].Size = &n
+		}
 	}
 	return out, nil
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }

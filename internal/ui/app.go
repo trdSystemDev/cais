@@ -282,7 +282,8 @@ func (m *model) setTab(i int) tea.Cmd {
 		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
 	}
 	if i == tabApps {
-		return tea.Batch(m.apps.checkCmd(), m.syncAppLogs(true))
+		// bancos e buckets criados na Infra (ou pelo CLI) ja aparecem pra ligar
+		return tea.Batch(m.apps.checkCmd(), m.apps.dbsCmd(), m.syncAppLogs(true))
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -365,6 +366,13 @@ func TestEnvIdaEVolta(t *testing.T) {
 	}
 }
 
+func TestParseEnvDeArquivoComum(t *testing.T) {
+	out, err := ParseEnv([]byte("# app\r\nexport A=1\r\n\rB = \"dois\"\rC='tres'\n"))
+	if err != nil || out["A"] != "1" || out["B"] != "dois" || out["C"] != "tres" {
+		t.Errorf("%q %v", out, err)
+	}
+}
+
 func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
 	src, secretsDir := "/var/lib/cais/apps/web/src.next", "/var/lib/cais/apps/web/secrets"
 	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}}
@@ -572,60 +580,120 @@ func TestDeleteApagaOAppEDerrubaOProjeto(t *testing.T) {
 }
 
 func TestBancoLigadoEntraNoDeploy(t *testing.T) {
-	m, _, d := newManager(t)
-	urls := map[string]string{"postgres/loja": "postgres://loja:s3nh4@postgres:5432/loja"}
-	m.DBCredentials = func(engine, name string) (string, error) {
-		if u, ok := urls[engine+"/"+name]; ok {
-			return u, nil
+	m, _, _ := newManager(t)
+	pws := map[string]string{"postgres/loja": "s3nh4", "mysql/relatorios": "outra"}
+	m.DBCredentials = func(engine, name string) (string, string, error) {
+		if pw, ok := pws[engine+"/"+name]; ok {
+			return name, pw, nil
 		}
-		return "", fmt.Errorf("o database %s/%s nao existe", engine, name)
+		return "", "", fmt.Errorf("o database %s/%s nao existe", engine, name)
 	}
 	m.Create(App{Name: "web", Repo: "o/web"})
-	m.SetEnv("web", map[string]string{"DATABASE_URL": "colada a mao"})
+	m.SetSecret("web", "postgres_loja_pass", []byte("colada a mao"))
+	read := func(s string) string {
+		data, _ := os.ReadFile(filepath.Join(m.SecretsPath("web"), s))
+		return string(data)
+	}
 
 	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "nao"}); err == nil {
 		t.Error("ligou banco que nao existe")
 	}
-	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "loja"}); err == nil || !strings.Contains(err.Error(), "ja e uma variavel do app") {
-		t.Fatalf("variavel repetida: %v", err)
+	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "loja"}); err == nil || !strings.Contains(err.Error(), "gravado a mao") {
+		t.Fatalf("secret repetido: %v", err)
 	}
-	m.SetEnv("web", map[string]string{"NODE_ENV": "production"})
+	m.DeleteSecret("web", "postgres_loja_pass")
 	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "loja"}); err != nil {
 		t.Fatal(err)
 	}
-	// o secret aparece na hora, marcado como do banco
+	// cada banco tem os proprios secrets: o app pode usar mais de um
+	if err := m.LinkDB("web", DBLink{Engine: "mysql", Name: "relatorios"}); err != nil {
+		t.Fatal(err)
+	}
+	// os secrets aparecem na hora, marcados com o banco
 	list, _ := m.Secrets("web")
-	if len(list) != 1 || list[0].Name != "database_url" || list[0].Database != "postgres/loja" {
-		t.Fatalf("secrets %+v", list)
+	got := map[string]string{}
+	for _, s := range list {
+		got[s.Name] = s.Infra
 	}
-	if err := m.DeleteSecret("web", "database_url"); err == nil {
-		t.Error("apagou a URL do banco como secret comum")
+	want := map[string]string{"postgres_loja_user": "postgres/loja", "postgres_loja_pass": "postgres/loja",
+		"mysql_relatorios_user": "mysql/relatorios", "mysql_relatorios_pass": "mysql/relatorios"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("secrets %v", got)
 	}
-	if err := m.SetEnv("web", map[string]string{"DATABASE_URL": "x"}); err == nil {
-		t.Error("deixou criar variavel com o nome da URL do banco")
+	if read("postgres_loja_user") != "loja" || read("postgres_loja_pass") != "s3nh4" {
+		t.Errorf("credencial %q %q", read("postgres_loja_user"), read("postgres_loja_pass"))
+	}
+	if err := m.DeleteSecret("web", "postgres_loja_pass"); err == nil {
+		t.Error("apagou a senha do banco como secret comum")
+	}
+	if err := m.SetSecret("web", "postgres_loja_user", []byte("x")); err == nil {
+		t.Error("sobrescreveu o usuario do banco a mao")
 	}
 
+	// a senha mudou no cais: o proximo deploy ja leva a nova
+	pws["postgres/loja"] = "nova"
 	if _, err := m.Deploy(context.Background(), "web", ""); err != nil {
 		t.Fatal(err)
 	}
-	if d.envSeen["DATABASE_URL"] != urls["postgres/loja"] || d.envSeen["NODE_ENV"] != "production" {
-		t.Errorf(".env %v", d.envSeen)
-	}
-	// a senha mudou no cais: o proximo deploy ja leva a nova
-	urls["postgres/loja"] = "postgres://loja:nova@postgres:5432/loja"
-	m.Deploy(context.Background(), "web", "")
-	data, _ := os.ReadFile(filepath.Join(m.SecretsPath("web"), "database_url"))
-	if d.envSeen["DATABASE_URL"] != urls["postgres/loja"] || string(data) != urls["postgres/loja"] {
-		t.Errorf("nao atualizou: .env %q arquivo %q", d.envSeen["DATABASE_URL"], data)
+	if read("postgres_loja_pass") != "nova" {
+		t.Errorf("nao atualizou: %q", read("postgres_loja_pass"))
 	}
 
 	if err := m.UnlinkDB("web", "postgres", "loja"); err != nil {
 		t.Fatal(err)
 	}
-	if list, _ := m.Secrets("web"); len(list) != 0 {
-		t.Errorf("o arquivo da URL ficou: %+v", list)
+	if list, _ := m.Secrets("web"); len(list) != 2 || list[0].Infra != "mysql/relatorios" {
+		t.Errorf("depois de desligar o postgres: %+v", list)
 	}
-	if a, _ := m.Get("web"); len(a.Databases) != 0 {
-		t.Errorf("continua ligado: %+v", a.Databases)
+	if a, _ := m.Get("web"); len(a.Databases) != 1 {
+		t.Errorf("bancos ligados: %+v", a.Databases)
+	}
+}
+
+func TestBucketLigadoEntraNoDeploy(t *testing.T) {
+	m, _, _ := newManager(t)
+	keys := map[string][2]string{"portal-fotos": {"GK1", "s3cr3t"}}
+	m.BucketCredentials = func(name string) (string, string, error) {
+		if k, ok := keys[name]; ok {
+			return k[0], k[1], nil
+		}
+		return "", "", fmt.Errorf("o bucket %s nao existe", name)
+	}
+	m.Create(App{Name: "web", Repo: "o/web"})
+	read := func(s string) string {
+		data, _ := os.ReadFile(filepath.Join(m.SecretsPath("web"), s))
+		return string(data)
+	}
+	if err := m.LinkBucket("web", BucketLink{Name: "nao"}); err == nil {
+		t.Error("ligou bucket que nao existe")
+	}
+	if err := m.LinkBucket("web", BucketLink{Name: "portal-fotos"}); err != nil {
+		t.Fatal(err)
+	}
+	if read("s3_portal_fotos_access_key") != "GK1" || read("s3_portal_fotos_secret_key") != "s3cr3t" {
+		t.Errorf("chave %q %q", read("s3_portal_fotos_access_key"), read("s3_portal_fotos_secret_key"))
+	}
+	list, _ := m.Secrets("web")
+	if len(list) != 2 || list[0].Infra != "s3/portal-fotos" {
+		t.Fatalf("secrets %+v", list)
+	}
+	if err := m.DeleteSecret("web", "s3_portal_fotos_secret_key"); err == nil {
+		t.Error("apagou a chave do bucket como secret comum")
+	}
+
+	// chave nova no cais: o proximo deploy ja leva
+	keys["portal-fotos"] = [2]string{"GK2", "nova"}
+	if _, err := m.Deploy(context.Background(), "web", ""); err != nil {
+		t.Fatal(err)
+	}
+	if read("s3_portal_fotos_access_key") != "GK2" {
+		t.Errorf("nao atualizou: %q", read("s3_portal_fotos_access_key"))
+	}
+
+	if err := m.UnlinkBucket("web", "portal-fotos"); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := m.Secrets("web"); len(list) != 0 {
+		t.Errorf("os secrets do bucket ficaram: %+v", list)
 	}
 }

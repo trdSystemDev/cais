@@ -337,8 +337,8 @@ func (c *Client) CreateDatabase(ctx context.Context, req core.DatabaseRequest) (
 	return
 }
 
-func (c *Client) LinkAppDatabase(ctx context.Context, app, engine, name, env string) error {
-	return c.call(ctx, MethodAppDBLink, appDBParams{App: app, Engine: engine, Name: name, Env: env}, nil)
+func (c *Client) LinkAppDatabase(ctx context.Context, app, engine, name string) error {
+	return c.call(ctx, MethodAppDBLink, appDBParams{App: app, Engine: engine, Name: name}, nil)
 }
 
 func (c *Client) UnlinkAppDatabase(ctx context.Context, app, engine, name string) error {
@@ -348,4 +348,22 @@ func (c *Client) UnlinkAppDatabase(ctx context.Context, app, engine, name string
 func (c *Client) Databases(ctx context.Context) (list []core.DatabaseInfo, err error) {
 	err = c.call(ctx, MethodDatabases, nil, &list)
 	return
+}
+
+func (c *Client) CreateBucket(ctx context.Context, name string) (info core.BucketInfo, err error) {
+	err = c.call(ctx, MethodBucketCreate, bucketParams{Name: name}, &info)
+	return
+}
+
+func (c *Client) Buckets(ctx context.Context) (list []core.BucketInfo, err error) {
+	err = c.call(ctx, MethodBuckets, nil, &list)
+	return
+}
+
+func (c *Client) LinkAppBucket(ctx context.Context, app, bucket string) error {
+	return c.call(ctx, MethodAppBucketLink, appBucketParams{App: app, Bucket: bucket}, nil)
+}
+
+func (c *Client) UnlinkAppBucket(ctx context.Context, app, bucket string) error {
+	return c.call(ctx, MethodAppBucketUnlink, appBucketParams{App: app, Bucket: bucket}, nil)
 }
