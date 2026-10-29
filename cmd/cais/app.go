@@ -101,10 +101,10 @@ func runApp(args []string) error {
 	}
 	lim, ok := need[sub]
 	if !ok {
-		return fmt.Errorf("subcomando desconhecido: app %s (veja: cais help)", sub)
+		return groupError("app", sub)
 	}
 	if n := len(pos); n < lim[0] || (lim[1] >= 0 && n > lim[1]) {
-		return fmt.Errorf("argumentos errados pra app %s (veja: cais help)", sub)
+		return fmt.Errorf("argumentos errados\nuso: %s (detalhes: cais app %s -h)", usageOf("app "+sub), sub)
 	}
 	name := arg(0)
 
@@ -378,6 +378,9 @@ func runBucket(args []string) error {
 	fs, socket := newFlags("bucket " + sub)
 	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
 	pos := parseInterspersed(fs, args)
+	if sub != "create" && sub != "list" && sub != "delete" {
+		return groupError("bucket", sub)
+	}
 	c, err := connect(*socket)
 	if err != nil {
 		return err
@@ -422,8 +425,6 @@ func runBucket(args []string) error {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, strings.Join(b.Secrets, ", "), cmpOr(b.Size, "?"), cmpOr(strings.Join(b.Apps, ", "), "-"))
 		}
 		w.Flush()
-	default:
-		return fmt.Errorf("subcomando desconhecido: bucket %s (veja: cais help)", sub)
 	}
 	return nil
 }
@@ -435,6 +436,9 @@ func runDB(args []string) error {
 	exts := fs.String("extensions", "", "extensoes do Postgres, separadas por virgula (ex: postgis)")
 	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
 	pos := parseInterspersed(fs, args)
+	if sub != "create" && sub != "list" && sub != "delete" {
+		return groupError("db", sub)
+	}
 	c, err := connect(*socket)
 	if err != nil {
 		return err
@@ -478,8 +482,6 @@ func runDB(args []string) error {
 			fmt.Fprintf(w, "%s/%s\t%s\t%s\t%s\n", d.Engine, d.Name, strings.Join(d.Secrets, ", "), dbSize(d), cmpOr(strings.Join(d.Apps, ", "), "-"))
 		}
 		w.Flush()
-	default:
-		return fmt.Errorf("subcomando desconhecido: db %s (veja: cais help)", sub)
 	}
 	return nil
 }

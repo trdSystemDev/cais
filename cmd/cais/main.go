@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,67 +20,6 @@ import (
 
 // version e preenchido no build via -ldflags "-X main.version=..."
 var version = "dev"
-
-const usage = `cais -- painel da VPS
-
-Uso:
-  cais [--socket caminho]            abre a interface (TUI)
-  cais daemon [--socket] [--group]   roda o daemon (dono do estado e das acoes)
-  cais state [--socket]              imprime o estado atual em JSON
-  cais check [--socket]              checa o ambiente e imprime o resultado em JSON
-  cais version                       mostra a versao
-
-Setup da VPS:
-  cais setup                         mostra o plano: o que falta e o que vai mudar
-  cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
-      --domain --email --tls letsencrypt|selfsigned --http-port --https-port
-      --github-app-id --host-s3
-  cais setup secret <nome>           grava um secret informado (le do stdin), ex: github_app_key
-  cais setup run                     executa o Setup e mostra o progresso
-
-Servicos opcionais (o proxy sobe sempre):
-  cais service <nome> on|off         liga ou desliga postgres, mysql ou garage e aplica
-
-Bancos (no Postgres/MySQL da infra):
-  cais db create postgres|mysql <nome> [-extensions postgis]
-                                     database e usuario com senha nova (guardada no cais)
-  cais db list                       databases criados pelo cais: secrets, espaco e app
-  cais db delete postgres|mysql <nome> [-yes]
-                                     apaga o database e o usuario (nao pode estar ligado a app)
-
-Buckets (no Garage da infra):
-  cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
-  cais bucket list                   buckets criados pelo cais: secrets, espaco e app
-  cais bucket delete <nome> [-yes]   apaga o bucket (vazio) e a chave (nao pode estar ligado a app)
-
-Apps (repositorio no GitHub com o compose de producao pronto):
-  cais apps                          lista os apps e o estado dos containers
-  cais app create <nome> <dono/repo> [-branch main] [-compose docker-compose.prod.yml]
-  cais app deploy <nome> [-ref <branch ou commit>]
-                                     baixa o commit, build com a versao no ar, sobe;
-                                     se o up falhar, a versao anterior volta
-  cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
-  cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
-                                     mostra ou muda as variaveis (.env do projeto);
-                                     -import junta um .env (- le do stdin)
-  cais app db <nome> [postgres/<db> | off postgres/<db>]
-                                     bancos da infra do app: o deploy grava os secrets
-                                     postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}
-  cais app bucket <nome> [<bucket> | off <bucket>]
-                                     buckets do app: o deploy grava os secrets
-                                     s3_<bucket>_access_key e s3_<bucket>_secret_key
-  cais app secrets <nome>            lista os secrets do app (so nomes)
-  cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
-  cais app restart <nome> [service]  reinicia o app (ou um service)
-  cais app stop <nome>               para o app sem apagar nada
-  cais app logs <nome> <container>   ultimas linhas do log
-  cais app delete <nome> [-volumes] [-yes]
-                                     exclui o app (containers, imagens, codigo, variaveis,
-                                     secrets); -volumes apaga tambem os dados. O database
-                                     da infra fica
-
-O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET).
-`
 
 func main() {
 	cmd, args := "tui", os.Args[1:]
@@ -112,9 +52,9 @@ func main() {
 	case "version":
 		fmt.Println("cais", version)
 	case "help":
-		fmt.Print(usage)
+		fmt.Print(helpFor(strings.Join(args, " ")))
 	default:
-		fmt.Fprintf(os.Stderr, "comando desconhecido: %s\n\n%s", cmd, usage)
+		fmt.Fprintf(os.Stderr, "comando desconhecido: %s\n\n%s", cmd, overview())
 		os.Exit(2)
 	}
 	if err != nil {
@@ -125,7 +65,9 @@ func main() {
 
 func newFlags(name string) (*flag.FlagSet, *string) {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	// -h mostra a ajuda do comando (ou do grupo, sem o subcomando)
+	fs.SetOutput(os.Stdout)
+	fs.Usage = func() { fmt.Print(helpFor(name)) }
 	socket := fs.String("socket", rpc.DefaultSocketPath(), "caminho do socket do daemon")
 	return fs, socket
 }

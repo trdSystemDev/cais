@@ -1,0 +1,304 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/trdSystemDev/cais/internal/databases"
+)
+
+// command e um comando do CLI: o resumo vai no cais help e os detalhes no
+// -h dele (cais app deploy -h).
+type command struct {
+	name  string // como o -h procura: "app deploy", "service"
+	usage string // linha de uso, sem o "cais "
+	short string // resumo; mais de uma linha com \n
+	long  string // detalhes, flags e exemplos
+}
+
+// section agrupa os comandos no cais help. group e o comando que mostra so
+// essa secao (cais app -h); vazio nas secoes sem grupo.
+type section struct {
+	title string
+	group string
+	cmds  []command
+}
+
+const socketNote = "O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket."
+
+var sections = []section{
+	{title: "Uso:", cmds: []command{
+		{name: "tui", usage: "[--socket caminho]", short: "abre a interface (TUI)"},
+		{name: "daemon", usage: "daemon [--socket] [--group]", short: "roda o daemon (dono do estado e das acoes)", long: `
+Normalmente roda pelo systemd (assets/systemd/cais.service). A TUI e o CLI
+sao clientes dele pelo socket, que nasce com permissao 0660: so o root, ou o
+grupo de --group, usa o cais. Quem acessa o socket controla a VPS.
+
+Flags:
+  --group grupo   grupo que tambem pode usar o cais, alem do root`},
+		{name: "state", usage: "state [--socket]", short: "imprime o estado atual em JSON"},
+		{name: "check", usage: "check [--socket]", short: "checa o ambiente e imprime o resultado em JSON", long: `
+Confere Docker e Docker Compose (instalados, versao, daemon no ar).`},
+		{name: "version", usage: "version", short: "mostra a versao"},
+		{name: "help", usage: "help [comando]", short: "esta ajuda; com o comando, os detalhes dele", long: `
+Exemplos:
+  cais help app            comandos de app
+  cais help app deploy     o mesmo que: cais app deploy -h`},
+	}},
+	{title: "Setup da VPS:", group: "setup", cmds: []command{
+		{name: "setup plan", usage: "setup", short: "mostra o plano: o que falta e o que vai mudar", long: `
+Nao muda nada. Mostra o que falta configurar e o que o "cais setup run" vai
+fazer (stacks a subir, secrets a gerar).`},
+		{name: "setup config", usage: "setup config [opcoes]", short: "grava o /etc/cais/config.yaml (so o que for passado)\n    --domain --email --tls letsencrypt|selfsigned --http-port --https-port\n    --github-app-id --host-s3", long: `
+So o que for passado muda; o resto fica como esta no arquivo. Vale no
+proximo "cais setup run".
+
+Flags:
+  --domain dominio        dominio base: <app>.<dominio> e s3.<dominio>
+  --email e-mail          avisos do Let's Encrypt
+  --tls modo              letsencrypt (padrao) ou selfsigned (teste local)
+  --http-port porta       porta http do proxy no host (padrao 80)
+  --https-port porta      porta https do proxy no host (padrao 443)
+  --github-app-id id      App ID do GitHub App do cais (baixa o codigo dos apps)
+  --host-s3 host          endpoint S3 do Garage (padrao s3.<dominio>)
+
+Exemplos:
+  cais setup config --domain exemplo.com.br --email voce@exemplo.com.br
+  cais setup config --domain trd.localhost --tls selfsigned   # teste no PC`},
+		{name: "setup secret", usage: "setup secret <nome>", short: "grava um secret informado (le do stdin), ex: github_app_key", long: `
+No terminal le sem eco; com stdin redirecionado, le o arquivo.
+
+Exemplo:
+  cais setup secret github_app_key < chave.pem`},
+		{name: "setup run", usage: "setup run", short: "executa o Setup e mostra o progresso", long: `
+Gera os secrets que faltam, grava os compose das stacks e sobe cada uma em
+ordem (saudavel antes da proxima). Pode rodar de novo a qualquer momento:
+nada que existe e regenerado e stack sem mudanca nao e recriada. O
+progresso aparece tambem na TUI aberta.`},
+	}},
+	{title: "Servicos opcionais (o proxy sobe sempre):", cmds: []command{
+		{name: "service", usage: "service <nome> on|off", short: "liga ou desliga postgres, mysql ou garage e aplica", long: `
+Desligar derruba os containers e preserva os volumes (os dados); ligar de
+novo traz tudo de volta.
+
+Exemplos:
+  cais service postgres on
+  cais service garage off`},
+	}},
+	{title: "Bancos (no Postgres/MySQL da infra):", group: "db", cmds: []command{
+		{name: "db create", usage: "db create postgres|mysql <nome> [-extensions postgis]", short: "database e usuario com senha nova (guardada no cais)", long: `
+Cria o database e um usuario de mesmo nome, que so acessa esse database. A
+senha fica guardada no cais e chega no app pelos secrets ao ligar o banco
+(cais app db). Nome: minusculas, numeros e _, ate 32.
+
+Flags:
+  -extensions lista   extensoes do Postgres, separadas por virgula:
+` + wrapList(databases.Extensions, 22, 78) + `
+
+Exemplos:
+  cais db create postgres portal -extensions postgis
+  cais app db portal postgres/portal      # liga ao app`},
+		{name: "db list", usage: "db list", short: "databases criados pelo cais: secrets, espaco e app"},
+		{name: "db delete", usage: "db delete postgres|mysql <nome> [-yes]", short: "apaga o database e o usuario (nao pode estar ligado a app)", long: `
+Apaga todos os dados do database, o usuario e a senha guardada. Nao tem
+volta. Recusa se algum app ainda usa o banco: desligue antes com
+"cais app db <app> off postgres/<nome>". Pede o nome digitado pra confirmar.
+
+Flags:
+  -yes   nao pede confirmacao`},
+	}},
+	{title: "Buckets (no Garage da infra):", group: "bucket", cmds: []command{
+		{name: "bucket create", usage: "bucket create <nome>", short: "bucket e uma chave so dele (guardada no cais)", long: `
+Cria o bucket (privado) e uma chave com leitura, escrita e dono so nele. A
+chave fica guardada no cais e chega no app pelos secrets ao ligar o bucket
+(cais app bucket). Nome: 3 a 63 letras minusculas, numeros e -.
+
+Exemplos:
+  cais bucket create portal-fotos
+  cais app bucket portal portal-fotos     # liga ao app`},
+		{name: "bucket list", usage: "bucket list", short: "buckets criados pelo cais: secrets, espaco e app"},
+		{name: "bucket delete", usage: "bucket delete <nome> [-yes]", short: "apaga o bucket (vazio) e a chave (nao pode estar ligado a app)", long: `
+O Garage so apaga bucket vazio. Recusa se algum app ainda usa o bucket:
+desligue antes com "cais app bucket <app> off <nome>". Pede o nome digitado
+pra confirmar.
+
+Flags:
+  -yes   nao pede confirmacao`},
+	}},
+	{title: "Apps (repositorio no GitHub com o compose de producao pronto):", group: "app", cmds: []command{
+		{name: "apps", usage: "apps", short: "lista os apps e o estado dos containers"},
+		{name: "app create", usage: "app create <nome> <dono/repo> [-branch main] [-compose docker-compose.prod.yml]", short: "cadastra o app (nao faz deploy)", long: `
+O repositorio pode vir como dono/repo ou link do GitHub. O codigo e baixado
+pelo GitHub App do cais. Nome do app: minusculas, numeros e -.
+
+Flags:
+  -branch branch     branch do deploy (padrao: a principal do repositorio)
+  -compose arquivo   compose de producao, a partir da raiz (padrao docker-compose.yml)
+
+Exemplos:
+  cais app create portal trdSystemDev/portal-web -branch main -compose docker-compose.cais.yml
+  cais app guide portal                 # como escrever o compose`},
+		{name: "app deploy", usage: "app deploy <nome> [-ref <branch ou commit>]", short: "baixa o commit, build com a versao no ar, sobe;\nse o up falhar, a versao anterior volta", long: `
+Recusa compose fora do formato do cais antes do build, dizendo o motivo.
+
+Flags:
+  -ref ref   branch ou commit (padrao: o mais novo da branch do app)
+
+Exemplos:
+  cais app deploy portal
+  cais app deploy portal -ref 1910cca`},
+		{name: "app guide", usage: "app guide <nome>", short: "modelo de compose: labels do Traefik, redes, secrets"},
+		{name: "app env", usage: "app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]", short: "mostra ou muda as variaveis (.env do projeto);\n-import junta um .env (- le do stdin)", long: `
+Sem mudancas, so mostra. As variaveis viram o .env do projeto no deploy
+(valem no proximo). Senhas e chaves vao em secrets, nao aqui.
+
+Flags:
+  -unset VAR,...      remove as variaveis
+  -import arquivo     junta um .env (- le do stdin); a que ja existe recebe o valor novo
+
+Exemplos:
+  cais app env portal
+  cais app env portal NODE_ENV=production DOMINIO=portal.exemplo.com
+  cais app env portal -unset TESTE
+  cais app env portal -import .env.producao`},
+		{name: "app db", usage: "app db <nome> [postgres/<db> | off postgres/<db>]", short: "bancos da infra do app: o deploy grava os secrets\npostgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}", long: `
+Sem banco, mostra os ligados. O database tem o nome do usuario; o app chega
+por postgres:5432 (ou mysql:3306) e monta a URL. Desligar nao apaga o database.
+
+Exemplos:
+  cais app db portal postgres/portal
+  cais app db portal off postgres/portal`},
+		{name: "app bucket", usage: "app bucket <nome> [<bucket> | off <bucket>]", short: "buckets do app: o deploy grava os secrets\ns3_<bucket>_access_key e s3_<bucket>_secret_key", long: `
+Sem bucket, mostra os ligados. O - do nome do bucket vira _ nos secrets. O
+app usa o endpoint http://garage:3900, regiao garage, path-style, na rede
+garage_network. Desligar nao apaga o bucket.
+
+Exemplos:
+  cais app bucket portal portal-fotos
+  cais app bucket portal off portal-fotos`},
+		{name: "app secrets", usage: "app secrets <nome>", short: "lista os secrets do app (so nomes)"},
+		{name: "app secret", usage: "app secret <nome> <secret>", short: "grava um secret (le sem eco, ou do stdin)", long: `
+Cada secret e um arquivo em ${CAIS_SECRETS}/<secret>; no container, em
+/run/secrets/<secret>. Vale no proximo deploy. Nome: minusculas, numeros e _.
+
+Exemplos:
+  cais app secret portal jwt_secret            # pede o valor sem eco
+  cais app secret portal firebase_key < chave.json`},
+		{name: "app restart", usage: "app restart <nome> [service]", short: "reinicia o app (ou um service)"},
+		{name: "app stop", usage: "app stop <nome>", short: "para o app sem apagar nada", long: `
+Volta com: cais app restart <nome>`},
+		{name: "app logs", usage: "app logs <nome> <container>", short: "ultimas linhas do log", long: `
+O nome do container aparece em "cais apps" (ex: portal-web-1).`},
+		{name: "app delete", usage: "app delete <nome> [-volumes] [-yes]", short: "exclui o app (containers, imagens, codigo, variaveis,\nsecrets); -volumes apaga tambem os dados. O database\nda infra fica", long: `
+Pede o nome digitado pra confirmar. Bancos e buckets da infra ficam.
+
+Flags:
+  -volumes   apaga tambem os volumes do compose (os dados)
+  -yes       nao pede confirmacao`},
+	}},
+}
+
+// wrapList escreve os itens separados por virgula, com recuo, em linhas de
+// ate width colunas.
+func wrapList(items []string, indent, width int) string {
+	var lines []string
+	line := strings.Repeat(" ", indent)
+	for i, it := range items {
+		if i < len(items)-1 {
+			it += ","
+		}
+		if len(line)+len(it)+1 > width && strings.TrimSpace(line) != "" {
+			lines = append(lines, strings.TrimRight(line, " "))
+			line = strings.Repeat(" ", indent)
+		}
+		line += it + " "
+	}
+	return strings.Join(append(lines, strings.TrimRight(line, " ")), "\n")
+}
+
+// overview e o cais help: todos os comandos com o resumo.
+func overview() string {
+	var b strings.Builder
+	b.WriteString("cais -- painel da VPS\n")
+	for _, s := range sections {
+		writeSection(&b, s)
+	}
+	b.WriteString("\nDetalhes de um comando: cais <comando> -h (ex: cais app deploy -h).\n" + socketNote + "\n")
+	return b.String()
+}
+
+func writeSection(b *strings.Builder, s section) {
+	b.WriteString("\n" + s.title + "\n")
+	for _, c := range s.cmds {
+		usage := strings.TrimSpace("cais " + c.usage)
+		lines := strings.Split(c.short, "\n")
+		if len(usage) <= 33 {
+			fmt.Fprintf(b, "  %-34s %s\n", usage, lines[0])
+			lines = lines[1:]
+		} else {
+			fmt.Fprintf(b, "  %s\n", usage)
+		}
+		for _, l := range lines {
+			if strings.HasPrefix(l, "    ") {
+				fmt.Fprintf(b, "  %s\n", l) // flags listadas embaixo do uso
+				continue
+			}
+			fmt.Fprintf(b, "%37s%s\n", "", l)
+		}
+	}
+}
+
+// helpFor e o -h de um comando ("app deploy"), de um grupo ("app") ou, se
+// nao achar, o cais help inteiro.
+func helpFor(name string) string {
+	name = strings.TrimSpace(name)
+	for _, s := range sections {
+		if s.group != "" && s.group == name {
+			var b strings.Builder
+			writeSection(&b, s)
+			fmt.Fprintf(&b, "\nDetalhes: cais %s <comando> -h.\n%s\n", s.group, socketNote)
+			return strings.TrimPrefix(b.String(), "\n")
+		}
+		for _, c := range s.cmds {
+			if c.name == name && c.name != "tui" {
+				var b strings.Builder
+				fmt.Fprintf(&b, "Uso: cais %s\n\n", c.usage)
+				var parts []string
+				for _, l := range strings.Split(c.short, "\n") {
+					if !strings.HasPrefix(l, "    ") { // flags: ficam no long
+						parts = append(parts, l)
+					}
+				}
+				short := strings.Join(parts, "\n")
+				b.WriteString(strings.ToUpper(short[:1]) + short[1:] + ".\n")
+				if c.long != "" {
+					b.WriteString(c.long + "\n")
+				}
+				b.WriteString("\n" + socketNote + "\n")
+				return b.String()
+			}
+		}
+	}
+	return overview()
+}
+
+// usageOf e a linha de uso de um comando, pras mensagens de erro.
+func usageOf(name string) string {
+	for _, s := range sections {
+		for _, c := range s.cmds {
+			if c.name == name {
+				return "cais " + c.usage
+			}
+		}
+	}
+	return "cais " + name
+}
+
+// groupError e o erro de subcomando faltando ou desconhecido, com os
+// comandos do grupo.
+func groupError(group, sub string) error {
+	if sub == "" {
+		return fmt.Errorf("falta o comando de %s\n\n%s", group, helpFor(group))
+	}
+	return fmt.Errorf("comando desconhecido: %s %s\n\n%s", group, sub, helpFor(group))
+}

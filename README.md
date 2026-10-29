@@ -213,6 +213,10 @@ Os bancos nunca entram na `proxy_network`.
 
 ## Uso
 
+`cais help` lista todos os comandos. `cais <grupo> -h` mostra so os de um
+grupo (`cais app -h`, `cais db -h`) e `cais <grupo> <comando> -h` explica um
+comando com as flags e exemplos (`cais app deploy -h`).
+
 ```sh
 cais daemon        # normalmente via systemd (assets/systemd/cais.service)
 cais               # abre a TUI

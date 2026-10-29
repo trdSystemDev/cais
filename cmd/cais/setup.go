@@ -38,7 +38,7 @@ func runSetup(args []string) error {
 	case "run":
 		return setupRun(args)
 	default:
-		return fmt.Errorf("subcomando desconhecido: setup %s (veja: cais help)", sub)
+		return groupError("setup", sub)
 	}
 }
 
