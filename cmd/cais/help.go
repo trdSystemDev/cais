@@ -39,6 +39,19 @@ Flags:
 		{name: "state", usage: "state [--socket]", short: "imprime o estado atual em JSON"},
 		{name: "check", usage: "check [--socket]", short: "checa o ambiente e imprime o resultado em JSON", long: `
 Confere Docker e Docker Compose (instalados, versao, daemon no ar).`},
+		{name: "mcp", usage: "mcp [--socket]", short: "servidor MCP pelo stdin/stdout (pra IA, via ssh)", long: `
+Expoe o cais como ferramentas MCP: ler o estado, logs e a ajuda do compose;
+criar e atualizar app, deploy, restart, stop, variaveis, secrets, criar e
+ligar banco e bucket. Nada que apaga dados nem o Setup: excluir app, banco,
+bucket ou secret, ligar ou desligar servico e a config da VPS ficam so na
+TUI e no CLI.
+
+Roda na VPS e conversa pelo stdin/stdout; o cliente MCP no seu computador
+chama pelo ssh (a autenticacao e a sua chave SSH, sem porta nova).
+
+Exemplo (Claude Code, no seu computador):
+  claude mcp add cais -- ssh root@vps cais mcp
+  claude mcp add cais -- ssh voce@vps cais mcp   # instalado com --group`},
 		{name: "version", usage: "version", short: "mostra a versao"},
 		{name: "help", usage: "help [comando]", short: "esta ajuda; com o comando, os detalhes dele", long: `
 Exemplos:

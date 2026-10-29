@@ -13,7 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/mcpserver"
 	"github.com/trdSystemDev/cais/internal/rpc"
 	"github.com/trdSystemDev/cais/internal/ui"
 )
@@ -49,6 +52,8 @@ func main() {
 		err = runBucket(args)
 	case "service":
 		err = runService(args)
+	case "mcp":
+		err = runMCP(args)
 	case "version":
 		fmt.Println("cais", version)
 	case "help":
@@ -110,6 +115,21 @@ func connect(socket string) (*rpc.Client, error) {
 		return nil, fmt.Errorf("nao consegui falar com o daemon em %s: %v\n%s", socket, err, hint)
 	}
 	return c, nil
+}
+
+// runMCP e o servidor MCP pelo stdin/stdout (o cliente roda: ssh vps cais mcp).
+// O stdout e so do protocolo: avisos e erros vao pro stderr.
+func runMCP(args []string) error {
+	fs, socket := newFlags("mcp")
+	fs.Parse(args)
+	c, err := connect(*socket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return mcpserver.New(c, version).Run(ctx, &mcp.StdioTransport{})
 }
 
 func runTUI(args []string) error {

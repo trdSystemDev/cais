@@ -13,11 +13,11 @@ O projeto e agnostico a interface. O `core` e o unico dono do estado e o
 unico que executa acoes; as interfaces so chamam acoes e reagem ao estado.
 
 O core roda num unico processo, o **daemon** (`cais daemon`, via systemd).
-TUI, CLI e o futuro MCP sao clientes dele por um socket Unix, entao todos
+TUI, CLI e o MCP (`cais mcp`) sao clientes dele por um socket Unix, entao todos
 enxergam o mesmo estado ao mesmo tempo.
 
 ```
-   cais (TUI)     cais state/check (CLI)     MCP (futuro)
+   cais (TUI)     cais state/check (CLI)     cais mcp (IA)
         \                   |                       /
          \------ rpc.Client (implementa core.API) -/
                             |
@@ -59,6 +59,7 @@ Regras:
 |---|---|
 | `cmd/cais` | ponto de entrada: monta o core e a interface |
 | `internal/core` | estado, acoes e inscricoes -- o que as interfaces usam |
+| `internal/mcpserver` | servidor MCP: cada ferramenta chama uma acao da `core.API` (nada que apaga dados) |
 | `internal/rpc` | socket do daemon: servidor, cliente (`core.API`) e protocolo |
 | `internal/ui` | TUI em Bubble Tea, clicavel (so le estado e chama acoes); cores pelo fundo do terminal |
 | `internal/bootstrap` | assistente da VPS vazia |
@@ -202,6 +203,31 @@ nao sao chaves S3.
 
 Os bancos nunca entram na `proxy_network`.
 
+## MCP (deploy por IA)
+
+`cais mcp` expoe o cais como servidor MCP pelo stdin/stdout. Ele roda na VPS e
+o cliente MCP no seu computador chama pelo SSH: a autenticacao e a sua chave
+SSH e nenhuma porta nova abre.
+
+```sh
+claude mcp add cais -- ssh root@vps cais mcp          # Claude Code
+claude mcp add cais -- ssh voce@vps cais mcp          # instalado com --group
+```
+
+As ferramentas chamam as mesmas acoes da TUI e do CLI, com as mesmas regras
+(o deploy recusa compose fora do formato e diz a correcao):
+
+- ler: `status`, `infra_status`, `infra_logs`, `apps_list`,
+  `app_logs`, `app_guide`, `app_env_get`, `app_secrets_list`,
+  `databases_list`, `buckets_list`;
+- agir: `app_create`, `app_update`, `app_deploy`, `app_restart`, `app_stop`,
+  `app_env_set`, `app_secret_set`, `database_create`, `bucket_create`,
+  `app_link_database`/`app_unlink_database`, `app_link_bucket`/`app_unlink_bucket`.
+
+Nada que apaga dados nem o Setup: excluir app, banco, bucket ou secret, ligar
+ou desligar servico e a config da VPS ficam so na TUI e no CLI. Valores de secret nunca sao
+devolvidos (a IA ve so os nomes).
+
 ## Roadmap
 
 1. Esqueleto: TUI com abas clicaveis, checagem de Docker/Compose
@@ -211,6 +237,7 @@ Os bancos nunca entram na `proxy_network`.
 5. Deploy automatico no push (webhook do GitHub App)
 6. Backups
 7. `install.sh` (feito: compila no clone, sem releases)
+8. MCP (feito: `cais mcp` pelo SSH, sem exclusoes nem Setup)
 
 ## Instalacao
 
