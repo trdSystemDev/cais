@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -100,6 +101,40 @@ func (c *Core) CreateBucket(ctx context.Context, name string) (BucketInfo, error
 		return BucketInfo{}, fmt.Errorf("bucket criado, mas a chave nao foi guardada: %w", err)
 	}
 	return bucketInfo(name), nil
+}
+
+// DeleteBucket apaga o bucket, a chave dele e a credencial guardada. O
+// Garage so apaga bucket vazio. Recusa se algum app ainda usa o bucket.
+func (c *Core) DeleteBucket(ctx context.Context, name string) error {
+	store := c.secretStore()
+	idName, secretName := bucketSecrets(name)
+	id, err := store.Get(idName)
+	if errors.Is(err, secrets.ErrNotFound) {
+		return fmt.Errorf("o bucket %s nao existe no cais", name)
+	}
+	if err != nil {
+		return err
+	}
+	users, err := c.appsUsing(func(a apps.App) bool {
+		return slices.ContainsFunc(a.Buckets, func(l apps.BucketLink) bool { return l.Name == name })
+	})
+	if err != nil {
+		return err
+	}
+	if len(users) > 0 {
+		return fmt.Errorf("o bucket %s esta ligado a %s: desligue em Apps -> Secrets antes de excluir", name, strings.Join(users, ", "))
+	}
+	if !c.infra.TryLock() {
+		return ErrBusy
+	}
+	defer c.infra.Unlock()
+	if err := buckets.Delete(ctx, c.deps.Exec, name, string(id)); err != nil {
+		return err
+	}
+	if err := store.Delete(secretName); err != nil {
+		return err
+	}
+	return store.Delete(idName)
 }
 
 // Buckets lista os buckets criados pelo cais, com os apps que usam cada um

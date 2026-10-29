@@ -81,6 +81,29 @@ func Provision(ctx context.Context, exec Exec, e Engine, name string, password [
 	return nil
 }
 
+// Drop apaga o database e o usuario dele. No Postgres, as conexoes abertas
+// (o app no ar) sao derrubadas. Repetir nao da erro.
+func Drop(ctx context.Context, exec Exec, e Engine, name string) error {
+	if err := checkIdentifier(name); err != nil {
+		return err
+	}
+	var err error
+	switch e.Name {
+	case Postgres:
+		_, err = exec(ctx, e.Container, []byte(fmt.Sprintf("DROP DATABASE IF EXISTS \"%[1]s\" WITH (FORCE);\nDROP ROLE IF EXISTS \"%[1]s\";\n", name)),
+			"psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres", "-d", "postgres")
+	case MySQL:
+		_, err = exec(ctx, e.Container, []byte(fmt.Sprintf("DROP DATABASE IF EXISTS `%[1]s`;\nDROP USER IF EXISTS '%[1]s'@'%%';\n", name)),
+			"sh", "-c", `MYSQL_PWD="$(cat /run/secrets/mysql_root_password)" exec mysql -uroot`)
+	default:
+		return fmt.Errorf("banco %q nao suportado", e.Name)
+	}
+	if err != nil {
+		return fmt.Errorf("excluindo o database %s no %s: %w", name, e.Name, err)
+	}
+	return nil
+}
+
 // Sizes devolve o espaco ocupado (bytes) de cada database da instancia.
 // No MySQL um database sem tabelas nao aparece (ocupa 0).
 func Sizes(ctx context.Context, exec Exec, e Engine) (map[string]int64, error) {

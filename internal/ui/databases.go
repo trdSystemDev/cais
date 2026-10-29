@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -32,6 +33,11 @@ type dbPanel struct {
 	err     string
 	created *infraRow
 	list    []infraRow
+	done    string // aviso de exclusao feita
+
+	// excluir: o nome do item aguardando confirmacao (digitar o nome)
+	delName  string
+	delInput *textinput.Model
 }
 
 // infraRow e um database ou bucket na lista: nome, secrets que o app
@@ -53,6 +59,10 @@ type (
 		list   []infraRow
 		err    error
 	}
+	dbDeletedMsg struct {
+		name string
+		err  error
+	}
 )
 
 func (p *dbPanel) buckets() bool { return p.engine == "garage" }
@@ -68,13 +78,14 @@ func newDBPanel(api core.API, zones *zone.Manager, th theme) *dbPanel {
 	}
 	p.name = mk("")
 	p.exts = mk("ex: postgis (opcional)")
+	p.delInput = mk("digite o nome")
 	p.setTheme(th)
 	return p
 }
 
 func (p *dbPanel) setTheme(th theme) {
 	p.th = th
-	for _, ti := range []*textinput.Model{p.name, p.exts} {
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.delInput} {
 		s := textinput.DefaultStyles(true)
 		for _, st := range []*textinput.StyleState{&s.Focused, &s.Blurred} {
 			st.Text = lipgloss.NewStyle().Foreground(th.fieldFg).Background(th.fieldBg)
@@ -87,12 +98,26 @@ func (p *dbPanel) setTheme(th theme) {
 
 func (p *dbPanel) open() bool { return p.engine != "" }
 
-// ids na ordem do Tab; extensoes so no Postgres
+// ids na ordem do Tab: o formulario (extensoes so no Postgres), o excluir
+// de cada item da lista e a confirmacao aberta
 func (p *dbPanel) ids() []string {
+	ids := []string{"db-name", "db-create", "db-close"}
 	if p.engine == "postgres" {
-		return []string{"db-name", "db-exts", "db-create", "db-close"}
+		ids = []string{"db-name", "db-exts", "db-create", "db-close"}
 	}
-	return []string{"db-name", "db-create", "db-close"}
+	for _, d := range p.list {
+		ids = append(ids, "db-del:"+d.name)
+	}
+	if p.delName != "" {
+		ids = append(ids, "db-del-confirm", "db-del-ok", "db-del-cancel")
+	}
+	return ids
+}
+
+// focusID e o campo em foco (a lista pode ter mudado desde o foco)
+func (p *dbPanel) focusID() string {
+	ids := p.ids()
+	return ids[min(p.focus, len(ids)-1)]
 }
 
 func (p *dbPanel) input(id string) *textinput.Model {
@@ -101,11 +126,13 @@ func (p *dbPanel) input(id string) *textinput.Model {
 		return p.name
 	case "db-exts":
 		return p.exts
+	case "db-del-confirm":
+		return p.delInput
 	}
 	return nil
 }
 
-func (p *dbPanel) typing() bool { return p.open() && p.input(p.ids()[p.focus]) != nil }
+func (p *dbPanel) typing() bool { return p.open() && p.input(p.focusID()) != nil }
 
 func (p *dbPanel) setFocus(i int) tea.Cmd {
 	ids := p.ids()
@@ -124,8 +151,8 @@ func (p *dbPanel) setFocus(i int) tea.Cmd {
 }
 
 func (p *dbPanel) show(engine string) tea.Cmd {
-	p.engine, p.err, p.created, p.busy, p.list = engine, "", nil, false, nil
-	for _, ti := range []*textinput.Model{p.name, p.exts} {
+	p.engine, p.err, p.created, p.busy, p.list, p.done, p.delName = engine, "", nil, false, nil, "", ""
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.delInput} {
 		ti.SetValue("")
 	}
 	p.name.Placeholder = "nome (ex: meu_app)"
@@ -136,8 +163,8 @@ func (p *dbPanel) show(engine string) tea.Cmd {
 }
 
 func (p *dbPanel) close() {
-	p.engine = ""
-	for _, ti := range []*textinput.Model{p.name, p.exts} {
+	p.engine, p.delName = "", ""
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.delInput} {
 		ti.Blur()
 	}
 }
@@ -184,7 +211,7 @@ func (p *dbPanel) create() tea.Cmd {
 		p.err = "Informe o nome."
 		return nil
 	}
-	p.busy, p.err, p.created = true, "", nil
+	p.busy, p.err, p.created, p.done = true, "", nil, ""
 	if p.buckets() {
 		return func() tea.Msg {
 			info, err := p.api.CreateBucket(context.Background(), name)
@@ -212,13 +239,45 @@ func splitComma(s string) []string {
 }
 
 func (p *dbPanel) press(id string) tea.Cmd {
+	if name, ok := strings.CutPrefix(id, "db-del:"); ok {
+		p.delName, p.err, p.done = name, "", ""
+		p.delInput.SetValue("")
+		return p.setFocus(slices.Index(p.ids(), "db-del-confirm"))
+	}
 	switch id {
 	case "db-create":
 		return p.create()
 	case "db-close":
 		p.close()
+	case "db-del-ok":
+		return p.remove()
+	case "db-del-cancel":
+		p.delName = ""
+		return p.setFocus(0)
 	}
 	return nil
+}
+
+// remove exclui o item confirmado (o nome digitado tem que bater)
+func (p *dbPanel) remove() tea.Cmd {
+	name := p.delName
+	if p.busy || name == "" {
+		return nil
+	}
+	if strings.TrimSpace(p.delInput.Value()) != name {
+		p.err = "Digite " + name + " pra confirmar."
+		p.delInput.SetValue("")
+		return nil
+	}
+	p.busy, p.err = true, ""
+	engine := p.engine
+	return func() tea.Msg {
+		ctx := context.Background()
+		if engine == "garage" {
+			return dbDeletedMsg{name, p.api.DeleteBucket(ctx, name)}
+		}
+		return dbDeletedMsg{name, p.api.DeleteDatabase(ctx, engine, name)}
+	}
 }
 
 func (p *dbPanel) update(msg tea.Msg) (tea.Cmd, bool) {
@@ -234,6 +293,15 @@ func (p *dbPanel) update(msg tea.Msg) (tea.Cmd, bool) {
 			ti.SetValue("")
 		}
 		return p.listCmd(), true
+	case dbDeletedMsg:
+		p.busy = false
+		if msg.err != nil {
+			p.err = msg.err.Error()
+			return nil, true
+		}
+		p.delName, p.created = "", nil
+		p.done = msg.name + " excluido."
+		return tea.Batch(p.setFocus(0), p.listCmd()), true
 	case dbListMsg:
 		if msg.err == nil && msg.engine == p.engine {
 			p.list = msg.list
@@ -244,9 +312,13 @@ func (p *dbPanel) update(msg tea.Msg) (tea.Cmd, bool) {
 }
 
 func (p *dbPanel) key(msg tea.KeyPressMsg) tea.Cmd {
-	id := p.ids()[p.focus]
+	id := p.focusID()
 	switch k := msg.String(); k {
 	case "esc":
+		if p.delName != "" {
+			p.delName = ""
+			return p.setFocus(0)
+		}
 		p.close()
 		return nil
 	case "tab", "down":
@@ -272,7 +344,7 @@ func (p *dbPanel) key(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (p *dbPanel) paste(msg tea.PasteMsg) tea.Cmd {
-	if ti := p.input(p.ids()[p.focus]); ti != nil && p.open() {
+	if ti := p.input(p.focusID()); ti != nil && p.open() {
 		v, cmd := ti.Update(msg)
 		*ti = v
 		return cmd
@@ -309,9 +381,13 @@ func (p *dbPanel) view(w, h int) string {
 	b.WriteString(t.bold().Render("Novo "+what+" no "+p.engine) + "\n")
 	b.WriteString(wrap.Inherit(muted).Render(desc) + "\n\n")
 	field := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(29)
+	focusID := p.focusID()
 	var buttons []string
-	for i, id := range p.ids() {
-		focused := i == p.focus
+	for _, id := range p.ids() {
+		if id != "db-name" && id != "db-exts" && id != "db-create" && id != "db-close" {
+			continue // excluir: na lista e na confirmacao
+		}
+		focused := id == focusID
 		if ti := p.input(id); ti != nil {
 			label := map[string]string{"db-name": nameLabel, "db-exts": "Extensoes"}[id]
 			marker, ls := "  ", t.fg(t.text).Width(12)
@@ -329,8 +405,11 @@ func (p *dbPanel) view(w, h int) string {
 		buttons = append(buttons, p.zones.Mark(id, st.Render(label)))
 	}
 	b.WriteString("\n  " + strings.Join(buttons, " ") + "\n")
-	if p.err != "" {
+	if p.err != "" && p.delName == "" {
 		b.WriteString("\n" + wrap.Foreground(t.danger).Render(p.err) + "\n")
+	}
+	if p.done != "" {
+		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render(p.done) + "\n")
 	}
 	if c := p.created; c != nil {
 		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render(nameLabel+" "+c.name+" criado.") + "\n")
@@ -339,7 +418,32 @@ func (p *dbPanel) view(w, h int) string {
 	}
 	if len(p.list) > 0 {
 		b.WriteString("\n" + t.bold().Render("Ja criados") + "\n")
-		writeInfraRows(&b, nameLabel, p.list, t, w-6)
+		del := func(name string) string {
+			return p.zones.Mark("db-del:"+name, t.pill(focusID == "db-del:"+name || p.delName == name).Render("excluir"))
+		}
+		writeInfraRows(&b, nameLabel, p.list, t, w-6, del)
+	}
+	if p.delName != "" {
+		warn := "Excluir o database " + p.delName + " apaga todos os dados dele e o usuario. Nao tem volta."
+		if p.buckets() {
+			warn = "Excluir o bucket " + p.delName + " apaga o bucket e a chave dele (o Garage so exclui bucket vazio). Nao tem volta."
+		}
+		b.WriteString("\n" + t.fg(t.danger).Bold(true).Render("Excluir "+p.delName) + "\n")
+		b.WriteString(wrap.Inherit(muted).Render(warn+" Digite "+p.delName+" pra confirmar.") + "\n")
+		marker, ls := "  ", t.fg(t.text).Width(12)
+		if focusID == "db-del-confirm" {
+			marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(12)
+		}
+		b.WriteString(p.zones.Mark("db-del-confirm", marker+ls.Render("Confirmar")+field.Render(p.delInput.View())) + "\n")
+		ok, label := t.pill(focusID == "db-del-ok"), "Excluir"
+		if p.busy {
+			ok, label = t.disabledPill(), "Excluindo..."
+		}
+		b.WriteString("\n  " + p.zones.Mark("db-del-ok", ok.Render(label)) + " " +
+			p.zones.Mark("db-del-cancel", t.pill(focusID == "db-del-cancel").Render("Cancelar")) + "\n")
+		if p.err != "" {
+			b.WriteString("\n" + wrap.Foreground(t.danger).Render(p.err) + "\n")
+		}
 	}
 	return t.panel(true, w-2, h).MaxHeight(h + 2).Render(b.String())
 }
@@ -347,7 +451,7 @@ func (p *dbPanel) view(w, h int) string {
 // writeInfraRows e a tabela dos databases ou buckets: nome, secrets que o
 // app recebe (e o app ligado) e espaco ocupado. Se nao cabe em w, os
 // secrets vao numa segunda linha de cada item.
-func writeInfraRows(b *strings.Builder, nameLabel string, list []infraRow, t theme, w int) {
+func writeInfraRows(b *strings.Builder, nameLabel string, list []infraRow, t theme, w int, del func(name string) string) {
 	nameW, secW := len(nameLabel), len("Secrets")
 	secs := make([]string, len(list))
 	for i, d := range list {
@@ -359,11 +463,11 @@ func writeInfraRows(b *strings.Builder, nameLabel string, list []infraRow, t the
 		nameW, secW = max(nameW, len(d.name)), max(secW, len(secs[i]))
 	}
 	head := t.fg(t.muted).Bold(true)
-	if 2+nameW+2+secW+2+9 > w {
+	if 2+nameW+2+secW+2+9+11 > w {
 		row := func(name, size string) string { return fmt.Sprintf("  %-*s  %9s", nameW, name, size) }
 		b.WriteString(head.Render(row(nameLabel, "Espaco")) + "\n")
 		for i, d := range list {
-			b.WriteString(row(d.name, d.size) + "\n")
+			b.WriteString(row(d.name, d.size) + "  " + del(d.name) + "\n")
 			b.WriteString(t.fg(t.muted).Width(w).Render("    "+secs[i]) + "\n")
 		}
 		return
@@ -373,6 +477,6 @@ func writeInfraRows(b *strings.Builder, nameLabel string, list []infraRow, t the
 	}
 	b.WriteString(head.Render(row(nameLabel, "Secrets", "Espaco")) + "\n")
 	for i, d := range list {
-		b.WriteString(row(d.name, secs[i], d.size) + "\n")
+		b.WriteString(row(d.name, secs[i], d.size) + "  " + del(d.name) + "\n")
 	}
 }

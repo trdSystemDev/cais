@@ -45,6 +45,8 @@ const (
 	MethodAppDBUnlink      = "app.db.unlink" // params: appDBParams
 	MethodBucketCreate     = "bucket.create" // params: bucketParams
 	MethodBuckets          = "bucket.list"
+	MethodBucketDelete     = "bucket.delete"     // params: bucketParams
+	MethodDatabaseDelete   = "db.delete"         // params: appDBParams (sem app)
 	MethodAppBucketLink    = "app.bucket.link"   // params: appBucketParams
 	MethodAppBucketUnlink  = "app.bucket.unlink" // params: appBucketParams
 

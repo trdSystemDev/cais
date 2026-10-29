@@ -281,6 +281,20 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodBuckets:
 		return wrap(s.api.Buckets(s.ctx))
 
+	case MethodBucketDelete:
+		var p bucketParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.DeleteBucket(s.ctx, p.Name))
+
+	case MethodDatabaseDelete:
+		var p appDBParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.DeleteDatabase(s.ctx, p.Engine, p.Name))
+
 	case MethodAppBucketLink:
 		var p appBucketParams
 		if err := params(m, &p); err != nil {

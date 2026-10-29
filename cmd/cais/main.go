@@ -44,10 +44,13 @@ Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis]
                                      database e usuario com senha nova (guardada no cais)
   cais db list                       databases criados pelo cais: secrets, espaco e app
+  cais db delete postgres|mysql <nome> [-yes]
+                                     apaga o database e o usuario (nao pode estar ligado a app)
 
 Buckets (no Garage da infra):
   cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
   cais bucket list                   buckets criados pelo cais: secrets, espaco e app
+  cais bucket delete <nome> [-yes]   apaga o bucket (vazio) e a chave (nao pode estar ligado a app)
 
 Apps (repositorio no GitHub com o compose de producao pronto):
   cais apps                          lista os apps e o estado dos containers

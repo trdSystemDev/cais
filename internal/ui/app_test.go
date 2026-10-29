@@ -489,3 +489,46 @@ func TestInfraNovoBucket(t *testing.T) {
 		t.Fatalf("buckets %+v %v", list, err)
 	}
 }
+
+// excluir da lista: pede o nome digitado, recusa ligado a app, depois apaga
+func TestInfraExcluirBancoEBucket(t *testing.T) {
+	c, _, _ := testCore(t, okChecker)
+	setupDone(t, c, "postgres", "garage")
+	ctx := context.Background()
+	c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "loja"})
+	c.CreateBucket(ctx, "loja-fotos")
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Novo bucket")
+
+	click(t, m, "newdb:postgres")
+	waitFor(t, m, "Ja criados")
+	click(t, m, "db-del:loja")
+	waitFor(t, m, "apaga todos os dados dele")
+	typeIn(t, m, "db-del-confirm", "outro")
+	click(t, m, "db-del-ok")
+	waitFor(t, m, "Digite loja pra confirmar.")
+	typeIn(t, m, "db-del-confirm", "loja")
+	click(t, m, "db-del-ok")
+	waitFor(t, m, "loja excluido.")
+	if list, _ := c.Databases(ctx); len(list) != 0 {
+		t.Fatalf("banco continua: %+v", list)
+	}
+	click(t, m, "db-close")
+
+	click(t, m, "newdb:garage")
+	waitFor(t, m, "loja-fotos")
+	click(t, m, "db-del:loja-fotos")
+	waitFor(t, m, "Excluir o bucket loja-fotos apaga")
+	click(t, m, "db-del-cancel")
+	if strings.Contains(screen(m), "Nao tem volta") {
+		t.Error("confirmacao continua aberta depois de cancelar")
+	}
+	click(t, m, "db-del:loja-fotos")
+	typeIn(t, m, "db-del-confirm", "loja-fotos")
+	click(t, m, "db-del-ok")
+	waitFor(t, m, "loja-fotos excluido.")
+	if list, _ := c.Buckets(ctx); len(list) != 0 {
+		t.Fatalf("bucket continua: %+v", list)
+	}
+}

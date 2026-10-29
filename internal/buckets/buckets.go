@@ -67,6 +67,25 @@ func Create(ctx context.Context, exec Exec, name string) (Key, error) {
 	return key, nil
 }
 
+// Delete apaga o bucket e a chave dele. O Garage so apaga bucket vazio.
+// O que ja nao existe conta como apagado (repetir depois de uma falha
+// termina o servico).
+func Delete(ctx context.Context, exec Exec, name, keyID string) error {
+	if _, err := garage(ctx, exec, "bucket", "delete", "--yes", name); err != nil && !strings.Contains(err.Error(), "NoSuchBucket") {
+		if strings.Contains(err.Error(), "BucketNotEmpty") {
+			return fmt.Errorf("o bucket %s tem arquivos: o Garage so exclui bucket vazio (apague os arquivos pelo app ou por um cliente S3)", name)
+		}
+		return fmt.Errorf("excluindo o bucket %s: %w", name, err)
+	}
+	if keyID == "" {
+		return nil
+	}
+	if _, err := garage(ctx, exec, "key", "delete", "--yes", keyID); err != nil && !strings.Contains(err.Error(), "NoSuchAccessKey") {
+		return fmt.Errorf("bucket %s excluido, mas a chave nao: %w", name, err)
+	}
+	return nil
+}
+
 // parseKey le o Key ID e a Secret key da saida do "garage key create".
 func parseKey(out string) (Key, error) {
 	var k Key

@@ -428,3 +428,65 @@ func TestCreateBucket(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteDatabaseEBucket(t *testing.T) {
+	c, _, _ := newAppsCore(t)
+	ctx := context.Background()
+	var sql []string
+	c.deps.ExecInput = func(_ context.Context, _ string, input []byte, _ ...string) (string, error) {
+		sql = append(sql, string(input))
+		return "", nil
+	}
+	var garage []string
+	c.deps.Exec = func(_ context.Context, _ string, args ...string) (string, error) {
+		garage = append(garage, strings.Join(args, " "))
+		if len(args) > 2 && args[1] == "key" && args[2] == "create" {
+			return "Key ID:              GK5d0e\nSecret key:          6c9b79\n", nil
+		}
+		return "", nil
+	}
+	cfg, _ := config.Load(c.deps.ConfigPath)
+	cfg.Stacks = append(cfg.Stacks, "garage")
+	c.SaveConfig(ctx, cfg)
+	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"})
+	c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "loja"})
+	c.CreateBucket(ctx, "loja-fotos")
+	c.LinkAppDatabase(ctx, "meu-app", "postgres", "loja")
+	c.LinkAppBucket(ctx, "meu-app", "loja-fotos")
+
+	// ligados ao app: recusa dizendo qual
+	if err := c.DeleteDatabase(ctx, "postgres", "loja"); err == nil || !strings.Contains(err.Error(), "ligado a meu-app") {
+		t.Errorf("banco ligado: %v", err)
+	}
+	if err := c.DeleteBucket(ctx, "loja-fotos"); err == nil || !strings.Contains(err.Error(), "ligado a meu-app") {
+		t.Errorf("bucket ligado: %v", err)
+	}
+	c.UnlinkAppDatabase(ctx, "meu-app", "postgres", "loja")
+	c.UnlinkAppBucket(ctx, "meu-app", "loja-fotos")
+
+	if err := c.DeleteDatabase(ctx, "postgres", "loja"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sql[len(sql)-1], `DROP DATABASE IF EXISTS "loja" WITH (FORCE)`) {
+		t.Errorf("sql %q", sql[len(sql)-1])
+	}
+	if err := c.DeleteBucket(ctx, "loja-fotos"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(garage); garage[n-2] != "/garage bucket delete --yes loja-fotos" || garage[n-1] != "/garage key delete --yes GK5d0e" {
+		t.Errorf("garage %v", garage)
+	}
+	if dbs, _ := c.Databases(ctx); len(dbs) != 0 {
+		t.Errorf("banco continua na lista: %+v", dbs)
+	}
+	if bks, _ := c.Buckets(ctx); len(bks) != 0 {
+		t.Errorf("bucket continua na lista: %+v", bks)
+	}
+	if err := c.DeleteBucket(ctx, "loja-fotos"); err == nil || !strings.Contains(err.Error(), "nao existe") {
+		t.Errorf("de novo: %v", err)
+	}
+	// o nome fica livre pra criar de novo
+	if _, err := c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "loja"}); err != nil {
+		t.Error(err)
+	}
+}

@@ -2,6 +2,7 @@ package buckets
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -51,5 +52,27 @@ func TestSize(t *testing.T) {
 	}
 	if s, err := Size(context.Background(), exec, "fotos"); err != nil || s != "1.2 MB" {
 		t.Errorf("%q %v", s, err)
+	}
+}
+
+func TestDelete(t *testing.T) {
+	var calls []string
+	fail := map[string]error{}
+	exec := func(_ context.Context, _ string, args ...string) (string, error) {
+		calls = append(calls, strings.Join(args[1:3], " "))
+		return "", fail[args[1]]
+	}
+	if err := Delete(context.Background(), exec, "fotos", "GK1"); err != nil || strings.Join(calls, ",") != "bucket delete,key delete" {
+		t.Fatalf("%v %v", calls, err)
+	}
+	// ja apagados (repetir depois de uma falha)
+	fail["bucket"] = errors.New("Error: GetBucketInfo returned NoSuchBucket (404)")
+	fail["key"] = errors.New("Error: GetKeyInfo returned NoSuchAccessKey (404)")
+	if err := Delete(context.Background(), exec, "fotos", "GK1"); err != nil {
+		t.Errorf("repetido: %v", err)
+	}
+	fail["bucket"] = errors.New("Error: DeleteBucket returned BucketNotEmpty (409): Tried to delete a non-empty bucket")
+	if err := Delete(context.Background(), exec, "fotos", "GK1"); err == nil || !strings.Contains(err.Error(), "tem arquivos") {
+		t.Errorf("com arquivos: %v", err)
 	}
 }

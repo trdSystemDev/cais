@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -133,6 +134,54 @@ func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (Databas
 		return DatabaseInfo{}, fmt.Errorf("database criado, mas a senha nao foi guardada: %w", err)
 	}
 	return dbInfo(e, name), nil
+}
+
+// DeleteDatabase apaga o database, o usuario e a senha guardada. Recusa se
+// algum app ainda usa o database (desligue em Apps -> Secrets antes).
+func (c *Core) DeleteDatabase(ctx context.Context, engine, name string) error {
+	e, err := databases.Get(engine)
+	if err != nil {
+		return err
+	}
+	store := c.secretStore()
+	secret := dbSecret(e.Name, name)
+	if ok, err := secrets.Exists(store, secret); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("o database %s/%s nao existe no cais", engine, name)
+	}
+	users, err := c.appsUsing(func(a apps.App) bool {
+		return slices.ContainsFunc(a.Databases, func(l apps.DBLink) bool { return l.Engine == engine && l.Name == name })
+	})
+	if err != nil {
+		return err
+	}
+	if len(users) > 0 {
+		return fmt.Errorf("o database %s/%s esta ligado a %s: desligue em Apps -> Secrets antes de excluir", engine, name, strings.Join(users, ", "))
+	}
+	if !c.infra.TryLock() {
+		return ErrBusy
+	}
+	defer c.infra.Unlock()
+	if err := databases.Drop(ctx, c.deps.ExecInput, e, name); err != nil {
+		return err
+	}
+	return store.Delete(secret)
+}
+
+// appsUsing sao os apps em que use(app) e verdade.
+func (c *Core) appsUsing(use func(apps.App) bool) ([]string, error) {
+	list, err := c.appManager().List()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, a := range list {
+		if use(a) {
+			out = append(out, a.Name)
+		}
+	}
+	return out, nil
 }
 
 // Databases lista os databases criados pelo cais, com os apps que usam

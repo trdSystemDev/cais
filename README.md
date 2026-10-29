@@ -166,6 +166,7 @@ Depois ligue o database ao app (Apps -> Secrets -> Ligar banco, ou pelo CLI):
 ```sh
 cais app db portal postgres/portal       # liga
 cais app db portal off postgres/portal   # desliga (o database fica)
+cais db delete postgres portal         # apaga database e usuario (desligado de todos os apps)
 ```
 
 A cada deploy o cais le a credencial guardada e grava os secrets
@@ -190,6 +191,7 @@ cais bucket create portal-fotos
 cais bucket list                       # secrets, espaco e app de cada bucket
 cais app bucket portal portal-fotos        # liga ao app
 cais app bucket portal off portal-fotos    # desliga (o bucket e os arquivos ficam)
+cais bucket delete portal-fotos          # apaga (vazio e desligado de todos os apps)
 ```
 
 A cada deploy o cais grava a chave nos secrets do app

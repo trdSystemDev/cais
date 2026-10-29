@@ -92,8 +92,14 @@ type API interface {
 	LinkAppDatabase(ctx context.Context, app, engine, name string) error
 	// UnlinkAppDatabase desliga o app do database (o database e os dados ficam).
 	UnlinkAppDatabase(ctx context.Context, app, engine, name string) error
+	// DeleteDatabase apaga o database, o usuario e a senha guardada; recusa
+	// se algum app ainda usa o database.
+	DeleteDatabase(ctx context.Context, engine, name string) error
 	// CreateBucket cria um bucket no Garage e uma chave so dele.
 	CreateBucket(ctx context.Context, name string) (BucketInfo, error)
+	// DeleteBucket apaga o bucket (vazio) e a chave dele; recusa se algum
+	// app ainda usa o bucket.
+	DeleteBucket(ctx context.Context, name string) error
 	// Buckets lista os buckets criados pelo cais, com os apps que usam
 	// cada um e o espaco ocupado.
 	Buckets(ctx context.Context) ([]BucketInfo, error)

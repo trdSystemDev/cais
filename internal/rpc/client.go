@@ -355,6 +355,14 @@ func (c *Client) CreateBucket(ctx context.Context, name string) (info core.Bucke
 	return
 }
 
+func (c *Client) DeleteDatabase(ctx context.Context, engine, name string) error {
+	return c.call(ctx, MethodDatabaseDelete, appDBParams{Engine: engine, Name: name}, nil)
+}
+
+func (c *Client) DeleteBucket(ctx context.Context, name string) error {
+	return c.call(ctx, MethodBucketDelete, bucketParams{Name: name}, nil)
+}
+
 func (c *Client) Buckets(ctx context.Context) (list []core.BucketInfo, err error) {
 	err = c.call(ctx, MethodBuckets, nil, &list)
 	return

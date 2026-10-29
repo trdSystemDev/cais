@@ -358,10 +358,25 @@ func appBucket(ctx context.Context, c *rpc.Client, app string, args []string) er
 	return nil
 }
 
-// runBucket cria e lista buckets no Garage da infra.
+// confirmName pede o nome digitado antes de apagar algo (pulado com -yes).
+func confirmName(yes bool, name, warning string) error {
+	if yes {
+		return nil
+	}
+	fmt.Printf("%s\nDigite %s pra confirmar: ", warning, name)
+	var typed string
+	fmt.Scanln(&typed)
+	if strings.TrimSpace(typed) != name {
+		return errors.New("nome diferente: nada foi apagado")
+	}
+	return nil
+}
+
+// runBucket cria, lista e exclui buckets no Garage da infra.
 func runBucket(args []string) error {
 	sub, args := subcommand(args)
 	fs, socket := newFlags("bucket " + sub)
+	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
 	pos := parseInterspersed(fs, args)
 	c, err := connect(*socket)
 	if err != nil {
@@ -381,6 +396,17 @@ func runBucket(args []string) error {
 		}
 		fmt.Printf("Bucket %s criado (endpoint %s, regiao %s, path-style, rede %s).\n", info.Name, info.Endpoint, info.Region, info.Network)
 		fmt.Printf("Ligue ao app com: cais app bucket <app> %s (o app recebe os secrets %s).\n", info.Name, strings.Join(info.Secrets, " e "))
+	case "delete":
+		if len(pos) != 1 {
+			return errors.New("uso: cais bucket delete <nome> [-yes]")
+		}
+		if err := confirmName(*yes, pos[0], "Excluir o bucket "+pos[0]+" apaga o bucket e a chave dele (o Garage so exclui bucket vazio). Nao tem volta."); err != nil {
+			return err
+		}
+		if err := c.DeleteBucket(ctx, pos[0]); err != nil {
+			return err
+		}
+		fmt.Printf("Bucket %s excluido.\n", pos[0])
 	case "list":
 		list, err := c.Buckets(ctx)
 		if err != nil {
@@ -407,6 +433,7 @@ func runDB(args []string) error {
 	sub, args := subcommand(args)
 	fs, socket := newFlags("db " + sub)
 	exts := fs.String("extensions", "", "extensoes do Postgres, separadas por virgula (ex: postgis)")
+	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
 	pos := parseInterspersed(fs, args)
 	c, err := connect(*socket)
 	if err != nil {
@@ -426,6 +453,17 @@ func runDB(args []string) error {
 		}
 		fmt.Printf("Database %s criado no %s (host %s:%d, rede %s).\n", info.Name, info.Engine, info.Host, info.Port, info.Network)
 		fmt.Printf("Ligue ao app com: cais app db <app> %s/%s (o app recebe os secrets %s).\n", info.Engine, info.Name, strings.Join(info.Secrets, " e "))
+	case "delete":
+		if len(pos) != 2 {
+			return errors.New("uso: cais db delete postgres|mysql <nome> [-yes]")
+		}
+		if err := confirmName(*yes, pos[1], "Excluir o database "+pos[0]+"/"+pos[1]+" apaga todos os dados dele e o usuario. Nao tem volta."); err != nil {
+			return err
+		}
+		if err := c.DeleteDatabase(ctx, pos[0], pos[1]); err != nil {
+			return err
+		}
+		fmt.Printf("Database %s/%s excluido.\n", pos[0], pos[1])
 	case "list":
 		list, err := c.Databases(ctx)
 		if err != nil {

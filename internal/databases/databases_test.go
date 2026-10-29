@@ -135,3 +135,26 @@ func TestHumanSize(t *testing.T) {
 		}
 	}
 }
+
+func TestDrop(t *testing.T) {
+	var sql []string
+	exec := func(_ context.Context, container string, input []byte, args ...string) (string, error) {
+		sql = append(sql, container+": "+string(input))
+		return "", nil
+	}
+	pg, _ := Get(Postgres)
+	my, _ := Get(MySQL)
+	if err := Drop(context.Background(), exec, pg, "loja"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Drop(context.Background(), exec, my, "loja"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sql[0], `DROP DATABASE IF EXISTS "loja" WITH (FORCE)`) || !strings.Contains(sql[0], `DROP ROLE IF EXISTS "loja"`) ||
+		!strings.Contains(sql[1], "DROP DATABASE IF EXISTS `loja`") || !strings.Contains(sql[1], "DROP USER IF EXISTS 'loja'@'%'") {
+		t.Errorf("sql %q", sql)
+	}
+	if err := Drop(context.Background(), exec, pg, "x; DROP"); err == nil {
+		t.Error("aceitou nome invalido")
+	}
+}
