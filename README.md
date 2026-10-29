@@ -210,8 +210,8 @@ o cliente MCP no seu computador chama pelo SSH: a autenticacao e a sua chave
 SSH e nenhuma porta nova abre.
 
 ```sh
-claude mcp add cais -- ssh root@vps cais mcp          # Claude Code
-claude mcp add cais -- ssh voce@vps cais mcp          # instalado com --group
+claude mcp add cais -- ssh cais@vps cais mcp          # instalado com --ssh
+claude mcp add cais -- ssh root@vps cais mcp          # sem o --ssh
 ```
 
 As ferramentas chamam as mesmas acoes da TUI e do CLI, com as mesmas regras
@@ -257,10 +257,16 @@ Instala `/usr/local/bin/cais` e o servico `cais` (unidade em
 - `--group cais`: libera o cais pra quem esta no grupo, sem sudo (cria o grupo
   e coloca nele quem rodou o sudo). Quem esta no grupo controla a VPS, como no
   grupo `docker`.
+- `--ssh`: cria o usuario `cais` pro ssh, com as chaves de quem rodou o sudo
+  (ou `--ssh-key arquivo.pub`). `ssh cais@vps` abre direto a TUI,
+  `ssh cais@vps apps` roda um comando do cais e `ssh cais@vps cais mcp` e o
+  MCP. Sem shell, sem tunel e so por chave (a config fica em
+  `/etc/ssh/sshd_config.d/cais.conf`, conferida com `sshd -T` pra nao mudar o
+  ssh dos outros usuarios). Implica `--group cais`.
 - `--dry-run`: mostra o que faria, sem mudar nada.
 - `--binary arquivo`: instala um binario pronto em vez de compilar.
-- `--uninstall`: remove o binario e o servico; `/etc/cais`, `/var/lib/cais` e os
-  containers ficam.
+- `--uninstall`: remove o binario, o servico e o usuario `cais` do ssh;
+  `/etc/cais`, `/var/lib/cais` e os containers ficam.
 
 Depois, o Setup (aba Setup da TUI, ou o CLI abaixo).
 

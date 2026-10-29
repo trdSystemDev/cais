@@ -50,8 +50,8 @@ Roda na VPS e conversa pelo stdin/stdout; o cliente MCP no seu computador
 chama pelo ssh (a autenticacao e a sua chave SSH, sem porta nova).
 
 Exemplo (Claude Code, no seu computador):
-  claude mcp add cais -- ssh root@vps cais mcp
-  claude mcp add cais -- ssh voce@vps cais mcp   # instalado com --group`},
+  claude mcp add cais -- ssh cais@vps cais mcp   # instalado com --ssh
+  claude mcp add cais -- ssh root@vps cais mcp`},
 		{name: "version", usage: "version", short: "mostra a versao"},
 		{name: "help", usage: "help [comando]", short: "esta ajuda; com o comando, os detalhes dele", long: `
 Exemplos:
