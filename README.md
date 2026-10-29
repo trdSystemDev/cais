@@ -209,7 +209,33 @@ Os bancos nunca entram na `proxy_network`.
 3. Apps: repositorio do GitHub com compose de producao, deploy com volta, logs, restart
 4. Bancos: database e usuario por app no Postgres/MySQL compartilhado
 5. Deploy automatico no push (webhook do GitHub App)
-6. Backups, releases e `install.sh`
+6. Backups
+7. `install.sh` (feito: compila no clone, sem releases)
+
+## Instalacao
+
+A VPS precisa de Linux com systemd, Docker com o Compose v2 e acesso de
+leitura a este repositorio (chave SSH). Nao precisa de Go: o `install.sh`
+compila o cais num container `golang`.
+
+```sh
+git clone git@github.com:trdSystemDev/cais.git && cd cais
+sudo ./install.sh                 # compila, instala e sobe o daemon (systemd)
+git pull && sudo ./install.sh     # atualiza: so o daemon reinicia, os containers ficam
+```
+
+Instala `/usr/local/bin/cais` e o servico `cais` (unidade em
+`assets/systemd/cais.service`). Opcoes (`./install.sh -h`):
+
+- `--group cais`: libera o cais pra quem esta no grupo, sem sudo (cria o grupo
+  e coloca nele quem rodou o sudo). Quem esta no grupo controla a VPS, como no
+  grupo `docker`.
+- `--dry-run`: mostra o que faria, sem mudar nada.
+- `--binary arquivo`: instala um binario pronto em vez de compilar.
+- `--uninstall`: remove o binario e o servico; `/etc/cais`, `/var/lib/cais` e os
+  containers ficam.
+
+Depois, o Setup (aba Setup da TUI, ou o CLI abaixo).
 
 ## Uso
 
