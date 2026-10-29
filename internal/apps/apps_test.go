@@ -493,7 +493,7 @@ func TestModeloDaAjudaPassaNaChecagem(t *testing.T) {
 	os.MkdirAll(src, 0o755)
 	os.MkdirAll(secretsDir, 0o700)
 	os.WriteFile(filepath.Join(secretsDir, "jwt"), []byte("x"), 0o444)
-	os.WriteFile(filepath.Join(src, ".env"), []byte("CAIS_SECRETS="+secretsDir+"\nDATABASE_URL=x\n"), 0o600)
+	os.WriteFile(filepath.Join(src, ".env"), []byte("CAIS_SECRETS="+secretsDir+"\nDATABASE_URL=x\nDOMINIO=web.exemplo.com.br\n"), 0o600)
 	g := Guide(GuideInput{App: "web", Host: "web.exemplo.com.br", Networks: []string{"postgres_network"},
 		Env: []string{"DATABASE_URL"}, Secrets: []string{"jwt"}})
 	os.WriteFile(filepath.Join(src, "docker-compose.yml"), []byte(g), 0o644)
@@ -512,7 +512,8 @@ func TestGuide(t *testing.T) {
 	g := Guide(GuideInput{App: "web", Host: "web.exemplo.com.br", Networks: []string{"postgres_network"},
 		Env: []string{"DATABASE_URL"}, Secrets: []string{"jwt"}})
 	for _, want := range []string{
-		"traefik.http.routers.web.rule: Host(`web.exemplo.com.br`)",
+		"traefik.http.routers.web.rule: Host(`${DOMINIO:?defina DOMINIO nas variaveis do app}`)",
+		"ex: web.exemplo.com.br",
 		"traefik.http.routers.web.entrypoints: websecure",
 		"proxy_network:\n    external: true",
 		"postgres_network:\n    external: true",

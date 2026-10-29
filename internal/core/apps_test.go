@@ -251,7 +251,7 @@ func TestVariaveisESecretsDoApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Host(`meu-app.exemplo.com.br`)", "postgres_network", "${CAIS_SECRETS}/jwt"} {
+	for _, want := range []string{"Host(`${DOMINIO:?", "ex: meu-app.exemplo.com.br", "postgres_network", "${CAIS_SECRETS}/jwt"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("ajuda sem %q", want)
 		}

@@ -10,7 +10,8 @@ import (
 // GuideInput e o que o texto de ajuda de um app precisa saber.
 type GuideInput struct {
 	App string
-	// Host e o dominio sugerido pro app (<app>.<dominio>).
+	// Host e o dominio sugerido pro app (<app>.<dominio>), como exemplo do
+	// valor de DOMINIO.
 	Host string
 	// Port e a porta HTTP do service web; 0 vira um exemplo.
 	Port int
@@ -64,11 +65,15 @@ func Guide(in GuideInput) string {
 	}
 	w("    labels:\n")
 	w("      traefik.enable: \"true\"\n")
-	w("      traefik.http.routers.%s.rule: Host(`%s`)\n", router, in.Host)
+	w("      # o dominio vem da variavel DOMINIO do app (ex: %s, ou um dominio do\n", in.Host)
+	w("      # cliente apontado pra VPS): trocar e so mudar a variavel e fazer deploy.\n")
+	w("      # O certificado (Let's Encrypt) sai sozinho pra qualquer dominio na regra.\n")
+	w("      # Mais de um: Host(`${DOMINIO}`) || Host(`www.${DOMINIO}`)\n")
+	w("      traefik.http.routers.%s.rule: Host(`${DOMINIO:?defina DOMINIO nas variaveis do app}`)\n", router)
 	w("      traefik.http.routers.%s.entrypoints: websecure\n", router)
 	w("      traefik.http.services.%s.loadbalancer.server.port: \"%d\"\n", router, port)
 	w("      # outro service no mesmo dominio por caminho (ex: API em /api):\n")
-	w("      #   traefik.http.routers.%s-api.rule: Host(`%s`) && PathPrefix(`/api`)\n", router, in.Host)
+	w("      #   traefik.http.routers.%s-api.rule: Host(`${DOMINIO}`) && PathPrefix(`/api`)\n", router)
 	w("    networks:\n")
 	w("      - default\n")
 	w("      - proxy_network\n")

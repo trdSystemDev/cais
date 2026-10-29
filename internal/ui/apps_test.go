@@ -169,7 +169,7 @@ func TestAppsCriaPeloLinkEMostraAjuda(t *testing.T) {
 	if a.Repo != "trdSystemDev/loja" || a.ComposeFile() != apps.DefaultCompose {
 		t.Fatalf("app %+v", a.App)
 	}
-	waitFor(t, m, "Host(`loja.trd.localhost`)")
+	waitFor(t, m, "ex: loja.trd.localhost")
 	if !strings.Contains(m.apps.guide, "postgres_network:\n    external: true") {
 		t.Errorf("ajuda sem a rede do Postgres:\n%s", m.apps.guide)
 	}
