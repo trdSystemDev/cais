@@ -13,6 +13,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 const secretsDir = "/var/lib/cais/secrets"
@@ -43,11 +44,12 @@ func (c *command) UnmarshalYAML(n *yaml.Node) error {
 type compose struct {
 	Name     string `yaml:"name"`
 	Services map[string]struct {
-		Ports       []string          `yaml:"ports"`
-		Environment map[string]string `yaml:"environment"`
-		Command     command           `yaml:"command"`
-		Labels      yaml.Node         `yaml:"labels"`
-		Networks    []string          `yaml:"networks"`
+		ContainerName string            `yaml:"container_name"`
+		Ports         []string          `yaml:"ports"`
+		Environment   map[string]string `yaml:"environment"`
+		Command       command           `yaml:"command"`
+		Labels        yaml.Node         `yaml:"labels"`
+		Networks      []string          `yaml:"networks"`
 	} `yaml:"services"`
 	Secrets map[string]struct {
 		File string `yaml:"file"`
@@ -124,11 +126,18 @@ func TestProxyNasceVazioComPortasEEmail(t *testing.T) {
 		// o padrao de 60s corta upload grande dos apps
 		"--entrypoints.websecure.transport.respondingtimeouts.readtimeout=30m",
 		"--certificatesresolvers.le.acme.email=admin@exemplo.com.br",
+		// a API que o deploy sem queda consulta, so no loopback do container
+		"--api.insecure=true",
+		"--entrypoints.traefik.address=127.0.0.1:8080",
 		"--entrypoints.websecure.http.tls.certresolver=le",
 	} {
 		if !slices.Contains(tr.Command, flag) {
 			t.Errorf("traefik sem %s", flag)
 		}
+	}
+	// o deploy sem queda acha o Traefik por esse nome (docker.TraefikContainer)
+	if tr.ContainerName != docker.TraefikContainer {
+		t.Errorf("container_name %q, o rollout procura %q", tr.ContainerName, docker.TraefikContainer)
 	}
 	// nenhum site declarado no proxy: so os headers padrao
 	var labels map[string]string

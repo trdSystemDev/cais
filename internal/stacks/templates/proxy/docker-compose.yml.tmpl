@@ -37,6 +37,11 @@ services:
       - --providers.file.watch=false
 {{- end}}
       - --ping=true
+      # API so no loopback do container (sem porta publicada; os apps na
+      # proxy_network nao alcancam): o deploy sem queda do cais pergunta por
+      # docker exec quais containers o Traefik usa antes de parar o antigo
+      - --api.insecure=true
+      - --entrypoints.traefik.address=127.0.0.1:8080
       - --accesslog=true
       - --global.checknewversion=false
       - --global.sendanonymoususage=false

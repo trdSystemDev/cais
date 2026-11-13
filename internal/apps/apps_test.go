@@ -167,9 +167,13 @@ func (f *fakeDocker) Down(_ context.Context, name string, volumes bool) error {
 	return nil
 }
 
-func (f *fakeDocker) Rollout(_ context.Context, p docker.Project, service, image string) error {
+func (f *fakeDocker) Rollout(_ context.Context, p docker.Project, service, image string, drain bool) error {
 	c := f.compose(p)
-	f.calls = append(f.calls, "rollout "+service+" "+image+" "+c)
+	call := "rollout " + service + " " + image
+	if drain {
+		call += " drain"
+	}
+	f.calls = append(f.calls, call+" "+c)
 	if f.failRollout[c] {
 		return errors.New("container web-2 is unhealthy")
 	}
@@ -499,6 +503,7 @@ func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
 			"labels": {"traefik.enable": "true", "traefik.http.routers.web.rule": "Host(` + "`web.x`" + `)",
 				"traefik.http.routers.web-api.rule": "PathPrefix(` + "`/api`" + `)", "traefik.http.services.web.loadbalancer.server.port": "3000"},
 			"networks": {"default": null, "proxy_network": null, "postgres_network": null},
+			"healthcheck": {"test": ["CMD-SHELL", "test ! -f /tmp/drain && wget -qO- http://127.0.0.1:3000/"]},
 			"volumes": [{"type": "volume", "source": "dados", "target": "/data"},
 				{"type": "bind", "source": "` + src + `/worker", "target": "/worker", "read_only": true},
 				{"type": "bind", "source": "` + secretsDir + `/jwt", "target": "/jwt", "read_only": true}]},
@@ -514,6 +519,33 @@ func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
 	// bind com escrita no codigo: os dados somem no proximo deploy
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "some no proximo deploy") {
 		t.Errorf("avisos %v", warnings)
+	}
+}
+
+func TestCheckComposeAvisaSemHealthcheckOuSemDrain(t *testing.T) {
+	svc := func(hc string) []byte {
+		return []byte(`{"services": {"web": {"labels": {"traefik.enable": "true",
+			"traefik.http.services.web.loadbalancer.server.port": "8080"}, "networks": {"proxy_network": null}` + hc + `}},
+			"networks": {"proxy_network": {"name": "proxy_network", "external": true}}}`)
+	}
+	r := Rules{App: "web", Src: "/x"}
+	cases := map[string]struct{ hc, want string }{
+		"sem healthcheck": {``, "sem healthcheck no compose"},
+		"desligado":       {`, "healthcheck": {"disable": true}`, "sem healthcheck no compose"},
+		"sem drain":       {`, "healthcheck": {"test": ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]}`, "nao tem a drenagem"},
+		"com drain":       {`, "healthcheck": {"test": ["CMD-SHELL", "test ! -f /tmp/drain && wget -qO- http://127.0.0.1:8080/"]}`, ""},
+	}
+	for name, tc := range cases {
+		problems, w := CheckCompose(svc(tc.hc), r)
+		if len(problems) != 0 {
+			t.Fatalf("%s: problemas %v", name, problems)
+		}
+		switch {
+		case tc.want == "" && len(w) != 0:
+			t.Errorf("%s: avisos %v", name, w)
+		case tc.want != "" && (len(w) != 1 || !strings.Contains(w[0], tc.want) || !strings.Contains(w[0], "127.0.0.1:8080")):
+			t.Errorf("%s: avisos %v", name, w)
+		}
 	}
 }
 
@@ -575,9 +607,18 @@ func TestModeloDaAjudaPassaNaChecagem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("o modelo nao e um compose valido: %v\n%s", err, g)
 	}
-	problems, _ := CheckCompose(out, Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}})
+	problems, warnings := CheckCompose(out, Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}})
 	if len(problems) != 0 {
 		t.Fatalf("o modelo da Ajuda foi recusado: %v\n%s", problems, g)
+	}
+	// o modelo ja vem com a drenagem: troca sem queda sem aviso
+	for _, w := range warnings {
+		if strings.Contains(w, "healthcheck") {
+			t.Errorf("o modelo da Ajuda gera aviso: %s", w)
+		}
+	}
+	if rs := rollingServices(out, "web"); len(rs) != 1 || !rs[0].drain {
+		t.Errorf("o modelo nao troca com drenagem: %+v", rs)
 	}
 }
 
@@ -778,7 +819,7 @@ func TestDeployTrocaSemQuedaOsServicesDoTraefikComHealthcheck(t *testing.T) {
 	hc := `"networks": {"proxy_network": {}}, "healthcheck": {"test": ["CMD", "true"]}`
 	d.config = `{"services": {
 		"app":    {"labels": {"traefik.enable": "true"}, ` + hc + `},
-		"api":    {"image": "ghcr.io/o/api:1", "labels": {"traefik.enable": "true"}, ` + hc + `},
+		"api":    {"image": "ghcr.io/o/api:1", "labels": {"traefik.enable": "true"}, "networks": {"proxy_network": {}}, "healthcheck": {"test": ["CMD-SHELL", "test ! -f /tmp/drain && wget -qO- http://127.0.0.1:3000/"]}},
 		"semhc":  {"labels": {"traefik.enable": "true"}, "networks": {"proxy_network": {}}},
 		"desl":   {"labels": {"traefik.enable": "true"}, "networks": {"proxy_network": {}}, "healthcheck": {"disable": true}},
 		"worker": {` + hc + `},
@@ -787,7 +828,7 @@ func TestDeployTrocaSemQuedaOsServicesDoTraefikComHealthcheck(t *testing.T) {
 	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"config v1", "build v1", "rollout api ghcr.io/o/api:1 v1", "rollout app web-app v1", "up v1"}
+	want := []string{"config v1", "build v1", "rollout api ghcr.io/o/api:1 drain v1", "rollout app web-app v1", "up v1"}
 	if !slices.Equal(d.calls, want) {
 		t.Errorf("chamadas %v\nesperava %v", d.calls, want)
 	}

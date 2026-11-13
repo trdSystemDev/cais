@@ -3,6 +3,7 @@ package apps
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/trdSystemDev/cais/internal/docker"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -99,10 +100,7 @@ type composeConfig struct {
 		Labels      map[string]string `json:"labels"`
 		Networks    map[string]any    `json:"networks"`
 		Image       string            `json:"image"`
-		Healthcheck *struct {
-			Test    []string `json:"test"`
-			Disable bool     `json:"disable"`
-		} `json:"healthcheck"`
+		Healthcheck *healthcheck      `json:"healthcheck"`
 	} `json:"services"`
 	Networks map[string]struct {
 		Name     string `json:"name"`
@@ -115,6 +113,28 @@ type composeConfig struct {
 	} `json:"volumes"`
 	Secrets map[string]fileRef `json:"secrets"`
 	Configs map[string]fileRef `json:"configs"`
+}
+
+type healthcheck struct {
+	Test    []string `json:"test"`
+	Disable bool     `json:"disable"`
+}
+
+// active diz se o service tem healthcheck no compose (o HEALTHCHECK do
+// Dockerfile nao aparece no compose resolvido).
+func (h *healthcheck) active() bool {
+	return h != nil && !h.Disable && len(h.Test) > 0 && h.Test[0] != "NONE"
+}
+
+// drains diz se o healthcheck falha com o arquivo de drenagem: e o que
+// deixa o deploy tirar o container antigo do Traefik antes de parar.
+func (h *healthcheck) drains() bool {
+	return h.active() && strings.Contains(strings.Join(h.Test[1:], " "), docker.DrainFile)
+}
+
+// drainExample e o healthcheck com drenagem pra colar no compose.
+func drainExample(port string) string {
+	return fmt.Sprintf(`healthcheck: {test: ["CMD-SHELL", "test ! -f %s && wget -qO- http://127.0.0.1:%s/ || exit 1"], interval: 5s, retries: 2, start_period: 10s, start_interval: 1s}`, docker.DrainFile, port)
 }
 
 type fileRef struct {
@@ -253,6 +273,19 @@ func CheckCompose(configJSON []byte, r Rules) (problems, warnings []string) {
 		if traefik {
 			if _, ok := s.Networks[ProxyNetwork]; !ok {
 				bad(n, "tem labels do Traefik mas nao esta na proxy_network: o Traefik nao alcanca o service. Ponha networks: [default, proxy_network] e proxy_network: {external: true}")
+			}
+			port := "<porta>"
+			for k, v := range s.Labels {
+				if strings.HasSuffix(k, ".loadbalancer.server.port") {
+					port = v
+				}
+			}
+			switch {
+			case s.Labels["traefik.enable"] != "true":
+			case !s.Healthcheck.active():
+				warn(n, "sem healthcheck no compose: cada deploy recria o container e o site cai por alguns segundos. Pra trocar sem queda: %s", drainExample(port))
+			case !s.Healthcheck.drains():
+				warn(n, "o healthcheck nao tem a drenagem (test ! -f %s): o deploy troca sem queda, mas o Traefik so tira o container antigo depois que ele para e algumas requisicoes falham no corte. Ponha \"test ! -f %s &&\" no comeco do teste, ex: %s", docker.DrainFile, docker.DrainFile, drainExample(port))
 			}
 		}
 	}

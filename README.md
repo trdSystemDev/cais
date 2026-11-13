@@ -363,22 +363,51 @@ O deploy:
 **Deploy sem queda.** Um service com `traefik.enable` e `healthcheck` no
 compose nao e recriado: o cais sobe os containers novos ao lado dos antigos
 (`up --no-recreate --scale <service>=2`, mesmo projeto, entao mesmos volumes,
-banco e labels), espera ficarem healthy, da 3s pro Traefik passar a mandar
-trafego pra eles e so entao para (SIGTERM, respeitando o `stop_grace_period`)
-e remove os antigos. Se os novos nao ficam healthy, saem e os antigos nem
-foram tocados. Deploy do mesmo commit (mesma config e imagem) nao troca nada.
+banco e labels), espera ficarem healthy e o Traefik passar a mandar trafego
+pra eles. Depois **drena** os antigos: cria `/tmp/drain` neles, espera
+ficarem unhealthy e o Traefik larga-los (ele tira do balanceamento container
+unhealthy, ainda vivo), e so entao para (SIGTERM, respeitando o
+`stop_grace_period`) e remove.
 
+O cais nao chuta tempo: pergunta ao Traefik. A API dele fica presa no
+loopback do container do proxy (`127.0.0.1:8080`, sem porta publicada; os
+apps na `proxy_network` nao alcancam) e o cais le por
+`docker exec proxy-traefik wget` quais IPs cada service usa. O Traefik
+relista o Docker a cada evento, um de cada vez: com o Docker lento chega a
+ficar dezenas de segundos atras, e o deploy espera o que for preciso (ate 2
+minutos por etapa; passou disso, segue). Sem a API (proxy de antes dela),
+espera 3s fixos. Se os novos nao ficam healthy, saem e os antigos nem foram tocados.
+Deploy do mesmo commit (mesma config e imagem) nao troca nada.
+
+A drenagem precisa do healthcheck falhando com o arquivo (convencao do
+[docker-rollout](https://docker-rollout.wowu.dev/container-draining.html)):
+
+```yaml
+    healthcheck:
+      test: ["CMD-SHELL", "test ! -f /tmp/drain && wget -qO- http://127.0.0.1:3000/ || exit 1"]
+      interval: 5s        # o deploy espera interval x retries pra drenar
+      retries: 2
+      start_period: 10s
+      start_interval: 1s  # o novo fica healthy em ~1s
+```
+
+Por que: sem drenar, o Traefik so tira o antigo depois que ele morre e
+relista o Docker; as requisicoes dessa janela vao pro IP que sumiu e ficam
+presas. Medido (uma requisicao a cada 50ms): recriando, ~2-4s fora do ar;
+trocando sem drenar, de 0 a 41 falhas por deploy; drenando com esperas fixas,
+de 0 a 13 (o Traefik atrasava mais que a espera com a maquina carregada);
+drenando com a confirmacao do Traefik, 0 em todos os deploys medidos.
+
+- A validacao do compose avisa (sem bloquear) service do Traefik sem
+  healthcheck, que e recriado como antes, e healthcheck sem a drenagem.
+- `retries` baixo deixa o healthcheck sensivel (uma falha por acaso tira o
+  container do Traefik ate o proximo check); alto deixa o deploy esperar mais.
+- Drenagem que falha (imagem sem `touch`, healthcheck que nunca fica unhealthy
+  em 2 minutos) nao derruba o deploy: o antigo para sem drenar.
 - Por alguns segundos as duas versoes atendem juntas: migracao de banco tem
   que ser compativel com a versao anterior.
 - Conexao longa (WebSocket, SSE) cai quando o antigo para; o cliente que
   reconecta ja acha o novo no ar.
-- No corte ainda escapam umas poucas requisicoes (medido: 2-3 em ~0,2s, contra
-  ~2-4s de queda recriando): o Traefik leva um instante pra ver que o antigo
-  parou.
-- Sem healthcheck no compose (ou so no `HEALTHCHECK` do Dockerfile) o service
-  e recriado como antes: o Traefik mandaria trafego pro novo antes de ele
-  estar pronto. Use `start_interval: 1s` pra o primeiro check nao esperar o
-  `interval`.
 
 O compose do app publica o dominio pelo Traefik e usa as redes da infra; a
 **Ajuda** (`cais app guide`) gera o trecho pronto pra colar:

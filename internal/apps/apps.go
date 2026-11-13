@@ -131,8 +131,9 @@ type Docker interface {
 	Restart(ctx context.Context, p docker.Project, service string) error
 	Stop(ctx context.Context, p docker.Project) error
 	// Rollout troca os containers do service sem queda: os novos sobem ao
-	// lado dos antigos e os antigos so saem com os novos healthy.
-	Rollout(ctx context.Context, p docker.Project, service, image string) error
+	// lado dos antigos e os antigos so saem com os novos healthy; com drain,
+	// os antigos ficam unhealthy (saem do Traefik) antes de parar.
+	Rollout(ctx context.Context, p docker.Project, service, image string, drain bool) error
 	// Down remove o projeto pelo nome; volumes apaga tambem os dados.
 	Down(ctx context.Context, name string, volumes bool) error
 }
@@ -437,7 +438,7 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	p = m.project(a, SrcDir)
 	var upErr error
 	for _, s := range rollingServices(cfg, p.Name) {
-		if upErr = m.Docker.Rollout(ctx, p, s.name, s.image); upErr != nil {
+		if upErr = m.Docker.Rollout(ctx, p, s.name, s.image, s.drain); upErr != nil {
 			break
 		}
 	}
@@ -466,7 +467,10 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	return res, nil
 }
 
-type rollingService struct{ name, image string }
+type rollingService struct {
+	name, image string
+	drain       bool // healthcheck segue a convencao do docker.DrainFile
+}
 
 // rollingServices sao os services que o deploy troca sem queda: atras do
 // Traefik (traefik.enable) e com healthcheck no compose, que e o que faz o
@@ -480,15 +484,14 @@ func rollingServices(configJSON []byte, project string) []rollingService {
 	var out []rollingService
 	for _, n := range sortedKeys(c.Services) {
 		s := c.Services[n]
-		h := s.Healthcheck
-		if s.Labels["traefik.enable"] != "true" || h == nil || h.Disable || len(h.Test) == 0 || h.Test[0] == "NONE" {
+		if s.Labels["traefik.enable"] != "true" || !s.Healthcheck.active() {
 			continue
 		}
 		image := s.Image
 		if image == "" {
 			image = project + "-" + n // nome que o compose da a imagem do build
 		}
-		out = append(out, rollingService{n, image})
+		out = append(out, rollingService{n, image, s.Healthcheck.drains()})
 	}
 	return out
 }
