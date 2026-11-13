@@ -96,8 +96,13 @@ type composeConfig struct {
 			AdditionalContexts map[string]string `json:"additional_contexts"`
 			SSH                any               `json:"ssh"`
 		} `json:"build"`
-		Labels   map[string]string `json:"labels"`
-		Networks map[string]any    `json:"networks"`
+		Labels      map[string]string `json:"labels"`
+		Networks    map[string]any    `json:"networks"`
+		Image       string            `json:"image"`
+		Healthcheck *struct {
+			Test    []string `json:"test"`
+			Disable bool     `json:"disable"`
+		} `json:"healthcheck"`
 	} `json:"services"`
 	Networks map[string]struct {
 		Name     string `json:"name"`

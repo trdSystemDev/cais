@@ -45,6 +45,8 @@ func Guide(in GuideInput) string {
 	w("# - acesso pelo dominio: labels do Traefik + proxy_network. Sem ports:\n")
 	w("#   o Traefik faz HTTPS e entrega pra porta do container.\n")
 	w("# - healthcheck: o deploy espera ficar healthy; sem healthcheck, \"rodando\" basta.\n")
+	w("#   Com healthcheck, o service atras do Traefik troca sem queda: o novo sobe\n")
+	w("#   ao lado do antigo e o antigo so sai com o novo healthy.\n")
 	w("# - se o up falhar, o cais volta o commit anterior.\n")
 	w("# - o .env fica ao lado deste arquivo: ponha .env no .dockerignore pra as\n")
 	w("#   variaveis nao entrarem na imagem num COPY . .\n\n")

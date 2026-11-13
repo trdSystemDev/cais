@@ -69,6 +69,8 @@ func (d *appDocker) Down(_ context.Context, name string, volumes bool) error {
 	return nil
 }
 
+func (d *appDocker) Rollout(context.Context, docker.Project, string, string) error { return nil }
+
 func (d *appDocker) Stop(_ context.Context, p docker.Project) error {
 	d.add("stop " + p.Name)
 	return nil

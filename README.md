@@ -352,11 +352,33 @@ O deploy:
    cais e **recusa** (antes do build, sem tocar no que esta no ar) o que
    foge dele, dizendo o motivo e o jeito certo de cada item (veja abaixo);
 5. `docker compose -p <app> build --pull` com a versao atual ainda no ar;
-6. troca `src` por `src.next` e `up -d --wait`;
+6. troca `src` por `src.next`; os services atras do Traefik com
+   `healthcheck` no compose trocam **sem queda** (abaixo) e o resto sobe com
+   `up -d --wait` (so recria o que mudou);
 7. observa os containers por 15 segundos: reiniciando, parado com erro ou
    unhealthy conta como falha (sem healthcheck, "running" na hora do `up` nao
    garante que o app fica de pe);
 8. se falhar, volta o commit anterior (`src.prev`) e sobe ele de novo.
+
+**Deploy sem queda.** Um service com `traefik.enable` e `healthcheck` no
+compose nao e recriado: o cais sobe os containers novos ao lado dos antigos
+(`up --no-recreate --scale <service>=2`, mesmo projeto, entao mesmos volumes,
+banco e labels), espera ficarem healthy, da 3s pro Traefik passar a mandar
+trafego pra eles e so entao para (SIGTERM, respeitando o `stop_grace_period`)
+e remove os antigos. Se os novos nao ficam healthy, saem e os antigos nem
+foram tocados. Deploy do mesmo commit (mesma config e imagem) nao troca nada.
+
+- Por alguns segundos as duas versoes atendem juntas: migracao de banco tem
+  que ser compativel com a versao anterior.
+- Conexao longa (WebSocket, SSE) cai quando o antigo para; o cliente que
+  reconecta ja acha o novo no ar.
+- No corte ainda escapam umas poucas requisicoes (medido: 2-3 em ~0,2s, contra
+  ~2-4s de queda recriando): o Traefik leva um instante pra ver que o antigo
+  parou.
+- Sem healthcheck no compose (ou so no `HEALTHCHECK` do Dockerfile) o service
+  e recriado como antes: o Traefik mandaria trafego pro novo antes de ele
+  estar pronto. Use `start_interval: 1s` pra o primeiro check nao esperar o
+  `interval`.
 
 O compose do app publica o dominio pelo Traefik e usa as redes da infra; a
 **Ajuda** (`cais app guide`) gera o trecho pronto pra colar:

@@ -112,11 +112,13 @@ func (f *fakeSource) Tree(_ context.Context, _, commit string) (string, error) {
 // fakeDocker registra o que o deploy pediu, com o compose de cada chamada
 // (pra saber de qual pasta subiu).
 type fakeDocker struct {
-	calls   []string
-	config  string                        // json do compose resolvido
-	failUp  map[string]bool               // compose (conteudo) cujo up falha
-	envSeen map[string]string             // .env lido no Config
-	ps      map[string][]docker.Container // compose -> containers depois do up
+	calls  []string
+	config string          // json do compose resolvido
+	failUp map[string]bool // compose (conteudo) cujo up falha
+	// compose (conteudo) cujo rollout falha
+	failRollout map[string]bool
+	envSeen     map[string]string             // .env lido no Config
+	ps          map[string][]docker.Container // compose -> containers depois do up
 }
 
 func (f *fakeDocker) compose(p docker.Project) string {
@@ -162,6 +164,15 @@ func (f *fakeDocker) Restart(_ context.Context, p docker.Project, service string
 
 func (f *fakeDocker) Down(_ context.Context, name string, volumes bool) error {
 	f.calls = append(f.calls, fmt.Sprintf("down %s volumes=%v", name, volumes))
+	return nil
+}
+
+func (f *fakeDocker) Rollout(_ context.Context, p docker.Project, service, image string) error {
+	c := f.compose(p)
+	f.calls = append(f.calls, "rollout "+service+" "+image+" "+c)
+	if f.failRollout[c] {
+		return errors.New("container web-2 is unhealthy")
+	}
 	return nil
 }
 
@@ -758,5 +769,50 @@ func TestBucketLigadoEntraNoDeploy(t *testing.T) {
 	}
 	if list, _ := m.Secrets("web"); len(list) != 0 {
 		t.Errorf("os secrets do bucket ficaram: %+v", list)
+	}
+}
+
+func TestDeployTrocaSemQuedaOsServicesDoTraefikComHealthcheck(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	hc := `"networks": {"proxy_network": {}}, "healthcheck": {"test": ["CMD", "true"]}`
+	d.config = `{"services": {
+		"app":    {"labels": {"traefik.enable": "true"}, ` + hc + `},
+		"api":    {"image": "ghcr.io/o/api:1", "labels": {"traefik.enable": "true"}, ` + hc + `},
+		"semhc":  {"labels": {"traefik.enable": "true"}, "networks": {"proxy_network": {}}},
+		"desl":   {"labels": {"traefik.enable": "true"}, "networks": {"proxy_network": {}}, "healthcheck": {"disable": true}},
+		"worker": {` + hc + `},
+		"db":     {}
+	}, "networks": {"proxy_network": {"name": "proxy_network", "external": true}}}`
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"config v1", "build v1", "rollout api ghcr.io/o/api:1 v1", "rollout app web-app v1", "up v1"}
+	if !slices.Equal(d.calls, want) {
+		t.Errorf("chamadas %v\nesperava %v", d.calls, want)
+	}
+}
+
+func TestDeployComTrocaQueFalhaVoltaAAnterior(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	d.config = `{"services": {"app": {"labels": {"traefik.enable": "true"}, "networks": {"proxy_network": {}}, "healthcheck": {"test": ["CMD", "true"]}}},
+		"networks": {"proxy_network": {"name": "proxy_network", "external": true}}}`
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	d.calls = nil
+	d.failRollout = map[string]bool{"v2": true}
+
+	_, err := m.Deploy(context.Background(), "web", "c2")
+	if err == nil || !strings.Contains(err.Error(), "unhealthy") || !strings.Contains(err.Error(), "restaurada") {
+		t.Fatalf("erro %v", err)
+	}
+	// o up da v2 nem roda; a anterior volta (rebuild pra imagem voltar a ser a dela)
+	if !slices.Equal(d.calls, []string{"config v2", "build v2", "rollout app web-app v2", "build v1", "up v1"}) {
+		t.Errorf("chamadas %v", d.calls)
+	}
+	if a, _ := m.Get("web"); a.Commit != "c1" || !a.Last.RolledBack {
+		t.Errorf("app %+v / %+v", a, a.Last)
 	}
 }

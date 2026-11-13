@@ -6,6 +6,7 @@ package apps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -129,6 +130,9 @@ type Docker interface {
 	PS(ctx context.Context, p docker.Project) ([]docker.Container, error)
 	Restart(ctx context.Context, p docker.Project, service string) error
 	Stop(ctx context.Context, p docker.Project) error
+	// Rollout troca os containers do service sem queda: os novos sobem ao
+	// lado dos antigos e os antigos so saem com os novos healthy.
+	Rollout(ctx context.Context, p docker.Project, service, image string) error
 	// Down remove o projeto pelo nome; volumes apaga tambem os dados.
 	Down(ctx context.Context, name string, volumes bool) error
 }
@@ -428,7 +432,18 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 		return fail(err)
 	}
 
-	upErr := m.Docker.Up(ctx, m.project(a, SrcDir))
+	// services atras do Traefik com healthcheck trocam sem queda; o up
+	// depois sobe o resto (e nao recria os que ja trocaram)
+	p = m.project(a, SrcDir)
+	var upErr error
+	for _, s := range rollingServices(cfg, p.Name) {
+		if upErr = m.Docker.Rollout(ctx, p, s.name, s.image); upErr != nil {
+			break
+		}
+	}
+	if upErr == nil {
+		upErr = m.Docker.Up(ctx, p)
+	}
 	if upErr == nil {
 		upErr = m.settle(ctx, a)
 	}
@@ -449,6 +464,33 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	a.Commit = commit
 	m.record(a, last)
 	return res, nil
+}
+
+type rollingService struct{ name, image string }
+
+// rollingServices sao os services que o deploy troca sem queda: atras do
+// Traefik (traefik.enable) e com healthcheck no compose, que e o que faz o
+// Traefik so mandar trafego pro container novo quando ele esta pronto. Os
+// outros (banco, worker, sem healthcheck) sao recriados pelo up normal.
+func rollingServices(configJSON []byte, project string) []rollingService {
+	var c composeConfig
+	if json.Unmarshal(configJSON, &c) != nil {
+		return nil
+	}
+	var out []rollingService
+	for _, n := range sortedKeys(c.Services) {
+		s := c.Services[n]
+		h := s.Healthcheck
+		if s.Labels["traefik.enable"] != "true" || h == nil || h.Disable || len(h.Test) == 0 || h.Test[0] == "NONE" {
+			continue
+		}
+		image := s.Image
+		if image == "" {
+			image = project + "-" + n // nome que o compose da a imagem do build
+		}
+		out = append(out, rollingService{n, image})
+	}
+	return out
 }
 
 // otherApps sao os nomes dos outros apps (pra regra dos nomes do Traefik).
