@@ -419,6 +419,8 @@ func (f *fakeAppDocker) PS(_ context.Context, p docker.Project) ([]docker.Contai
 }
 func (f *fakeAppDocker) Restart(context.Context, docker.Project, string) error { return nil }
 func (f *fakeAppDocker) Stop(context.Context, docker.Project) error            { return nil }
+func (_ *fakeAppDocker) PruneImages(context.Context, string) error             { return nil }
+
 func (f *fakeAppDocker) Rollout(context.Context, docker.Project, string, string, bool) error {
 	return nil
 }

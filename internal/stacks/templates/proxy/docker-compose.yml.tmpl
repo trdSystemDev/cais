@@ -12,6 +12,10 @@ services:
     image: traefik:v3.7.16
     container_name: proxy-traefik
     restart: unless-stopped
+    # sem limite o log do docker cresce ate encher o disco
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
     command:
       # so publica container com traefik.enable=true (o padrao publica todos)
       - --providers.docker.exposedbydefault=false
@@ -86,6 +90,10 @@ services:
     image: tecnativa/docker-socket-proxy:v0.5.0
     container_name: proxy-docker-proxy
     restart: unless-stopped
+    # sem limite o log do docker cresce ate encher o disco
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
     environment:
       CONTAINERS: 1
       NETWORKS: 1

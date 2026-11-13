@@ -50,6 +50,10 @@ type compose struct {
 		Command       command           `yaml:"command"`
 		Labels        yaml.Node         `yaml:"labels"`
 		Networks      []string          `yaml:"networks"`
+		Logging       struct {
+			Driver  string            `yaml:"driver"`
+			Options map[string]string `yaml:"options"`
+		} `yaml:"logging"`
 	} `yaml:"services"`
 	Secrets map[string]struct {
 		File string `yaml:"file"`
@@ -80,6 +84,12 @@ func TestTodasAsStacksRenderizam(t *testing.T) {
 			}
 			if len(cf.Services) == 0 {
 				t.Error("nenhum service")
+			}
+			// sem limite o log enche o disco (o Traefik loga cada requisicao)
+			for name, svc := range cf.Services {
+				if svc.Logging.Driver != "json-file" || svc.Logging.Options["max-size"] == "" || svc.Logging.Options["max-file"] == "" {
+					t.Errorf("%s sem limite de log: %+v", name, svc.Logging)
+				}
 			}
 			// sobra do repo antigo ou placeholder sem valor
 			for _, bad := range []string{"trds", "{{", "<no value>", "${"} {

@@ -524,6 +524,24 @@ Com producao automatica, o merge na main ja sobe a producao (sem passar pelo
 Promover); com homologacao na mesma branch, a producao automatica pularia a
 validacao.
 
+## Disco
+
+Disco cheio derruba tudo de uma vez, bancos inclusive. O cais segura o que
+mais cresce:
+
+- **cache de build**: cada `build --pull` guarda camadas novas e nada as
+  apaga. O daemon limpa uma vez por dia (a primeira 10 minutos depois de
+  subir): o que esta sem uso ha uma semana e, depois, o que passar de 10 GB.
+  So deixa o proximo build mais lento; nenhuma imagem ou container e tocado.
+- **imagens antigas**: no storage classico (overlay2) cada build deixa a
+  versao anterior da imagem sem tag. Depois de cada deploy que deu certo, o
+  cais remove as do app (`image prune` com o label do projeto; o que e de
+  fora do cais fica). No image store do containerd (padrao do Docker novo)
+  isso nao acontece.
+- **logs**: o log `json-file` padrao do Docker nao tem limite. As stacks da
+  infra saem com 20 MB x 5 arquivos por container, e a validacao do compose
+  avisa service de app sem limite (o modelo da Ajuda ja vem com ele).
+
 ## Build
 
 ```sh

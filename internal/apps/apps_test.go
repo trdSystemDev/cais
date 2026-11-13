@@ -180,6 +180,11 @@ func (f *fakeDocker) Rollout(_ context.Context, p docker.Project, service, image
 	return nil
 }
 
+func (f *fakeDocker) PruneImages(_ context.Context, project string) error {
+	f.calls = append(f.calls, "prune "+project)
+	return nil
+}
+
 func (f *fakeDocker) Stop(context.Context, docker.Project) error {
 	f.calls = append(f.calls, "stop")
 	return nil
@@ -271,8 +276,8 @@ func TestDeployGravaEnvESobe(t *testing.T) {
 	if res.Commit != "c1" || src.refs[0] != "main" {
 		t.Errorf("commit %s, refs %v", res.Commit, src.refs)
 	}
-	// build antes da troca, up do codigo novo
-	if !slices.Equal(d.calls, []string{"config v1", "build v1", "up v1"}) {
+	// build antes da troca, up do codigo novo e a imagem velha sai
+	if !slices.Equal(d.calls, []string{"config v1", "build v1", "up v1", "prune web"}) {
 		t.Errorf("chamadas %v", d.calls)
 	}
 	if d.envSeen["NODE_ENV"] != "production" || d.envSeen["PRECO"] != "R$10" || d.envSeen["CAIS_COMMIT"] != "c1" ||
@@ -504,10 +509,11 @@ func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
 				"traefik.http.routers.web-api.rule": "PathPrefix(` + "`/api`" + `)", "traefik.http.services.web.loadbalancer.server.port": "3000"},
 			"networks": {"default": null, "proxy_network": null, "postgres_network": null},
 			"healthcheck": {"test": ["CMD-SHELL", "test ! -f /tmp/drain && wget -qO- http://127.0.0.1:3000/"]},
+			"logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}},
 			"volumes": [{"type": "volume", "source": "dados", "target": "/data"},
 				{"type": "bind", "source": "` + src + `/worker", "target": "/worker", "read_only": true},
 				{"type": "bind", "source": "` + secretsDir + `/jwt", "target": "/jwt", "read_only": true}]},
-		"init": {"image": "alpine", "volumes": [{"type": "bind", "source": "` + src + `/data"}]}},
+		"init": {"image": "alpine", "logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}}, "volumes": [{"type": "bind", "source": "` + src + `/data"}]}},
 	"networks": {"default": {"name": "web_default"}, "proxy_network": {"name": "proxy_network", "external": true},
 		"postgres_network": {"name": "postgres_network", "external": true}},
 	"volumes": {"dados": {"name": "web_dados"}},
@@ -525,7 +531,8 @@ func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
 func TestCheckComposeAvisaSemHealthcheckOuSemDrain(t *testing.T) {
 	svc := func(hc string) []byte {
 		return []byte(`{"services": {"web": {"labels": {"traefik.enable": "true",
-			"traefik.http.services.web.loadbalancer.server.port": "8080"}, "networks": {"proxy_network": null}` + hc + `}},
+			"traefik.http.services.web.loadbalancer.server.port": "8080"}, "networks": {"proxy_network": null},
+			"logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}}` + hc + `}},
 			"networks": {"proxy_network": {"name": "proxy_network", "external": true}}}`)
 	}
 	r := Rules{App: "web", Src: "/x"}
@@ -549,9 +556,30 @@ func TestCheckComposeAvisaSemHealthcheckOuSemDrain(t *testing.T) {
 	}
 }
 
+func TestCheckComposeAvisaSemLimiteDeLog(t *testing.T) {
+	cases := map[string]struct {
+		logging string
+		warn    bool
+	}{
+		"sem logging":           {``, true},
+		"json-file sem limite":  {`, "logging": {"driver": "json-file"}`, true},
+		"so options sem limite": {`, "logging": {"options": {"max-file": "3"}}`, true},
+		"json-file com limite":  {`, "logging": {"driver": "json-file", "options": {"max-size": "10m"}}`, false},
+		"local":                 {`, "logging": {"driver": "local"}`, false},
+		"journald":              {`, "logging": {"driver": "journald"}`, false},
+	}
+	for name, tc := range cases {
+		_, w := CheckCompose([]byte(`{"services": {"worker": {"image": "x"`+tc.logging+`}}}`), Rules{App: "web", Src: "/x"})
+		got := len(w) == 1 && strings.Contains(w[0], "sem limite de log")
+		if got != tc.warn || (!tc.warn && len(w) != 0) {
+			t.Errorf("%s: avisos %v", name, w)
+		}
+	}
+}
+
 func TestCheckComposeAvisaDoEnvNoBuild(t *testing.T) {
 	ctx := t.TempDir()
-	cfg := []byte(`{"services": {"web": {"build": {"context": "` + ctx + `"}}}}`)
+	cfg := []byte(`{"services": {"web": {"build": {"context": "` + ctx + `"}, "logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}}}}}`)
 	r := Rules{App: "web", Src: ctx, DotEnv: filepath.Join(ctx, ".env")}
 	if _, w := CheckCompose(cfg, r); len(w) != 1 || !strings.Contains(w[0], ".dockerignore") {
 		t.Errorf("sem .dockerignore: %v", w)
@@ -828,7 +856,7 @@ func TestDeployTrocaSemQuedaOsServicesDoTraefikComHealthcheck(t *testing.T) {
 	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"config v1", "build v1", "rollout api ghcr.io/o/api:1 drain v1", "rollout app web-app v1", "up v1"}
+	want := []string{"config v1", "build v1", "rollout api ghcr.io/o/api:1 drain v1", "rollout app web-app v1", "up v1", "prune web"}
 	if !slices.Equal(d.calls, want) {
 		t.Errorf("chamadas %v\nesperava %v", d.calls, want)
 	}

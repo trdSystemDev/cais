@@ -12,6 +12,10 @@ services:
     image: mysql:9.7
     container_name: mysql
     restart: unless-stopped
+    # sem limite o log do docker cresce ate encher o disco
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
     ports:
       - "127.0.0.1:3306:3306"
     environment:

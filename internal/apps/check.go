@@ -101,6 +101,10 @@ type composeConfig struct {
 		Networks    map[string]any    `json:"networks"`
 		Image       string            `json:"image"`
 		Healthcheck *healthcheck      `json:"healthcheck"`
+		Logging     *struct {
+			Driver  string            `json:"driver"`
+			Options map[string]string `json:"options"`
+		} `json:"logging"`
 	} `json:"services"`
 	Networks map[string]struct {
 		Name     string `json:"name"`
@@ -254,6 +258,12 @@ func CheckCompose(configJSON []byte, r Rules) (problems, warnings []string) {
 			if dotEnv := filepath.Clean(r.DotEnv); r.DotEnv != "" && within(dotEnv, filepath.Clean(b.Context)) && !ignoresEnv(b.Context) {
 				warn(n, "o .env (com as variaveis do app) fica no contexto do build e nao esta no .dockerignore: um COPY . grava as variaveis na imagem. Ponha .env no .dockerignore")
 			}
+		}
+
+		// json-file (o padrao do docker) nao tem limite nenhum; local ja gira
+		// sozinho, none e syslog/journald nao gravam no disco do docker
+		if l := s.Logging; l == nil || ((l.Driver == "" || l.Driver == "json-file") && l.Options["max-size"] == "") {
+			warn(n, "sem limite de log: o log do container cresce ate encher o disco da VPS (derruba tudo, bancos inclusive). Ponha logging: {driver: json-file, options: {max-size: \"20m\", max-file: \"5\"}}")
 		}
 
 		traefik := s.Labels["traefik.enable"] == "true"

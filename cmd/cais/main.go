@@ -94,6 +94,9 @@ func runDaemon(args []string) error {
 	go c.CheckEnvironment(ctx)
 	// deploy automatico: consulta o GitHub (nada de webhook, nenhuma porta)
 	go c.RunAutoDeploy(ctx, *autoEvery)
+	// limpeza do disco (cache de build): uma vez por dia, a primeira logo
+	// depois de subir
+	go c.RunMaintenance(ctx, 10*time.Minute, 24*time.Hour)
 
 	log.Printf("cais daemon %s ouvindo em %s", version, *socket)
 	err = rpc.Serve(ctx, ln, c)

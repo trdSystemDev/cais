@@ -27,6 +27,8 @@ type Deps struct {
 	ComposeDown   func(ctx context.Context, file string) error
 	ContainerLogs func(context.Context, string) (string, error)
 	ComposePS     func(ctx context.Context, file string) ([]docker.Container, error)
+	// PruneBuildCache e a limpeza diaria do cache de build.
+	PruneBuildCache func(ctx context.Context) error
 
 	// GitHubURL troca a API do GitHub (testes); vazio e o GitHub.
 	GitHubURL string
@@ -101,6 +103,9 @@ func New(d Deps) *Core {
 	}
 	if d.ComposePS == nil {
 		d.ComposePS = docker.ComposePS
+	}
+	if d.PruneBuildCache == nil {
+		d.PruneBuildCache = docker.PruneBuildCache
 	}
 	if d.AppsDir == "" {
 		d.AppsDir = filepath.Join(config.DataDir(), "apps")

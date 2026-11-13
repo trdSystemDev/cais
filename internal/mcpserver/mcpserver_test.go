@@ -42,8 +42,10 @@ func (f *fakeDocker) PS(_ context.Context, p docker.Project) ([]docker.Container
 	}
 	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running", Health: "healthy"}}, nil
 }
-func (f *fakeDocker) Restart(context.Context, docker.Project, string) error               { return nil }
-func (f *fakeDocker) Stop(context.Context, docker.Project) error                          { return nil }
+func (f *fakeDocker) Restart(context.Context, docker.Project, string) error { return nil }
+func (f *fakeDocker) Stop(context.Context, docker.Project) error            { return nil }
+func (_ *fakeDocker) PruneImages(context.Context, string) error             { return nil }
+
 func (f *fakeDocker) Rollout(context.Context, docker.Project, string, string, bool) error { return nil }
 func (f *fakeDocker) Down(context.Context, string, bool) error                            { return nil }
 

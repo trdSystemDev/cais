@@ -134,6 +134,9 @@ type Docker interface {
 	// lado dos antigos e os antigos so saem com os novos healthy; com drain,
 	// os antigos ficam unhealthy (saem do Traefik) antes de parar.
 	Rollout(ctx context.Context, p docker.Project, service, image string, drain bool) error
+	// PruneImages remove as imagens sem uso do projeto (versoes que o
+	// build trocou).
+	PruneImages(ctx context.Context, project string) error
 	// Down remove o projeto pelo nome; volumes apaga tambem os dados.
 	Down(ctx context.Context, name string, volumes bool) error
 }
@@ -464,6 +467,10 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	}
 	a.Commit = commit
 	m.record(a, last)
+	// a imagem da versao anterior nao serve mais (a volta refaz o build com
+	// cache); sem isso elas se acumulam a cada deploy. Falhar aqui nao
+	// desfaz um deploy que deu certo.
+	m.Docker.PruneImages(ctx, p.Name)
 	return res, nil
 }
 
