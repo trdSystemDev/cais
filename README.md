@@ -235,7 +235,7 @@ devolvidos (a IA ve so os nomes).
 3. Apps: repositorio do GitHub com compose de producao, deploy com volta, logs, restart
 4. Bancos: database e usuario por app no Postgres/MySQL compartilhado
 5. Deploy automatico (feito: consulta ao GitHub a cada minuto, sem webhook nem porta) e homologacao com promocao
-6. Backups
+6. Backups (feito: bancos e estado do cais, criptografados com age, pro Google Drive)
 7. `install.sh` (feito: compila no clone, sem releases)
 8. MCP (feito: `cais mcp` pelo SSH, sem exclusoes nem Setup)
 
@@ -523,6 +523,53 @@ abrir porta. Um commit que falhou nao e tentado de novo; o proximo sim.
 Com producao automatica, o merge na main ja sobe a producao (sem passar pelo
 Promover); com homologacao na mesma branch, a producao automatica pularia a
 validacao.
+
+## Backups
+
+Todo dia no horario configurado (e no "Fazer backup agora"), o cais faz um
+arquivo so com:
+
+- o dump de cada database criado pelo cais (`pg_dump` / `mysqldump` rodando
+  dentro do container do banco, com os donos das tabelas);
+- o estado do cais: `/etc/cais` e `/var/lib/cais` (apps, variaveis, secrets,
+  senhas dos bancos), sem o codigo dos apps (volta no deploy) e sem os
+  proprios backups.
+
+O arquivo (`cais-<dominio>-<data>.tar.gz.age`) e criptografado com
+[age](https://age-encryption.org) pra uma chave publica e sobe pra uma pasta
+`cais-backups-<dominio>` no seu Google Drive. A chave privada aparece uma vez
+quando e gerada e **nao fica na VPS**: quem invade a VPS nao abre os backups
+que ja estao no Drive. Guarde num gerenciador de senhas; sem ela nenhum
+backup abre. Os mais velhos que a retencao (padrao 30 dias) saem do Drive; o
+mais novo fica sempre. Um database que falha no dump nao impede os outros.
+
+Configuracao (TUI: Infra -> Backups; ou o CLI):
+
+1. No [Google Cloud](https://console.cloud.google.com): crie um projeto,
+   ative a **Google Drive API**, configure a tela de consentimento e
+   **publique** (em "Teste" o login expira em 7 dias) e crie em Credenciais
+   um **ID do cliente OAuth** do tipo **TVs e dispositivos de entrada
+   limitada**. O escopo e `drive.file`: o cais so ve a pasta que ele cria.
+2. `cais backup client <client-id>` (o secret e pedido sem eco).
+3. `cais backup login`: abra google.com/device em qualquer aparelho e digite
+   o codigo (funciona pelo SSH, nada volta colado).
+4. `cais backup key`: guarde a chave privada que aparece.
+5. `cais backup schedule 03:00 -days 30` (fuso da VPS). Se a VPS estava
+   desligada na hora, o backup sai assim que o daemon subir.
+
+Restaurar:
+
+```sh
+cais backup files                                    # backups no Drive
+cais backup restore <arquivo> -key chave.txt         # lista o que tem
+cais backup restore <arquivo> -key chave.txt postgres/loja mysql/blog
+```
+
+O restore apaga o conteudo atual do database (as conexoes abertas caem),
+recria com o mesmo usuario e senha e poe o dump. A chave so passa pela
+memoria do daemon. Numa VPS nova, baixe o arquivo do Drive e extraia sem o
+daemon: `cais backup open <arquivo> -key chave.txt -to /root/restore`
+(dumps em `postgres/` e `mysql/`, estado em `state/etc` e `state/data`).
 
 ## Disco
 

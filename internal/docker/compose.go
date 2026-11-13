@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -223,4 +224,25 @@ func ExecInput(ctx context.Context, container string, input []byte, args ...stri
 		return "", fmt.Errorf("docker exec %s %s: %s", container, args[0], msg)
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+// ExecStream roda um comando num container ligando stdin e stdout direto
+// (sem passar pela memoria): dump e restore de banco. stdin pode ser nil.
+func ExecStream(ctx context.Context, container string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	flags := []string{"exec"}
+	if stdin != nil {
+		flags = append(flags, "-i")
+	}
+	cmd := exec.CommandContext(ctx, "docker", append(append(flags, container), args...)...)
+	cmd.Stdin, cmd.Stdout = stdin, stdout
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("docker exec %s %s: %w", container, args[0], lastLines(msg, 5))
+	}
+	return nil
 }

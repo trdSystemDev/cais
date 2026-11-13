@@ -316,6 +316,49 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		}
 		return ok(s.api.LinkAppBucket(s.ctx, p.App, p.Bucket))
 
+	case MethodBackupRefresh:
+		return wrap(s.api.RefreshBackup(s.ctx))
+
+	case MethodBackupClient:
+		var p backupClientParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetBackupClient(s.ctx, p.ID, p.Secret))
+
+	case MethodBackupLogin:
+		return wrap(s.api.StartDriveLogin(s.ctx))
+
+	case MethodBackupLoginStop:
+		return ok(s.api.CancelDriveLogin(s.ctx))
+
+	case MethodBackupDisconnect:
+		return ok(s.api.DisconnectDrive(s.ctx))
+
+	case MethodBackupKey:
+		key, err := s.api.NewBackupKey(s.ctx)
+		return wrap(textResult{Text: key}, err)
+
+	case MethodBackupSchedule:
+		var p backupScheduleParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetBackupSchedule(s.ctx, p.Time, p.Days))
+
+	case MethodBackupRun:
+		return wrap(s.api.RunBackup(s.ctx))
+
+	case MethodBackupFiles:
+		return wrap(s.api.BackupFiles(s.ctx))
+
+	case MethodBackupRestore:
+		var p core.RestoreRequest
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.RestoreBackup(s.ctx, p))
+
 	case MethodAppBucketUnlink:
 		var p appBucketParams
 		if err := params(m, &p); err != nil {

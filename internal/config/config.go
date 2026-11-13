@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 
@@ -37,6 +39,7 @@ type Config struct {
 	Proxy  Proxy    `yaml:"proxy" json:"proxy"`
 	Hosts  Hosts    `yaml:"hosts,omitempty" json:"hosts"`
 	GitHub GitHub   `yaml:"github,omitempty" json:"github"`
+	Backup Backup   `yaml:"backup,omitempty" json:"backup"`
 
 	// campos de versoes antigas (CI e registry saíram): aceitos na leitura
 	// pra config velha continuar valendo, e descartados ao gravar
@@ -63,6 +66,53 @@ type Hosts struct {
 // privados no deploy. A chave privada fica no secret github_app_key.
 type GitHub struct {
 	AppID int64 `yaml:"app_id,omitempty" json:"app_id,omitempty"`
+}
+
+// Backup e quando e pra quem sai o backup diario (bancos e estado do cais,
+// pro Google Drive). O login no Drive e o OAuth client ficam nos secrets.
+type Backup struct {
+	// Time e o horario diario (HH:MM, no fuso da VPS); vazio desliga o
+	// backup automatico (o "Fazer backup agora" continua valendo).
+	Time string `yaml:"time,omitempty" json:"time,omitempty"`
+	// RetentionDays apaga do Drive os backups mais velhos que isso (o mais
+	// novo fica sempre). Zero usa DefaultRetentionDays.
+	RetentionDays int `yaml:"retention_days,omitempty" json:"retention_days,omitempty"`
+	// Recipient e a chave publica age (age1...) que criptografa os
+	// backups. A privada fica fora da VPS: sem ela nenhum backup abre.
+	Recipient string `yaml:"recipient,omitempty" json:"recipient,omitempty"`
+}
+
+// DefaultRetentionDays e a retencao quando a config nao diz.
+const DefaultRetentionDays = 30
+
+// Retention e a retencao em dias.
+func (b Backup) Retention() int {
+	if b.RetentionDays > 0 {
+		return b.RetentionDays
+	}
+	return DefaultRetentionDays
+}
+
+// At devolve o horario do backup no dia de t (fuso de t); ok falso sem
+// horario.
+func (b Backup) At(t time.Time) (time.Time, bool) {
+	h, m, ok := parseHHMM(b.Time)
+	if !ok {
+		return time.Time{}, false
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), h, m, 0, 0, t.Location()), true
+}
+
+var hhmm = regexp.MustCompile(`^([01][0-9]|2[0-3]):([0-5][0-9])$`)
+
+func parseHHMM(s string) (h, m int, ok bool) {
+	g := hhmm.FindStringSubmatch(s)
+	if g == nil {
+		return 0, 0, false
+	}
+	h, _ = strconv.Atoi(g[1])
+	m, _ = strconv.Atoi(g[2])
+	return h, m, true
 }
 
 // Modos de TLS.
@@ -145,6 +195,17 @@ func (c Config) Validate() error {
 	}
 	if c.Proxy.HTTPPort == c.Proxy.HTTPSPort {
 		errs = append(errs, errors.New("proxy: http_port e https_port nao podem ser iguais"))
+	}
+	if b := c.Backup; b.Time != "" {
+		if _, _, ok := parseHHMM(b.Time); !ok {
+			errs = append(errs, fmt.Errorf("backup.time: %q invalido (use HH:MM, ex: 03:00)", b.Time))
+		}
+	}
+	if c.Backup.RetentionDays < 0 || c.Backup.RetentionDays > 3650 {
+		errs = append(errs, fmt.Errorf("backup.retention_days: %d invalido (1 a 3650)", c.Backup.RetentionDays))
+	}
+	if r := c.Backup.Recipient; r != "" && !strings.HasPrefix(r, "age1") {
+		errs = append(errs, fmt.Errorf("backup.recipient: %q nao e uma chave publica age (age1...)", r))
 	}
 	if c.GitHub.AppID < 0 {
 		errs = append(errs, fmt.Errorf("github.app_id: id invalido %d", c.GitHub.AppID))

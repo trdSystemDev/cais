@@ -51,6 +51,16 @@ const (
 	MethodDatabaseDelete   = "db.delete"         // params: appDBParams (sem app)
 	MethodAppBucketLink    = "app.bucket.link"   // params: appBucketParams
 	MethodAppBucketUnlink  = "app.bucket.unlink" // params: appBucketParams
+	MethodBackupRefresh    = "backup.refresh"
+	MethodBackupClient     = "backup.client" // params: backupClientParams
+	MethodBackupLogin      = "backup.login"
+	MethodBackupLoginStop  = "backup.login.cancel"
+	MethodBackupDisconnect = "backup.disconnect"
+	MethodBackupKey        = "backup.key"
+	MethodBackupSchedule   = "backup.schedule" // params: backupScheduleParams
+	MethodBackupRun        = "backup.run"
+	MethodBackupFiles      = "backup.files"
+	MethodBackupRestore    = "backup.restore" // params: core.RestoreRequest
 
 	// NotifyState e a notificacao enviada a cada mudanca de estado depois
 	// de um state.subscribe.
@@ -162,6 +172,16 @@ type bucketParams struct {
 type appBucketParams struct {
 	App    string `json:"app"`
 	Bucket string `json:"bucket"`
+}
+
+type backupClientParams struct {
+	ID     string `json:"id"`
+	Secret string `json:"secret"`
+}
+
+type backupScheduleParams struct {
+	Time string `json:"time"`
+	Days int    `json:"days"`
 }
 
 type textResult struct {

@@ -234,3 +234,37 @@ func mysqlSQL(name string, password []byte) string {
 		"ALTER USER '%[1]s'@'%%' IDENTIFIED BY '%[2]s';\n"+
 		"GRANT ALL PRIVILEGES ON `%[1]s`.* TO '%[1]s'@'%%';\n", name, password)
 }
+
+// DumpCommand e o comando, dentro do container do banco, que escreve no
+// stdout o dump SQL do database (com os donos: no restore o usuario do app
+// ja existe, recriado pelo cais).
+func DumpCommand(e Engine, name string) ([]string, error) {
+	if err := checkIdentifier(name); err != nil {
+		return nil, err
+	}
+	switch e.Name {
+	case Postgres:
+		return []string{"pg_dump", "-U", "postgres", "--no-password", "-d", name}, nil
+	case MySQL:
+		// --single-transaction: copia consistente sem travar as tabelas
+		// (InnoDB); routines/triggers/events entram junto
+		return []string{"sh", "-c", `MYSQL_PWD="$(cat /run/secrets/mysql_root_password)" exec mysqldump -uroot ` +
+			`--single-transaction --quick --routines --triggers --events --no-tablespaces --set-gtid-purged=OFF "$1"`, "sh", name}, nil
+	}
+	return nil, fmt.Errorf("banco %q nao suportado", e.Name)
+}
+
+// RestoreCommand e o comando, dentro do container do banco, que le um dump
+// do stdin pra dentro do database (que tem que existir, vazio).
+func RestoreCommand(e Engine, name string) ([]string, error) {
+	if err := checkIdentifier(name); err != nil {
+		return nil, err
+	}
+	switch e.Name {
+	case Postgres:
+		return []string{"psql", "-v", "ON_ERROR_STOP=1", "-q", "-U", "postgres", "-d", name}, nil
+	case MySQL:
+		return []string{"sh", "-c", `MYSQL_PWD="$(cat /run/secrets/mysql_root_password)" exec mysql -uroot "$1"`, "sh", name}, nil
+	}
+	return nil, fmt.Errorf("banco %q nao suportado", e.Name)
+}

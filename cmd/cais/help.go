@@ -142,6 +142,46 @@ pra confirmar.
 Flags:
   -yes   nao pede confirmacao`},
 	}},
+	{title: "Backup (bancos e estado do cais, criptografado, pro Google Drive):", group: "backup", cmds: []command{
+		{name: "backup status", usage: "backup status", short: "configuracao, proximo e ultimo backup"},
+		{name: "backup client", usage: "backup client <client-id>", short: "grava o OAuth client do Google", long: `
+O client e do seu projeto no Google Cloud: ative a Google Drive API, crie
+em Credenciais -> ID do cliente OAuth do tipo "TVs e dispositivos de entrada
+limitada" e publique a tela de consentimento (em "Teste" o login expira em 7
+dias). O escopo e drive.file: o cais so ve a pasta que ele mesmo cria.
+
+O secret e lido sem eco, ou do stdin (cais backup client <id> < arquivo).`},
+		{name: "backup login", usage: "backup login", short: "conecta o Drive (codigo pra google.com/device)"},
+		{name: "backup logout", usage: "backup logout", short: "desconecta o Drive (os backups ficam la)"},
+		{name: "backup key", usage: "backup key [-yes]", short: "gera a chave e mostra a privada uma vez", long: `
+A publica fica na config e criptografa os backups; a privada aparece so
+agora e nao fica na VPS: guarde num gerenciador de senhas. Sem ela nenhum
+backup abre. Trocar a chave nao reabre os backups antigos (eles continuam com
+a privada anterior).`},
+		{name: "backup schedule", usage: "backup schedule HH:MM|off [-days 30]", short: "horario diario (fuso da VPS) e retencao", long: `
+O backup roda todo dia no horario; se a VPS estava desligada na hora, roda
+assim que o daemon subir. Os backups mais velhos que -days dias saem do
+Drive (o mais novo fica sempre). "off" deixa so o backup manual.
+
+Exemplo:
+  cais backup schedule 03:00 -days 30`},
+		{name: "backup now", usage: "backup now", short: "faz um backup agora"},
+		{name: "backup files", usage: "backup files", short: "lista os backups no Drive"},
+		{name: "backup restore", usage: "backup restore <backup> -key <arquivo> [engine/database ...] [-yes]", short: "devolve databases ao estado do backup", long: `
+Sem databases, so lista o que o backup tem. Com databases, apaga o
+conteudo atual de cada um (as conexoes abertas caem), recria com o mesmo
+usuario e senha e poe o dump do backup. O database tem que existir no cais.
+A chave privada so passa pela memoria do daemon.
+
+Exemplos:
+  cais backup files
+  cais backup restore cais-vps-2026-11-13_0300.tar.gz.age -key chave.txt
+  cais backup restore cais-vps-2026-11-13_0300.tar.gz.age -key chave.txt postgres/loja`},
+		{name: "backup open", usage: "backup open <arquivo> -key <arquivo> -to <pasta>", short: "extrai um backup baixado (sem o daemon, ate numa VPS nova)", long: `
+Abre um backup baixado do Drive numa pasta: os dumps (postgres/, mysql/) e
+o estado do cais (state/etc = /etc/cais, state/data = /var/lib/cais, com os
+secrets). Serve pra olhar um dump ou montar uma VPS nova.`},
+	}},
 	{title: "Apps (repositorio no GitHub com o compose de producao pronto):", group: "app", cmds: []command{
 		{name: "apps", usage: "apps", short: "lista os apps e o estado dos containers"},
 		{name: "app create", usage: "app create <nome> <dono/repo> [-branch b] [-compose arquivo] [-promote-to app] [-auto on]", short: "cadastra o app (nao faz deploy)", long: `

@@ -52,6 +52,8 @@ func main() {
 		err = runBucket(args)
 	case "service":
 		err = runService(args)
+	case "backup":
+		err = runBackup(args)
 	case "mcp":
 		err = runMCP(args)
 	case "version":
@@ -97,6 +99,8 @@ func runDaemon(args []string) error {
 	// limpeza do disco (cache de build): uma vez por dia, a primeira logo
 	// depois de subir
 	go c.RunMaintenance(ctx, 10*time.Minute, 24*time.Hour)
+	// backup diario no horario da config (confere a cada minuto)
+	go c.RunBackups(ctx, time.Minute)
 
 	log.Printf("cais daemon %s ouvindo em %s", version, *socket)
 	err = rpc.Serve(ctx, ln, c)

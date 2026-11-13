@@ -88,7 +88,8 @@ func (m *model) onServiceDone(msg serviceDoneMsg) tea.Cmd {
 	return tea.Batch(m.stacksCmd(), m.setup.planCmd())
 }
 
-// infraOrder agrupa base e opcionais, incluindo ambos na selecao de logs.
+// infraOrder agrupa base e opcionais, incluindo ambos na selecao de logs,
+// e termina no card dos Backups.
 func infraOrder() []string {
 	var names []string
 	for _, optional := range []bool{false, true} {
@@ -98,11 +99,25 @@ func infraOrder() []string {
 			}
 		}
 	}
-	return names
+	return append(names, backupCard)
+}
+
+// backupSelected diz se o card selecionado e o dos Backups.
+func (m *model) backupSelected() bool { return infraOrder()[m.infraSel] == backupCard }
+
+// backupRefreshCmd pede ao core o estado do backup (chega pelo estado).
+func (m *model) backupRefreshCmd() tea.Cmd {
+	return func() tea.Msg {
+		m.api.RefreshBackup(context.Background())
+		return nil
+	}
 }
 
 func (m *model) selectedStack() core.StackStatus {
 	name := infraOrder()[m.infraSel]
+	if name == backupCard {
+		return core.StackStatus{Name: name}
+	}
 	for _, st := range m.state.Infra.Stacks {
 		if st.Name == name {
 			return st
@@ -127,6 +142,21 @@ func (m *model) viewInfra(h int) string {
 	start = min(start, max(0, len(order)-count))
 	for i := start; i < min(len(order), start+count); i++ {
 		name := order[i]
+		if name == backupCard {
+			label, ok := lastBackupLabel(m.state.Backup, time.Now())
+			color, mark := t.ok, "✓"
+			if !ok {
+				color, mark = t.danger, "✗"
+			}
+			if m.state.Backup.Running {
+				color, mark = t.warn, "◌"
+			}
+			title := t.bold().Render(mark+" Backups") + "  " + t.fg(color).Render(label)
+			line := t.fg(t.muted).Render("Bancos e estado · Google Drive")
+			card := t.panel(i == m.infraSel, leftW-4, 2).Render(ansi.Truncate(title, leftW-6, "…") + "\n" + ansi.Truncate(line, leftW-6, "…"))
+			cards = append(cards, m.zones.Mark("stack:"+name, card))
+			continue
+		}
 		st := core.StackStatus{Name: name}
 		for _, item := range m.state.Infra.Stacks {
 			if item.Name == name {
@@ -197,9 +227,12 @@ func (m *model) viewInfra(h int) string {
 	left := lipgloss.NewStyle().Width(leftW).Height(h).Render(header + "\n" + strings.Join(cards, "\n") + "\n" + footer)
 	rightW := m.w - leftW - 1
 	var right string
-	if m.db.open() {
+	switch {
+	case m.db.open():
 		right = m.db.view(rightW, innerH)
-	} else {
+	case m.backupSelected():
+		right = m.bk.view(m.state.Backup, rightW, innerH)
+	default:
 		right = m.zones.Mark("infra-logs", m.viewInfraLogs(rightW, innerH))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
@@ -386,6 +419,11 @@ func (m *model) infraClick(msg tea.MouseMsg) tea.Cmd {
 			return cmd
 		}
 	}
+	if m.backupSelected() {
+		if cmd, ok := m.bk.click(m.state.Backup, msg); ok {
+			return cmd
+		}
+	}
 	for i, name := range infraOrder() {
 		if m.zones.Get("newdb:" + name).InBounds(msg) {
 			m.infraSel = i
@@ -449,6 +487,9 @@ func (m *model) infraKey(k string) tea.Cmd {
 		return nil
 	case "enter", "space":
 		name := infraOrder()[m.infraSel]
+		if name == backupCard {
+			return tea.Batch(m.bk.activate(m.state.Backup), m.backupRefreshCmd())
+		}
 		st, _ := stacks.Get(name)
 		if st.Optional {
 			return m.toggle(name)

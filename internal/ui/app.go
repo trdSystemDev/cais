@@ -70,6 +70,7 @@ type model struct {
 	setup        *setupPage
 	apps         *appsPage
 	db           *dbPanel // Novo banco, na aba Infra
+	bk           *bkPanel // Backups, na aba Infra
 
 	selectionGeneration uint64
 	logSelection        logSelection
@@ -101,6 +102,7 @@ func newModel(api core.API, states <-chan core.State) *model {
 	m.setup = newSetupPage(api, m.zones, m.th)
 	m.apps = newAppsPage(api, m.zones, m.th)
 	m.db = newDBPanel(api, m.zones, m.th)
+	m.bk = newBkPanel(api, m.zones, m.th)
 	return m
 }
 
@@ -145,6 +147,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setup.setTheme(m.th)
 		m.apps.setTheme(m.th)
 		m.db.setTheme(m.th)
+		m.bk.setTheme(m.th)
 		return m, nil
 	case stateMsg:
 		return m, tea.Batch(m.waitState(), m.onState(core.State(msg)))
@@ -213,6 +216,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tabApps:
 			return m, m.apps.paste(msg)
 		case tabInfra:
+			if m.bk.active {
+				return m, m.bk.paste(m.state.Backup, msg)
+			}
 			return m, m.db.paste(msg)
 		}
 		return m, nil
@@ -249,6 +255,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := m.db.update(msg); ok {
 		return m, cmd
 	}
+	if cmd, ok := m.bk.update(m.state.Backup, msg); ok {
+		return m, cmd
+	}
 	if cmd, ok := m.apps.update(msg); ok {
 		return m, tea.Batch(cmd, m.syncAppLogs(false))
 	}
@@ -279,7 +288,7 @@ func (m *model) setTab(i int) tea.Cmd {
 	m.logSelection = logSelection{}
 	m.tab = i
 	if i == tabInfra && !m.state.Infra.Checking {
-		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
+		return tea.Batch(m.stacksCmd(), m.backupRefreshCmd(), m.syncInfraLogs(true))
 	}
 	if i == tabApps {
 		// bancos e buckets criados na Infra (ou pelo CLI) ja aparecem pra ligar
@@ -328,7 +337,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	// numeros trocam de aba, menos quando o foco esta num campo de texto
 	typing := (m.tab == tabSetup && m.setup.typing()) || (m.tab == tabApps && m.apps.typing()) ||
-		(m.tab == tabInfra && m.db.typing())
+		(m.tab == tabInfra && (m.db.typing() || m.bk.typing(m.state.Backup)))
 	if !typing && len(k) == 1 && k[0] >= '1' && int(k[0]-'1') < len(tabs) {
 		return m.setTab(int(k[0] - '1'))
 	}
@@ -342,6 +351,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case tabInfra:
 		if m.db.open() {
 			return m.db.key(msg)
+		}
+		if m.bk.active && m.backupSelected() {
+			return m.bk.key(m.state.Backup, msg)
 		}
 		return m.infraKey(k)
 	case tabSetup:

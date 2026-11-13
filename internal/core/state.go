@@ -16,11 +16,12 @@ import (
 type State struct {
 	// Version aumenta a cada mudanca; interfaces podem usar pra ignorar
 	// fotos repetidas.
-	Version     uint64      `json:"version"`
-	Environment Environment `json:"environment"`
-	Setup       Setup       `json:"setup"`
-	Infra       Infra       `json:"infra"`
-	Apps        Apps        `json:"apps"`
+	Version     uint64       `json:"version"`
+	Environment Environment  `json:"environment"`
+	Setup       Setup        `json:"setup"`
+	Infra       Infra        `json:"infra"`
+	Apps        Apps         `json:"apps"`
+	Backup      BackupStatus `json:"backup"`
 }
 
 // Infra e o estado das stacks base, como o docker ve.

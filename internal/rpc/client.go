@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/trdSystemDev/cais/internal/apps"
+	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
@@ -385,4 +386,51 @@ func (c *Client) LinkAppBucket(ctx context.Context, app, bucket string) error {
 
 func (c *Client) UnlinkAppBucket(ctx context.Context, app, bucket string) error {
 	return c.call(ctx, MethodAppBucketUnlink, appBucketParams{App: app, Bucket: bucket}, nil)
+}
+
+func (c *Client) RefreshBackup(ctx context.Context) (st core.BackupStatus, err error) {
+	err = c.call(ctx, MethodBackupRefresh, nil, &st)
+	return
+}
+
+func (c *Client) SetBackupClient(ctx context.Context, id, secret string) error {
+	return c.call(ctx, MethodBackupClient, backupClientParams{ID: id, Secret: secret}, nil)
+}
+
+func (c *Client) StartDriveLogin(ctx context.Context) (login core.DriveLogin, err error) {
+	err = c.call(ctx, MethodBackupLogin, nil, &login)
+	return
+}
+
+func (c *Client) CancelDriveLogin(ctx context.Context) error {
+	return c.call(ctx, MethodBackupLoginStop, nil, nil)
+}
+
+func (c *Client) DisconnectDrive(ctx context.Context) error {
+	return c.call(ctx, MethodBackupDisconnect, nil, nil)
+}
+
+func (c *Client) NewBackupKey(ctx context.Context) (string, error) {
+	var r textResult
+	err := c.call(ctx, MethodBackupKey, nil, &r)
+	return r.Text, err
+}
+
+func (c *Client) SetBackupSchedule(ctx context.Context, at string, days int) error {
+	return c.call(ctx, MethodBackupSchedule, backupScheduleParams{Time: at, Days: days}, nil)
+}
+
+func (c *Client) RunBackup(ctx context.Context) (run core.BackupRun, err error) {
+	err = c.call(ctx, MethodBackupRun, nil, &run)
+	return
+}
+
+func (c *Client) BackupFiles(ctx context.Context) (files []backup.File, err error) {
+	err = c.call(ctx, MethodBackupFiles, nil, &files)
+	return
+}
+
+func (c *Client) RestoreBackup(ctx context.Context, req core.RestoreRequest) (res core.RestoreResult, err error) {
+	err = c.call(ctx, MethodBackupRestore, req, &res)
+	return
 }

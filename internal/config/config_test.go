@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validConfig() Config {
@@ -149,5 +150,30 @@ func TestSaveRecusaConfigInvalida(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("arquivo criado mesmo com config invalida")
+	}
+}
+
+func TestBackupHorarioERetencao(t *testing.T) {
+	c := Default()
+	c.Domain, c.Email = "exemplo.com.br", "a@exemplo.com.br"
+	for _, bad := range []Backup{{Time: "3:00"}, {Time: "24:00"}, {Time: "03:60"}, {RetentionDays: -1}, {Recipient: "ssh-ed25519 AAAA"}} {
+		c.Backup = bad
+		if c.Validate() == nil {
+			t.Errorf("aceitou %+v", bad)
+		}
+	}
+	c.Backup = Backup{Time: "03:30", RetentionDays: 7, Recipient: "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	day := time.Date(2026, 11, 13, 15, 0, 0, 0, time.UTC)
+	if at, ok := c.Backup.At(day); !ok || !at.Equal(time.Date(2026, 11, 13, 3, 30, 0, 0, time.UTC)) {
+		t.Errorf("horario %v %v", at, ok)
+	}
+	if (Backup{}).Retention() != 30 || c.Backup.Retention() != 7 {
+		t.Error("retencao")
+	}
+	if _, ok := (Backup{}).At(day); ok {
+		t.Error("sem horario devolveu horario")
 	}
 }
