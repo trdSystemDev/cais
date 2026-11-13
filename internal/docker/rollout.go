@@ -126,8 +126,14 @@ func rollout(ctx context.Context, run runner, p Project, service, image string, 
 }
 
 // drainOld cria o DrainFile nos antigos e espera todos ficarem unhealthy.
-// Devolve se conseguiu.
+// Devolve se conseguiu. So drena se o healthcheck dos proprios antigos usa
+// o DrainFile: no primeiro deploy depois de por a drenagem no compose, o
+// antigo ainda roda o healthcheck de antes e nunca ficaria unhealthy.
 func drainOld(ctx context.Context, run runner, ids []string) bool {
+	out, err := run(ctx, "docker", append([]string{"inspect", "-f", "{{json .Config.Healthcheck}}"}, ids...)...)
+	if err != nil || strings.Count(out, DrainFile) < len(ids) {
+		return false
+	}
 	for _, id := range ids {
 		if _, err := run(ctx, "docker", "exec", id, "touch", DrainFile); err != nil {
 			return false

@@ -22,6 +22,8 @@ type rolloutRunner struct {
 	// health devolvido a cada inspect de health (o ultimo se repete)
 	health  []string
 	noTouch bool // imagem sem touch
+	// healthcheck dos antigos sem a drenagem (compose de antes dela)
+	oldHC bool
 	// respostas da API do Traefik, em ordem (a ultima se repete); vazio:
 	// API fora do ar
 	traefik []string
@@ -61,6 +63,16 @@ func (r *rolloutRunner) run(_ context.Context, name string, args ...string) (str
 		if r.noTouch {
 			return "", errors.New("touch: executable file not found")
 		}
+	case strings.HasPrefix(cmd, "inspect -f {{json .Config.Healthcheck}}"):
+		hc := `{"Test":["CMD-SHELL","test ! -f /tmp/drain \u0026\u0026 wget -qO- http://127.0.0.1:3000/"]}`
+		if r.oldHC {
+			hc = `{"Test":["CMD","wget","-qO-","http://127.0.0.1:3000/"]}`
+		}
+		var lines []string
+		for range r.old {
+			lines = append(lines, hc)
+		}
+		return strings.Join(lines, "\n"), nil
 	case strings.HasPrefix(cmd, "inspect -f {{.State.Health.Status}}"):
 		h := r.health[0]
 		if len(r.health) > 1 {
@@ -270,5 +282,16 @@ func TestRolloutCanceladoNaoParaOAntigo(t *testing.T) {
 		if strings.HasPrefix(c, "stop") {
 			t.Errorf("parou o antigo depois de cancelado: %v", r.calls)
 		}
+	}
+}
+
+func TestRolloutNaoDrenaAntigoComHealthcheckDeAntes(t *testing.T) {
+	// o compose novo tem a drenagem, o container no ar ainda nao
+	r := &rolloutRunner{old: []string{"a1"}, hash: "h2", image: "i2", running: "h1 i1", oldHC: true, health: []string{"healthy"}}
+	if err := rollout(context.Background(), r.run, proj, "web", "app-web", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := steps(r.calls); !slices.Equal(got, []string{"up", "stop a1", "rm a1"}) {
+		t.Errorf("passos %v", got)
 	}
 }

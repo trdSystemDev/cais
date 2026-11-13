@@ -417,10 +417,12 @@ func (f *fakeAppDocker) Up(context.Context, docker.Project) error    { f.ups.Add
 func (f *fakeAppDocker) PS(_ context.Context, p docker.Project) ([]docker.Container, error) {
 	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running"}}, nil
 }
-func (f *fakeAppDocker) Restart(context.Context, docker.Project, string) error         { return nil }
-func (f *fakeAppDocker) Stop(context.Context, docker.Project) error                    { return nil }
-func (f *fakeAppDocker) Rollout(context.Context, docker.Project, string, string, bool) error { return nil }
-func (f *fakeAppDocker) Down(context.Context, string, bool) error                      { return nil }
+func (f *fakeAppDocker) Restart(context.Context, docker.Project, string) error { return nil }
+func (f *fakeAppDocker) Stop(context.Context, docker.Project) error            { return nil }
+func (f *fakeAppDocker) Rollout(context.Context, docker.Project, string, string, bool) error {
+	return nil
+}
+func (f *fakeAppDocker) Down(context.Context, string, bool) error { return nil }
 
 // fakeSource e um repositorio com um commit so
 type fakeSource struct{}

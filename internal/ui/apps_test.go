@@ -61,8 +61,8 @@ func (f *fakeApps) PS(_ context.Context, p docker.Project) ([]docker.Container, 
 	}
 	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running", Health: "healthy"}}, nil
 }
-func (f *fakeApps) Restart(context.Context, docker.Project, string) error         { return nil }
-func (f *fakeApps) Stop(context.Context, docker.Project) error                    { return nil }
+func (f *fakeApps) Restart(context.Context, docker.Project, string) error               { return nil }
+func (f *fakeApps) Stop(context.Context, docker.Project) error                          { return nil }
 func (f *fakeApps) Rollout(context.Context, docker.Project, string, string, bool) error { return nil }
 func (f *fakeApps) Down(_ context.Context, name string, _ bool) error {
 	f.mu.Lock()
