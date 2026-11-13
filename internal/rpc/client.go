@@ -287,6 +287,17 @@ func (c *Client) DeployApp(ctx context.Context, name, ref string) (r apps.Deploy
 	return
 }
 
+func (c *Client) CheckPromotion(ctx context.Context, from string) (p apps.Promotion, err error) {
+	err = c.call(ctx, MethodAppPromoteCheck, appParams{Name: from}, &p)
+	return
+}
+
+// PromoteApp bloqueia ate o deploy da producao terminar.
+func (c *Client) PromoteApp(ctx context.Context, from string, confirm bool) (r apps.DeployResult, err error) {
+	err = c.call(ctx, MethodAppPromote, promoteParams{Name: from, Confirm: confirm}, &r)
+	return
+}
+
 func (c *Client) RestartApp(ctx context.Context, name, service string) error {
 	return c.call(ctx, MethodAppRestart, appParams{Name: name, Service: service}, nil)
 }

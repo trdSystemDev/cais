@@ -29,13 +29,17 @@ const socketNote = "O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SO
 var sections = []section{
 	{title: "Uso:", cmds: []command{
 		{name: "tui", usage: "[--socket caminho]", short: "abre a interface (TUI)"},
-		{name: "daemon", usage: "daemon [--socket] [--group]", short: "roda o daemon (dono do estado e das acoes)", long: `
+		{name: "daemon", usage: "daemon [--socket] [--group] [--auto-every 1m]", short: "roda o daemon (dono do estado e das acoes)", long: `
 Normalmente roda pelo systemd (assets/systemd/cais.service). A TUI e o CLI
 sao clientes dele pelo socket, que nasce com permissao 0660: so o root, ou o
 grupo de --group, usa o cais. Quem acessa o socket controla a VPS.
 
+O daemon tambem faz o deploy automatico dos apps marcados: consulta o
+GitHub a cada --auto-every e sobe o commit novo da branch.
+
 Flags:
-  --group grupo   grupo que tambem pode usar o cais, alem do root`},
+  --group grupo        grupo que tambem pode usar o cais, alem do root
+  --auto-every tempo   intervalo da consulta do deploy automatico (padrao 1m)`},
 		{name: "state", usage: "state [--socket]", short: "imprime o estado atual em JSON"},
 		{name: "check", usage: "check [--socket]", short: "checa o ambiente e imprime o resultado em JSON", long: `
 Confere Docker e Docker Compose (instalados, versao, daemon no ar).`},
@@ -140,17 +144,55 @@ Flags:
 	}},
 	{title: "Apps (repositorio no GitHub com o compose de producao pronto):", group: "app", cmds: []command{
 		{name: "apps", usage: "apps", short: "lista os apps e o estado dos containers"},
-		{name: "app create", usage: "app create <nome> <dono/repo> [-branch main] [-compose docker-compose.prod.yml]", short: "cadastra o app (nao faz deploy)", long: `
+		{name: "app create", usage: "app create <nome> <dono/repo> [-branch b] [-compose arquivo] [-promote-to app] [-auto on]", short: "cadastra o app (nao faz deploy)", long: `
 O repositorio pode vir como dono/repo ou link do GitHub. O codigo e baixado
 pelo GitHub App do cais. Nome do app: minusculas, numeros e -.
 
 Flags:
   -branch branch     branch do deploy (padrao: a principal do repositorio)
   -compose arquivo   compose de producao, a partir da raiz (padrao docker-compose.yml)
+  -promote-to app    o app novo e a homologacao deste (mesmo repositorio): o
+                     commit validado nele vai pra producao com cais app promote
+  -auto on           deploy automatico a cada commit novo na branch
 
 Exemplos:
   cais app create portal trdSystemDev/portal-web -branch main -compose docker-compose.cais.yml
+  cais app create portal-homolog trdSystemDev/portal-web -branch homolog \
+      -compose docker-compose.homolog.yaml -promote-to portal -auto on
   cais app guide portal                 # como escrever o compose`},
+		{name: "app set", usage: "app set <nome> [-branch b] [-compose arquivo] [-promote-to <app>|off] [-auto on|off]", short: "troca branch, compose, producao (homolog)\ne deploy automatico", long: `
+So muda o que vier nas flags; vale no proximo deploy.
+
+Deploy automatico: o daemon consulta o GitHub a cada minuto (nenhuma porta
+abre) e faz o deploy quando a branch ganha um commit novo. Um commit que
+falhou nao e tentado de novo; o proximo commit sim.
+
+Combinacoes comuns:
+  so producao, manual             (padrao)
+  so producao, automatica         cais app set portal -auto on
+  homolog automatica, promocao manual
+                                  cais app set portal-homolog -auto on
+  homolog automatica e producao automatica no merge na main
+                                  cais app set portal-homolog -auto on
+                                  cais app set portal -auto on   (branch main)
+
+Exemplos:
+  cais app set portal-homolog -promote-to portal
+  cais app set portal -auto off`},
+		{name: "app promote", usage: "app promote <homologacao> [-yes]", short: "sobe na producao o commit validado na homologacao", long: `
+Sobe na producao o commit que esta no ar (e de pe) na homologacao, pelo
+deploy normal: build com a versao atual no ar e, se falhar, a anterior volta.
+
+Vale pra homologacao na mesma branch da producao (um commit a frente) ou numa
+branch propria: o commit validado tem que estar na branch da producao (faca o
+merge antes; squash merge tambem vale, pelo conteudo). Assim um deploy futuro
+da branch nao desfaz a promocao.
+
+Flags:
+  -yes   aceita voltar a producao pra um commit mais velho
+
+Exemplos:
+  cais app promote portal-homolog`},
 		{name: "app deploy", usage: "app deploy <nome> [-ref <branch ou commit>]", short: "baixa o commit, build com a versao no ar, sobe;\nse o up falhar, a versao anterior volta", long: `
 Recusa compose fora do formato do cais antes do build, dizendo o motivo.
 

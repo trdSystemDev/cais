@@ -40,6 +40,8 @@ type field struct {
 	input    *textinput.Model
 	press    func() tea.Cmd
 	disabled func() bool
+	kind     btnKind // cor do botao (verde, vermelho...)
+	chip     bool    // botao dentro de uma linha de tabela: [texto], sem fundo
 }
 
 func (f *field) off() bool { return f.disabled != nil && f.disabled() }
@@ -89,16 +91,25 @@ type appsPage struct {
 
 	// app novo
 	newName, newRepo, newBranch, newCompose *textinput.Model
+	newPromoteTo                            string // o app novo e homologacao deste
+	newAuto                                 bool   // deploy automatico no app novo
+
+	// promocao: o que cada homologacao ligada ao app selecionado faria
+	// agora (consulta o GitHub; refeita quando os commits no ar mudam)
+	promos   map[string]promoResult // homologacao -> resultado
+	promoSig map[string]string      // homologacao -> commits no ar quando consultou
 
 	container  int    // logs: container do app selecionado
 	pendingSel string // app recem-criado: seleciona quando chegar no estado
 	scroll     int
 	focusLine  int
+	focusH     int // altura do campo com foco (linhas)
 	follow     bool
 	busy       string
 	status     string
 	statusC    string
 	detailErr  string
+	info       *infoBox // ajuda aberta pelo [i] (modal)
 }
 
 // respostas das chamadas ao core
@@ -128,6 +139,12 @@ type (
 		text string
 		err  error
 	}
+	appPromoMsg struct {
+		from string
+		sig  string
+		p    apps.Promotion
+		err  error
+	}
 	appLogsMsg struct {
 		generation uint64
 		text       string
@@ -135,15 +152,21 @@ type (
 	}
 )
 
+// promoResult e a resposta do CheckPromotion de uma homologacao.
+type promoResult struct {
+	p   apps.Promotion
+	err string
+}
+
 func newAppsPage(api core.API, zones *zone.Manager, th theme) *appsPage {
-	p := &appsPage{api: api, zones: zones, th: th}
+	p := &appsPage{api: api, zones: zones, th: th, promos: map[string]promoResult{}, promoSig: map[string]string{}}
 	p.repo = p.input("dono/repositorio", 36)
 	p.branch = p.input("a principal do repositorio", 28)
 	p.compose = p.input(apps.DefaultCompose, 30)
 	p.ref = p.input("vazio = mais novo da branch", 30)
 	p.secretName = p.input("nome (ex: jwt_secret)", 26)
 	p.secretValue = p.input("valor", 30)
-	p.delConfirm = p.input("digite o nome do app", 24)
+	p.delConfirm = p.input("digite o nome do app", 34)
 	p.newName = p.input("nome do app (minusculas)", 30)
 	p.newRepo = p.input("https://github.com/dono/repo", 40)
 	p.newBranch = p.input("a principal do repositorio", 28)
@@ -161,15 +184,7 @@ func (p *appsPage) input(placeholder string, width int) *textinput.Model {
 	return &ti
 }
 
-func (p *appsPage) style(ti *textinput.Model) {
-	s := textinput.DefaultStyles(true)
-	for _, st := range []*textinput.StyleState{&s.Focused, &s.Blurred} {
-		st.Text = lipgloss.NewStyle().Foreground(p.th.fieldFg).Background(p.th.fieldBg)
-		st.Placeholder = lipgloss.NewStyle().Foreground(p.th.muted).Background(p.th.fieldBg).Italic(true)
-	}
-	s.Cursor.Color = p.th.accent
-	ti.SetStyles(s)
-}
+func (p *appsPage) style(ti *textinput.Model) { p.th.styleInput(ti) }
 
 func (p *appsPage) setTheme(th theme) {
 	p.th = th
@@ -202,7 +217,7 @@ func (p *appsPage) onState(s core.State) tea.Cmd {
 	if a := p.selected(); a != nil {
 		name = a.Name
 	}
-	p.list = s.Apps.List
+	p.list = nestHomologs(s.Apps.List)
 	if p.pendingSel != "" {
 		name = p.pendingSel
 	}
@@ -220,7 +235,78 @@ func (p *appsPage) onState(s core.State) tea.Cmd {
 	if !p.creating {
 		p.rebuild() // os secrets (botoes de apagar) vem do estado
 	}
-	return p.loadSelected(false)
+	return tea.Batch(p.loadSelected(false), p.promoRefresh(false))
+}
+
+// nestHomologs poe cada homologacao logo depois da producao dela.
+func nestHomologs(list []core.AppStatus) []core.AppStatus {
+	has := map[string]bool{}
+	for _, a := range list {
+		has[a.Name] = true
+	}
+	out := make([]core.AppStatus, 0, len(list))
+	for _, a := range list {
+		if a.PromoteTo != "" && has[a.PromoteTo] {
+			continue
+		}
+		out = append(out, a)
+		for _, h := range list {
+			if h.PromoteTo == a.Name {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
+}
+
+// homologs sao as homologacoes ligadas ao app: ele mesmo, se for uma, ou
+// as que promovem pra ele.
+func (p *appsPage) homologs(a core.AppStatus) []core.AppStatus {
+	var out []core.AppStatus
+	for _, h := range p.list {
+		if (a.PromoteTo != "" && h.Name == a.Name) || h.PromoteTo == a.Name {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+func (p *appsPage) app(name string) *core.AppStatus {
+	for i := range p.list {
+		if p.list[i].Name == name {
+			return &p.list[i]
+		}
+	}
+	return nil
+}
+
+// promoRefresh consulta de novo a promocao das homologacoes ligadas ao app
+// selecionado quando os commits no ar mudaram (ou sempre, com force).
+func (p *appsPage) promoRefresh(force bool) tea.Cmd {
+	a := p.selected()
+	if a == nil || p.section != secGeneral {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, h := range p.homologs(*a) {
+		sig := h.Commit
+		if h.Last != nil {
+			sig += "|" + h.Last.Commit + h.Last.At.String()
+		}
+		if prod := p.app(h.PromoteTo); prod != nil {
+			sig += "|" + prod.Commit
+		}
+		if !force && p.promoSig[h.Name] == sig {
+			continue
+		}
+		p.promoSig[h.Name] = sig
+		from := h.Name
+		cmds = append(cmds, func() tea.Msg {
+			pr, err := p.api.CheckPromotion(context.Background(), from)
+			return appPromoMsg{from: from, sig: sig, p: pr, err: err}
+		})
+	}
+	return tea.Batch(cmds...)
 }
 
 // loadSelected preenche os editores com o app selecionado e busca as
@@ -342,8 +428,11 @@ func (p *appsPage) rebuild() {
 		add(&field{id: "new-repo", label: "Repositorio", input: p.newRepo})
 		add(&field{id: "new-branch", label: "Branch", input: p.newBranch})
 		add(&field{id: "new-compose", label: "Compose", input: p.newCompose})
+		add(&field{id: "new-auto", label: "Deploy", press: func() tea.Cmd { p.newAuto = !p.newAuto; return nil }})
 		add(btn("new-create", "Criar", p.create))
-		add(btn("new-cancel", "Cancelar", p.cancelCreate))
+		cancel := btn("new-cancel", "Cancelar", p.cancelCreate)
+		cancel.kind = btnNeutral
+		add(cancel)
 		p.setFocus(p.focus)
 		return
 	}
@@ -353,27 +442,69 @@ func (p *appsPage) rebuild() {
 		p.setFocus(0)
 		return
 	}
+	// info e o [i] ao lado do titulo de uma parte: abre a ajuda dela
+	info := func(id string, box infoBox) {
+		add(&field{id: id, label: "i", chip: true, press: func() tea.Cmd { p.info = &box; return nil }})
+	}
 	switch p.section {
 	case secGeneral:
+		info("info-deploy", infoDeploy)
 		add(&field{id: "ref", label: "Commit ou branch", input: p.ref})
+		add(&field{id: "auto", label: "Deploy", press: p.toggleAuto, disabled: func() bool { return p.busy != "" }})
 		add(btn("deploy", "Deploy", p.deploy))
-		add(btn("restart", "Reiniciar", p.restart))
-		add(btn("stop", "Parar", p.stop))
+		restart, stop := btn("restart", "Reiniciar", p.restart), btn("stop", "Parar", p.stop)
+		restart.kind, stop.kind = btnInfo, btnWarn
+		add(restart)
+		add(stop)
+
+		// promocao: na homologacao e na producao que tem homologacao
+		hs := p.homologs(*a)
+		if len(hs) > 0 {
+			info("info-promote", infoPromote)
+			add(btn("promo-refresh", "atualizar", func() tea.Cmd { return p.promoRefresh(true) }))
+			p.fields[len(p.fields)-1].chip = true
+		}
+		for _, h := range hs {
+			from := h.Name
+			r, ok := p.promos[from]
+			f := btn("promote:"+from, "Promover", func() tea.Cmd { return p.promote(from, r.p.State == apps.PromoteOlder) })
+			if ok && r.p.Deploy != "" {
+				f.label = "Promover " + shortCommit(r.p.Deploy)
+			}
+			if ok && r.p.State == apps.PromoteOlder {
+				f.label, f.kind = "Promover "+shortCommit(r.p.Deploy)+" mesmo assim", btnDanger
+			}
+			f.disabled = func() bool {
+				r, ok := p.promos[from]
+				return p.busy != "" || !ok || r.err != "" || (r.p.State != apps.PromoteReady && r.p.State != apps.PromoteOlder)
+			}
+			add(f)
+		}
+		if len(hs) == 0 && a.PromoteTo == "" {
+			add(btn("homolog-new", "Criar homologacao", p.startHomolog))
+		}
+		info("info-repo", infoRepo)
 		add(&field{id: "repo", label: "Repositorio", input: p.repo})
 		add(&field{id: "branch", label: "Branch", input: p.branch})
 		add(&field{id: "compose", label: "Compose", input: p.compose})
 		add(btn("app-save", "Salvar", p.saveApp))
+		info("info-delete", infoBox{"Excluir app", "Apaga containers, imagens, codigo, variaveis e secrets do app. " +
+			"O database e os buckets da infra ficam (aba Infra).\n\n" +
+			"Digite " + a.Name + " no Confirmar pra liberar o botao. Os volumes (dados) so sao apagados se voce trocar " +
+			"Volumes pra APAGAR; nao tem volta."})
 		add(&field{id: "delete-confirm", label: "Confirmar", input: p.delConfirm})
 		add(btn("delete-volumes", "", func() tea.Cmd { p.delVolumes = !p.delVolumes; return nil }))
 		name := a.Name
-		add(&field{id: "delete", label: "Excluir app", press: p.deleteApp, disabled: func() bool {
+		add(&field{id: "delete", label: "Excluir app", kind: btnDanger, press: p.deleteApp, disabled: func() bool {
 			return p.busy != "" || strings.TrimSpace(p.delConfirm.Value()) != name
 		}})
 	case secEnv:
 		for i, r := range p.envRows {
 			add(&field{id: fmt.Sprintf("env-name:%d", i), input: r.name})
 			add(&field{id: fmt.Sprintf("env-value:%d", i), input: r.value})
-			add(btn(fmt.Sprintf("env-del:%d", i), "remover", func() tea.Cmd { p.envRows = del(p.envRows, i); p.rebuild(); return nil }))
+			rm := btn(fmt.Sprintf("env-del:%d", i), "✕ remover", func() tea.Cmd { p.envRows = del(p.envRows, i); p.rebuild(); return nil })
+			rm.kind, rm.chip = btnDanger, true
+			add(rm)
 		}
 		add(btn("env-add", "+ Nova variavel", func() tea.Cmd {
 			p.envRows = append(p.envRows, p.newEnvRow("", ""))
@@ -384,19 +515,31 @@ func (p *appsPage) rebuild() {
 		add(btn("env-save", "Salvar", p.saveEnv))
 		if p.importing {
 			add(&field{id: "env-import-apply", label: "Aplicar", press: p.applyImport, disabled: func() bool { return p.importText == "" }})
-			add(btn("env-import-cancel", "Cancelar", func() tea.Cmd { p.closeImport(); p.rebuild(); return nil }))
+			cancel := btn("env-import-cancel", "Cancelar", func() tea.Cmd { p.closeImport(); p.rebuild(); return nil })
+			cancel.kind = btnNeutral
+			add(cancel)
 		}
 	case secSecrets:
+		info("info-secrets", infoSecrets)
 		for _, s := range a.Secrets {
 			if s.Infra != "" {
 				continue // credencial de banco ou bucket: desliga por ele
 			}
 			name := s.Name
-			add(btn("secret-del:"+name, "apagar", func() tea.Cmd { return p.deleteSecret(name) }))
+			f := btn("secret-del:"+name, "✕ apagar", func() tea.Cmd { return p.deleteSecret(name) })
+			f.kind, f.chip = btnDanger, true
+			add(f)
 		}
+		add(&field{id: "secret-name", label: "Secret", input: p.secretName})
+		add(&field{id: "secret-value", label: "Valor", input: p.secretValue})
+		add(btn("secret-save", "Gravar", p.saveSecret))
+
+		info("info-dbs", infoDatabases)
 		for _, l := range a.Databases {
 			l := l
-			add(btn("db-unlink:"+l.ID(), "desligar", func() tea.Cmd { return p.unlinkDB(l) }))
+			f := btn("db-unlink:"+l.ID(), "desligar", func() tea.Cmd { return p.unlinkDB(l) })
+			f.kind, f.chip = btnDanger, true
+			add(f)
 		}
 		add(&field{id: "db-pick", label: "Banco", press: func() tea.Cmd {
 			if n := len(p.linkable()); n > 0 {
@@ -405,9 +548,13 @@ func (p *appsPage) rebuild() {
 			return nil
 		}})
 		add(btn("db-link", "Ligar banco", p.linkDB))
+
+		info("info-buckets", infoBuckets)
 		for _, l := range a.Buckets {
 			l := l
-			add(btn("bucket-unlink:"+l.Name, "desligar", func() tea.Cmd { return p.unlinkBucket(l) }))
+			f := btn("bucket-unlink:"+l.Name, "desligar", func() tea.Cmd { return p.unlinkBucket(l) })
+			f.kind, f.chip = btnDanger, true
+			add(f)
 		}
 		add(&field{id: "bucket-pick", label: "Bucket", press: func() tea.Cmd {
 			if n := len(p.linkableBuckets()); n > 0 {
@@ -416,9 +563,6 @@ func (p *appsPage) rebuild() {
 			return nil
 		}})
 		add(btn("bucket-link", "Ligar bucket", p.linkBucket))
-		add(&field{id: "secret-name", label: "Secret", input: p.secretName})
-		add(&field{id: "secret-value", label: "Valor", input: p.secretValue})
-		add(btn("secret-save", "Gravar", p.saveSecret))
 	case secLogs:
 		add(&field{id: "log-container", label: "Container", press: func() tea.Cmd {
 			if n := len(a.Containers); n > 0 {
@@ -538,10 +682,65 @@ func (p *appsPage) saveApp() tea.Cmd {
 		p.setStatus("danger", err.Error())
 		return nil
 	}
-	upd := apps.App{Name: a.Name, Repo: repo.String(), Branch: strings.TrimSpace(p.branch.Value()), Compose: strings.TrimSpace(p.compose.Value())}
+	upd := a.App // mantem a producao (homologacao) e o deploy automatico
+	upd.Repo, upd.Branch, upd.Compose = repo.String(), strings.TrimSpace(p.branch.Value()), strings.TrimSpace(p.compose.Value())
 	return p.do(a.Name, "Salvando", a.Name+" salvo; vale no proximo deploy.", func(ctx context.Context) error {
 		return p.api.UpdateApp(ctx, upd)
 	})
+}
+
+// toggleAuto liga ou desliga o deploy automatico do app (grava na hora).
+func (p *appsPage) toggleAuto() tea.Cmd {
+	a := p.selected()
+	if a == nil {
+		return nil
+	}
+	upd := a.App
+	upd.AutoDeploy = !upd.AutoDeploy
+	ok := "Deploy de " + a.Name + " manual: so pelo botao (ou CLI/MCP)."
+	if upd.AutoDeploy {
+		ok = "Deploy automatico em " + a.Name + ": cada commit novo na " + branchName(a.Branch) + " sobe sozinho (consulta a cada minuto)."
+	}
+	return p.do(a.Name, "Salvando", ok, func(ctx context.Context) error { return p.api.UpdateApp(ctx, upd) })
+}
+
+func branchName(b string) string {
+	if b == "" {
+		return "branch principal"
+	}
+	return b
+}
+
+// promote sobe na producao o commit validado na homologacao from.
+func (p *appsPage) promote(from string, confirm bool) tea.Cmd {
+	r, ok := p.promos[from]
+	if !ok || p.busy != "" {
+		return nil
+	}
+	to := r.p.To
+	p.busy = "deploy"
+	p.detailErr = ""
+	p.setStatus("warn", "Promovendo "+shortCommit(r.p.Deploy)+" pra "+to+": build (a versao atual continua no ar) e up...")
+	return func() tea.Msg {
+		res, err := p.api.PromoteApp(context.Background(), from, confirm)
+		return appActionMsg{app: to, err: err, deployed: &res}
+	}
+}
+
+// startHomolog abre o cadastro de uma homologacao do app: mesmo
+// repositorio, ligada a ele.
+func (p *appsPage) startHomolog() tea.Cmd {
+	a := p.selected()
+	if a == nil {
+		return nil
+	}
+	prod := *a
+	cmd := p.startCreate()
+	p.newName.SetValue(prod.Name + "-homolog")
+	p.newRepo.SetValue(prod.Repo)
+	p.newPromoteTo = prod.Name
+	p.rebuild()
+	return tea.Batch(cmd, p.setFocus(2)) // a branch
 }
 
 func (p *appsPage) saveEnv() tea.Cmd {
@@ -695,6 +894,7 @@ func (p *appsPage) startCreate() tea.Cmd {
 	for _, ti := range []*textinput.Model{p.newName, p.newRepo, p.newBranch, p.newCompose} {
 		ti.SetValue("")
 	}
+	p.newPromoteTo, p.newAuto = "", false
 	p.setStatus("", "")
 	p.rebuild()
 	return p.setFocus(0)
@@ -715,7 +915,8 @@ func (p *appsPage) create() tea.Cmd {
 		return nil
 	}
 	a := apps.App{Name: strings.TrimSpace(p.newName.Value()), Repo: repo.String(),
-		Branch: strings.TrimSpace(p.newBranch.Value()), Compose: strings.TrimSpace(p.newCompose.Value())}
+		Branch: strings.TrimSpace(p.newBranch.Value()), Compose: strings.TrimSpace(p.newCompose.Value()),
+		PromoteTo: p.newPromoteTo, AutoDeploy: p.newAuto}
 	if a.Name == "" {
 		a.Name = strings.ToLower(repo.Name)
 	}
@@ -754,7 +955,18 @@ func (p *appsPage) update(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		p.envPending = nil
 		p.rebuild()
-		return tea.Batch(p.checkCmd(), p.guideCmd(msg.app), p.dbsCmd()), true
+		return tea.Batch(p.checkCmd(), p.guideCmd(msg.app), p.dbsCmd(), p.promoRefresh(true)), true
+	case appPromoMsg:
+		if p.promoSig[msg.from] != msg.sig {
+			return nil, true // resposta de uma consulta ja substituida
+		}
+		r := promoResult{p: msg.p}
+		if msg.err != nil {
+			r.err = msg.err.Error()
+		}
+		p.promos[msg.from] = r
+		p.rebuild()
+		return nil, true
 	case appCreatedMsg:
 		p.busy = ""
 		if msg.err != nil {
@@ -953,11 +1165,11 @@ func (p *appsPage) viewList(w, h int) string {
 	t := p.th
 	var b strings.Builder
 	b.WriteString(t.bold().Render("Apps") + "\n")
-	newBtn := t.pill(p.creating)
+	k := btnNormal
 	if p.busy != "" {
-		newBtn = t.disabledPill()
+		k = btnOff
 	}
-	b.WriteString(p.zones.Mark("app-new", newBtn.Render("+ Novo app")) + "\n\n")
+	b.WriteString(p.zones.Mark("app-new", t.button("+ Novo app", k, p.creating)) + "\n\n")
 	if len(p.list) == 0 {
 		b.WriteString(t.fg(t.muted).Width(w - 4).Render("Nenhum app ainda. Crie com + Novo app a partir do link do repositorio."))
 	}
@@ -966,7 +1178,20 @@ func (p *appsPage) viewList(w, h int) string {
 		sel := !p.creating && i == p.sel
 		title := t.bold().Render(mark+" "+a.Name) + "  " + t.fg(c).Render(status)
 		sub := t.fg(t.muted).Render(a.Repo)
-		card := t.panel(sel, w-4, 2).Render(ansi.Truncate(title, w-6, "…") + "\n" + ansi.Truncate(sub, w-6, "…"))
+		cw, indent := w-4, ""
+		if a.PromoteTo != "" && p.app(a.PromoteTo) != nil {
+			// homologacao: embaixo da producao, recuada
+			cw, indent = w-6, "  "
+			sub = t.fg(t.muted).Render("homologacao de " + a.PromoteTo)
+		}
+		if a.AutoDeploy {
+			sub += t.fg(t.muted).Render(" · auto")
+		}
+		// a largura do painel inclui borda e padding: sobram cw-4 colunas
+		card := t.panel(sel, cw, 2).Render(ansi.Truncate(title, cw-4, "…") + "\n" + ansi.Truncate(sub, cw-4, "…"))
+		if indent != "" {
+			card = lipgloss.NewStyle().MarginLeft(len(indent)).Render(card)
+		}
 		b.WriteString(p.zones.Mark("app:"+a.Name, card) + "\n")
 	}
 	return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(b.String())
@@ -1015,19 +1240,30 @@ func (p *appsPage) viewSections() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
 
-// render mostra um campo: texto ou botao, com o foco marcado.
+// render mostra um campo: texto (fundo cinza) ou botao (borda colorida),
+// com o foco marcado.
 func (p *appsPage) render(f *field, i int) string {
 	t := p.th
 	focused := p.inForm && i == p.focus
 	if f.input != nil {
-		st := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(f.input.Width() + 1)
-		return st.Render(f.input.View())
+		return t.input(f.input, f.input.Width()+1)
 	}
-	st := t.pill(focused)
+	k := f.kind
 	if f.off() {
-		st = t.disabledPill()
+		k = btnOff
+		if f.kind == btnDanger {
+			k = btnDangerOff // continua dizendo que apaga
+		}
 	}
-	return st.Render(f.label)
+	if f.chip {
+		return t.chip(f.label, k, focused)
+	}
+	return t.button(f.label, k, focused)
+}
+
+// markFocus guarda a linha (e a altura) do campo com foco, pra rolagem.
+func (p *appsPage) markFocus(b *strings.Builder, h int) {
+	p.focusLine, p.focusH = strings.Count(b.String(), "\n"), h
 }
 
 // picker escreve um seletor (clique ou enter troca a opcao) com o rotulo
@@ -1041,9 +1277,9 @@ func (p *appsPage) picker(b *strings.Builder, id, text string) {
 		marker, ls := "  ", t.fg(t.text).Width(18)
 		if p.inForm && i == p.focus {
 			marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(18)
-			p.focusLine = strings.Count(b.String(), "\n")
+			p.markFocus(b, 1)
 		}
-		b.WriteString(p.zones.Mark(f.id, marker+ls.Render(f.label)+p.render(&field{label: text}, i)) + "\n")
+		b.WriteString(p.zones.Mark(f.id, marker+ls.Render(f.label)+t.selector(text, p.inForm && i == p.focus)) + "\n")
 	}
 }
 
@@ -1058,27 +1294,31 @@ func (p *appsPage) row(b *strings.Builder, id string) {
 		if p.inForm && i == p.focus {
 			marker = t.fg(t.accent).Bold(true).Render("› ")
 			label = t.fg(t.accent).Bold(true).Width(18).Render(f.label)
-			p.focusLine = strings.Count(b.String(), "\n")
+			p.markFocus(b, 1)
 		}
 		b.WriteString(p.zones.Mark(f.id, marker+label+p.render(f, i)) + "\n")
 		return
 	}
 }
 
-// inline escreve varios campos na mesma linha (botoes, linhas de tabela).
+// inline escreve varios botoes lado a lado.
 func (p *appsPage) inline(b *strings.Builder, ids ...string) {
-	var parts []string
+	parts := []string{"  "}
 	for _, id := range ids {
 		for i, f := range p.fields {
 			if f.id == id {
+				r := p.render(f, i)
 				if p.inForm && i == p.focus {
-					p.focusLine = strings.Count(b.String(), "\n")
+					p.markFocus(b, lipgloss.Height(r))
 				}
-				parts = append(parts, p.zones.Mark(f.id, p.render(f, i)))
+				if len(parts) > 1 {
+					parts = append(parts, " ")
+				}
+				parts = append(parts, p.zones.Mark(f.id, r))
 			}
 		}
 	}
-	b.WriteString("  " + strings.Join(parts, " ") + "\n")
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, parts...) + "\n")
 }
 
 func (p *appsPage) viewDetail(w, h int) string {
@@ -1113,7 +1353,7 @@ func (p *appsPage) viewDetail(w, h int) string {
 		}
 	}
 
-	p.focusLine = -1
+	p.focusLine, p.focusH = -1, 1
 	body.WriteString("\n")
 	switch {
 	case p.creating:
@@ -1148,8 +1388,8 @@ func (p *appsPage) viewDetail(w, h int) string {
 		if p.focusLine < p.scroll {
 			p.scroll = p.focusLine
 		}
-		if p.focusLine >= p.scroll+avail {
-			p.scroll = p.focusLine - avail + 1
+		if end := p.focusLine + p.focusH - 1; end >= p.scroll+avail {
+			p.scroll = min(p.focusLine, end-avail+1)
 		}
 	}
 	p.scroll = max(0, min(p.scroll, len(lines)-avail))
@@ -1177,6 +1417,12 @@ func (p *appsPage) viewCreate(b *strings.Builder, w int) {
 	p.row(b, "new-repo")
 	p.row(b, "new-branch")
 	p.row(b, "new-compose")
+	p.picker(b, "new-auto", autoText(p.newAuto, p.newBranch.Value()))
+	if p.newPromoteTo != "" {
+		b.WriteString("  " + p.th.fg(p.th.text).Width(18).Render("Homologacao de") + p.th.bold().Render(p.newPromoteTo) + "\n")
+		b.WriteString(p.th.fg(p.th.muted).Width(w).Render("  Use um compose proprio (ex: docker-compose.homolog.yaml) com rotas do Traefik com o nome deste app "+
+			"e outro dominio; variaveis, secrets e banco sao separados dos da producao.") + "\n")
+	}
 	b.WriteString("\n")
 	p.inline(b, "new-create", "new-cancel")
 	b.WriteString("\n" + p.th.fg(p.th.muted).Width(w).Render(
@@ -1185,9 +1431,88 @@ func (p *appsPage) viewCreate(b *strings.Builder, w int) {
 			"App do cais (aba Setup).") + "\n")
 }
 
-func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
+// autoText e o texto do seletor de deploy automatico.
+func autoText(on bool, branch string) string {
+	if on {
+		return "‹ automatico: cada commit na " + branchName(strings.TrimSpace(branch)) + " ›"
+	}
+	return "‹ manual ›"
+}
+
+// viewPromotion e a parte de homologacao da aba Geral: na homologacao, o
+// que promover faria; na producao, as homologacoes dela (ou o botao de
+// criar uma).
+func (p *appsPage) viewPromotion(b *strings.Builder, a core.AppStatus, w int) {
 	t := p.th
 	muted := t.fg(t.muted)
+	wrap := lipgloss.NewStyle().Width(w).PaddingLeft(2) // recuo em todas as linhas
+	hs := p.homologs(a)
+	b.WriteString("\n" + t.rule(w) + "\n")
+	if len(hs) == 0 {
+		b.WriteString(t.bold().Render("Homologacao") + "\n")
+		b.WriteString(muted.Width(w).Render("  Nenhuma homologacao. Ela e um app separado, com o mesmo repositorio e um compose proprio: "+
+			"sobe uma versao de teste sem tocar na producao, e o commit validado nela e promovido pra ca.") + "\n\n")
+		p.inline(b, "homolog-new")
+		return
+	}
+	title := "Homologacao"
+	if a.PromoteTo != "" {
+		title = "Promover pra producao (" + a.PromoteTo + ")"
+	}
+	b.WriteString(t.bold().Render(title) + " ")
+	p.mark(b, "info-promote")
+	b.WriteString(" ")
+	p.mark(b, "promo-refresh")
+	b.WriteString("\n")
+	for _, h := range hs {
+		r, ok := p.promos[h.Name]
+		if a.PromoteTo == "" {
+			fmt.Fprintf(b, "  %-16s no ar %s\n", h.Name, cmpOr(shortCommit(h.Commit), "-"))
+		} else if prod := p.app(a.PromoteTo); prod != nil {
+			fmt.Fprintf(b, "  %-16s %s\n", "validado aqui", cmpOr(shortCommit(h.Commit), "-"))
+			fmt.Fprintf(b, "  %-16s %s\n", "na producao", cmpOr(shortCommit(prod.Commit), "-"))
+		}
+		var line string
+		c := t.muted
+		switch {
+		case !ok:
+			line = "consultando o GitHub..."
+		case r.err != "":
+			line, c = r.err, t.danger
+		case r.p.State == apps.PromoteReady:
+			line, c = "pode promover "+shortCommit(r.p.Deploy), t.ok
+			if r.p.Ahead > 0 {
+				line += fmt.Sprintf(": a producao ganha %d commit(s)", r.p.Ahead)
+			}
+			if r.p.Deploy != r.p.Commit {
+				line += " (a ponta da " + branchName(r.p.Branch) + " tem o mesmo codigo: squash merge)"
+			}
+		case r.p.State == apps.PromoteSame:
+			line = r.p.Reason
+		case r.p.State == apps.PromoteOlder:
+			line, c = r.p.Reason, t.warn
+		default:
+			line, c = r.p.Reason, t.danger
+		}
+		b.WriteString(wrap.Foreground(c).Render(line) + "\n")
+		if ok && r.err == "" && r.p.Unvalidated > 0 {
+			b.WriteString(wrap.Foreground(t.warn).Render(fmt.Sprintf("a %s tem %d commit(s) depois do validado: o Deploy direto da producao subiria codigo que nao passou pela homologacao",
+				branchName(r.p.Branch), r.p.Unvalidated)) + "\n")
+		}
+		b.WriteString("\n")
+		p.inline(b, "promote:"+h.Name)
+	}
+}
+
+func cmpOr(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
+	t := p.th
 	fmt.Fprintf(b, "  %-14s github.com/%s\n", "repositorio", a.Repo)
 	fmt.Fprintf(b, "  %-14s %s\n", "compose", a.ComposeFile())
 	for _, l := range a.Databases {
@@ -1207,6 +1532,12 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 			}
 			line += ")"
 		}
+		switch {
+		case l.PromotedFrom != "":
+			line += " · promovido de " + l.PromotedFrom
+		case l.Auto:
+			line += " · automatico"
+		}
 		fmt.Fprintf(b, "  %-14s %s\n", "ult. deploy", t.fg(c).Render(line))
 		if len(l.Problems) > 0 {
 			b.WriteString(lipgloss.NewStyle().Width(w).Foreground(t.danger).Render("    compose recusado (corrija no repositorio; modelo na Ajuda):") + "\n")
@@ -1219,7 +1550,7 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 		}
 	}
 	if len(a.Containers) > 0 {
-		b.WriteString("\n" + t.bold().Render("Containers") + "\n")
+		b.WriteString("\n" + t.rule(w) + "\n" + t.bold().Render("Containers") + "\n")
 		for _, c := range a.Containers {
 			state := c.State
 			if c.Health != "" {
@@ -1228,24 +1559,32 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 			fmt.Fprintf(b, "  %-30s %s\n", ansi.Truncate(c.Name, 30, "…"), state)
 		}
 	}
-	b.WriteString("\n" + t.bold().Render("Deploy") + "\n")
+	b.WriteString("\n" + t.rule(w) + "\n")
+	p.title(b, "Deploy", "info-deploy")
 	p.row(b, "ref")
+	p.picker(b, "auto", autoText(a.AutoDeploy, a.Branch))
+	b.WriteString("\n")
 	p.inline(b, "deploy", "restart", "stop")
-	b.WriteString(muted.Width(w).Render("O build roda com a versao atual no ar; se o up falhar, o commit anterior volta.") + "\n")
-	b.WriteString("\n" + t.bold().Render("Repositorio") + muted.Render(" (vale no proximo deploy)") + "\n")
+	p.viewPromotion(b, a, w)
+
+	b.WriteString("\n" + t.rule(w) + "\n")
+	p.title(b, "Repositorio", "info-repo")
 	p.row(b, "repo")
 	p.row(b, "branch")
 	p.row(b, "compose")
+	b.WriteString("\n")
 	p.inline(b, "app-save")
 
-	b.WriteString("\n" + t.bold().Render("Excluir app") + "\n")
-	b.WriteString(muted.Width(w).Render("Apaga containers, imagens, codigo, variaveis e secrets do app. O database da infra fica (aba Infra). Digite "+a.Name+" pra confirmar.") + "\n")
+	b.WriteString("\n" + t.rule(w) + "\n")
+	p.title(b, "Excluir app", "info-delete")
+	p.delConfirm.Placeholder = "digite " + a.Name + " pra confirmar"
 	p.row(b, "delete-confirm")
+	b.WriteString("\n")
 	for _, f := range p.fields {
 		if f.id == "delete-volumes" {
-			f.label = "Volumes (dados): manter"
+			f.label, f.kind = "Volumes (dados): manter", btnNeutral
 			if p.delVolumes {
-				f.label = "Volumes (dados): APAGAR"
+				f.label, f.kind = "Volumes (dados): APAGAR", btnDanger
 			}
 		}
 	}
@@ -1255,8 +1594,9 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 func (p *appsPage) viewEnv(b *strings.Builder, w int) {
 	t := p.th
 	muted := t.fg(t.muted)
-	// o valor ocupa o que sobra da linha: nome (22+1), "remover" e as margens
-	valueW := max(20, w-23-14)
+	// o valor ocupa o que sobra da linha: marcador (2), nome (22+1), os
+	// espacos e o [✕ remover] (11)
+	valueW := max(20, w-2-23-1-1-1-11)
 	for _, r := range p.envRows {
 		if r.value.Width() != valueW {
 			r.value.SetWidth(valueW)
@@ -1271,12 +1611,12 @@ func (p *appsPage) viewEnv(b *strings.Builder, w int) {
 		b.WriteString(muted.Render("  nenhuma variavel: adicione uma ou importe um .env") + "\n")
 	} else {
 		head := t.fg(t.muted).Bold(true)
-		b.WriteString("  " + head.Width(24).Render("Nome") + head.Render("Valor") + "\n\n")
+		b.WriteString("  " + head.Width(24).Render("Nome") + head.Render("Valor") + "\n")
 	}
 	for i := range p.envRows {
-		p.inline(b, fmt.Sprintf("env-name:%d", i), fmt.Sprintf("env-value:%d", i), fmt.Sprintf("env-del:%d", i))
-		b.WriteString("\n")
+		p.envRow(b, i)
 	}
+	b.WriteString("\n")
 	p.inline(b, "env-add", "env-import", "env-save")
 	if p.envDirty() {
 		b.WriteString(t.fg(t.warn).Render("  alteracoes nao salvas: valem so depois do Salvar") + "\n")
@@ -1310,6 +1650,7 @@ func (p *appsPage) viewEnv(b *strings.Builder, w int) {
 		if p.importErr != "" {
 			b.WriteString(t.fg(t.danger).Width(w).Render("  "+p.importErr) + "\n")
 		}
+		b.WriteString("\n")
 		p.inline(b, "env-import-apply", "env-import-cancel")
 	}
 
@@ -1318,63 +1659,105 @@ func (p *appsPage) viewEnv(b *strings.Builder, w int) {
 			"O cais acrescenta CAIS_APP, CAIS_COMMIT e CAIS_SECRETS. Senhas e chaves vao em Secrets, nao aqui.") + "\n")
 }
 
+// envRow escreve uma variavel numa linha: nome, valor e [✕ remover], com o
+// marcador na linha que tem o foco.
+func (p *appsPage) envRow(b *strings.Builder, i int) {
+	t := p.th
+	marker := "  "
+	var parts []string
+	for _, id := range []string{fmt.Sprintf("env-name:%d", i), fmt.Sprintf("env-value:%d", i), fmt.Sprintf("env-del:%d", i)} {
+		for j, f := range p.fields {
+			if f.id != id {
+				continue
+			}
+			if p.inForm && j == p.focus {
+				marker = t.fg(t.accent).Bold(true).Render("› ")
+				p.markFocus(b, 1)
+			}
+			parts = append(parts, p.zones.Mark(f.id, p.render(f, j)))
+		}
+	}
+	b.WriteString(marker + strings.Join(parts, " ") + "\n")
+}
+
+// textos de ajuda, abertos pelo [i] de cada parte
+var (
+	infoDeploy = infoBox{"Deploy", "Baixa o commit (vazio = o mais novo da branch), faz o build com a versao atual " +
+		"ainda no ar e sobe. Se o up falhar ou um container nao ficar de pe em 15 segundos, o commit anterior volta.\n\n" +
+		"Reiniciar reinicia os containers sem baixar nada; Parar derruba o app (os dados ficam)."}
+	infoPromote = infoBox{"Homologacao e promocao", "A homologacao e um app separado (mesmo repositorio, compose proprio, " +
+		"rotas com o nome dela): sobe uma versao de teste sem tocar na producao. Promover sobe na producao o commit que esta " +
+		"no ar e de pe na homologacao, pelo deploy normal (build com a versao atual no ar; se falhar, a anterior volta).\n\n" +
+		"O commit validado tem que estar na branch da producao: na mesma branch isso ja vale; com branch propria, faca o merge " +
+		"(PR) antes, inclusive squash. Assim um deploy futuro da branch nao desfaz a promocao. Voltar a producao pra um " +
+		"commit mais velho pede confirmacao.\n\n" +
+		"Deploy automatico (em cada app): homolog automatica com promocao manual, ou homolog e producao automaticas (a " +
+		"producao sobe no merge na branch dela)."}
+	infoRepo = infoBox{"Repositorio", "De onde o cais baixa o codigo: o repositorio do GitHub, a branch e o arquivo " +
+		"compose de producao. Vale no proximo deploy.\n\n" +
+		"Branch vazia usa a principal do repositorio. A Ajuda mostra como escrever o compose."}
+	infoSecrets = infoBox{"Secrets", "Cada secret e um arquivo em ${CAIS_SECRETS}/<nome>. No compose: " +
+		"secrets: {x: {file: ${CAIS_SECRETS}/x}} e o service le /run/secrets/x.\n\n" +
+		"O valor so aparece enquanto voce digita e vale no proximo deploy. As credenciais de banco e bucket " +
+		"ligados aparecem aqui, mas sao desligadas na parte deles."}
+	infoDatabases = infoBox{"Bancos da infra", "No deploy o cais grava usuario e senha de cada banco ligado nos secrets " +
+		"<engine>_<nome>_user e <engine>_<nome>_pass (o database tem o nome do usuario); montar a URL e com o app.\n\n" +
+		"O app chega no banco por postgres:5432 ou mysql:3306. Desligar nao apaga o database. Crie bancos na aba Infra."}
+	infoBuckets = infoBox{"Buckets do Garage", "No deploy o cais grava a chave de cada bucket ligado nos secrets " +
+		"s3_<bucket>_access_key e s3_<bucket>_secret_key.\n\n" +
+		"O app usa o endpoint http://garage:3900, regiao garage, path-style (rede garage_network). " +
+		"Desligar nao apaga o bucket. Crie buckets na aba Infra -> Garage."}
+)
+
+// mark escreve o campo id na linha atual (um so, de uma linha).
+func (p *appsPage) mark(b *strings.Builder, id string) {
+	for i, f := range p.fields {
+		if f.id == id {
+			if p.inForm && i == p.focus {
+				p.markFocus(b, 1)
+			}
+			b.WriteString(p.zones.Mark(f.id, p.render(f, i)))
+		}
+	}
+}
+
+// title escreve o titulo de uma parte com o [i] que abre a ajuda dela.
+func (p *appsPage) title(b *strings.Builder, text, infoID string) {
+	b.WriteString(p.th.bold().Render(text) + " ")
+	p.mark(b, infoID)
+	b.WriteString("\n")
+}
+
+// pickLink escreve o seletor e o botao de ligar lado a lado.
+func (p *appsPage) pickLink(b *strings.Builder, pickID, text, linkID string) {
+	t := p.th
+	var left, right string
+	for i, f := range p.fields {
+		focused := p.inForm && i == p.focus
+		switch f.id {
+		case pickID:
+			marker, ls := "  ", t.fg(t.text).Width(18)
+			if focused {
+				marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(18)
+			}
+			left = p.zones.Mark(f.id, marker+ls.Render(f.label)+t.selector(text, focused))
+		case linkID:
+			right = p.zones.Mark(f.id, p.render(f, i))
+		default:
+			continue
+		}
+		if focused {
+			p.markFocus(b, lipgloss.Height(left))
+		}
+	}
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Center, left, "  ", right) + "\n")
+}
+
 func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
 	t := p.th
 	muted := t.fg(t.muted)
-	// mark escreve o campo id na linha atual (botoes de cada item)
-	mark := func(id string) {
-		for i, f := range p.fields {
-			if f.id == id {
-				if p.inForm && i == p.focus {
-					p.focusLine = strings.Count(b.String(), "\n")
-				}
-				b.WriteString(p.zones.Mark(f.id, p.render(f, i)))
-			}
-		}
-	}
 
-	b.WriteString(t.bold().Render("Bancos da infra") + "\n")
-	if len(a.Databases) == 0 {
-		b.WriteString(muted.Render("  nenhum banco ligado: o app nao usa o Postgres/MySQL da infra") + "\n")
-	}
-	for _, l := range a.Databases {
-		fmt.Fprintf(b, "  %-22s %s ", l.ID(), muted.Render(strings.Join(l.Secrets(), " e ")))
-		mark("db-unlink:" + l.ID())
-		b.WriteString("\n")
-	}
-	list := p.linkable()
-	pick := "nenhum banco criado (aba Infra -> Novo banco)"
-	if len(list) > 0 {
-		d := list[min(p.dbPick, len(list)-1)]
-		pick = "‹ " + d.Engine + "/" + d.Name + " ›"
-	}
-	p.picker(b, "db-pick", pick)
-	p.inline(b, "db-link")
-	b.WriteString(muted.Width(w).Render("No deploy o cais grava usuario e senha de cada banco ligado nos secrets "+
-		"<engine>_<nome>_user e <engine>_<nome>_pass (o database tem o nome do usuario); montar a URL e com o app. "+
-		"Desligar nao apaga o database.") + "\n")
-
-	b.WriteString("\n" + t.bold().Render("Buckets do Garage") + "\n")
-	if len(a.Buckets) == 0 {
-		b.WriteString(muted.Render("  nenhum bucket ligado: o app nao usa o S3 da infra") + "\n")
-	}
-	for _, l := range a.Buckets {
-		fmt.Fprintf(b, "  %-22s %s ", l.Name, muted.Render(strings.Join(l.Secrets(), " e ")))
-		mark("bucket-unlink:" + l.Name)
-		b.WriteString("\n")
-	}
-	bl := p.linkableBuckets()
-	pick = "nenhum bucket criado (aba Infra -> Garage -> Novo bucket)"
-	if len(bl) > 0 {
-		pick = "‹ " + bl[min(p.bucketPick, len(bl)-1)].Name + " ›"
-	}
-	p.picker(b, "bucket-pick", pick)
-	p.inline(b, "bucket-link")
-	b.WriteString(muted.Width(w).Render("No deploy o cais grava a chave de cada bucket ligado nos secrets "+
-		"s3_<bucket>_access_key e s3_<bucket>_secret_key. O app usa o endpoint http://garage:3900, regiao garage, "+
-		"path-style (rede garage_network). Desligar nao apaga o bucket.") + "\n")
-
-	b.WriteString("\n" + t.bold().Render("Secrets") + "\n")
+	p.title(b, "Secrets", "info-secrets")
 	if len(a.Secrets) == 0 {
 		b.WriteString(muted.Render("  nenhum secret") + "\n")
 	}
@@ -1385,31 +1768,79 @@ func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
 	for _, s := range a.Secrets {
 		fmt.Fprintf(b, "  %-*s  ", nameW, s.Name)
 		if s.Infra != "" {
-			b.WriteString(t.fg(t.accent).Render("credencial de " + s.Infra))
+			b.WriteString(muted.Render("credencial de " + s.Infra))
 		} else {
-			mark("secret-del:" + s.Name)
+			p.mark(b, "secret-del:"+s.Name)
 		}
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
 	p.row(b, "secret-name")
 	p.row(b, "secret-value")
+	b.WriteString("\n")
 	p.inline(b, "secret-save")
-	b.WriteString("\n" + muted.Width(w).Render(
-		"Cada secret e um arquivo em ${CAIS_SECRETS}/<nome>. No compose: secrets: {x: {file: ${CAIS_SECRETS}/x}} "+
-			"e o service le /run/secrets/x. O valor so aparece enquanto voce digita; vale no proximo deploy.") + "\n")
+
+	b.WriteString("\n" + t.rule(w) + "\n")
+	p.title(b, "Bancos da infra", "info-dbs")
+	if len(a.Databases) == 0 {
+		b.WriteString(muted.Render("  nenhum banco ligado") + "\n")
+	}
+	for _, l := range a.Databases {
+		fmt.Fprintf(b, "  %-22s %s ", l.ID(), muted.Render(strings.Join(l.Secrets(), " e ")))
+		p.mark(b, "db-unlink:"+l.ID())
+		b.WriteString("\n")
+	}
+	list := p.linkable()
+	pick := "nenhum banco criado (aba Infra)"
+	if len(list) > 0 {
+		d := list[min(p.dbPick, len(list)-1)]
+		pick = "‹ " + d.Engine + "/" + d.Name + " ›"
+	}
+	p.pickLink(b, "db-pick", pick, "db-link")
+
+	b.WriteString("\n" + t.rule(w) + "\n")
+	p.title(b, "Buckets do Garage", "info-buckets")
+	if len(a.Buckets) == 0 {
+		b.WriteString(muted.Render("  nenhum bucket ligado") + "\n")
+	}
+	for _, l := range a.Buckets {
+		fmt.Fprintf(b, "  %-22s %s ", l.Name, muted.Render(strings.Join(l.Secrets(), " e ")))
+		p.mark(b, "bucket-unlink:"+l.Name)
+		b.WriteString("\n")
+	}
+	bl := p.linkableBuckets()
+	pick = "nenhum bucket criado (aba Infra -> Garage)"
+	if len(bl) > 0 {
+		pick = "‹ " + bl[min(p.bucketPick, len(bl)-1)].Name + " ›"
+	}
+	p.pickLink(b, "bucket-pick", pick, "bucket-link")
 }
 
 // integracao com o modelo (logs usam o visualizador comum com a Infra)
 
 func (m *model) appsClick(msg tea.MouseMsg) tea.Cmd {
-	before, cont := m.apps.section, m.apps.container
+	if m.apps.info != nil {
+		m.apps.info = nil // qualquer clique fecha a ajuda
+		return nil
+	}
+	sel, before, cont := m.apps.sel, m.apps.section, m.apps.container
 	cmd := m.apps.click(msg)
-	return tea.Batch(cmd, m.syncAppLogs(m.apps.section != before || m.apps.container != cont))
+	force := sel != m.apps.sel || m.apps.section != before || m.apps.container != cont
+	if force {
+		m.logSelection = logSelection{} // a selecao era dos logs de antes
+	}
+	return tea.Batch(cmd, m.syncAppLogs(force), m.apps.promoRefresh(false))
 }
 
 func (m *model) appsKey(msg tea.KeyPressMsg) tea.Cmd {
 	k := msg.String()
+	if m.apps.info != nil {
+		switch k {
+		case "esc", "enter", "space", "q":
+			m.apps.info = nil
+		}
+		return nil
+	}
 	if m.apps.section == secLogs && !m.apps.creating {
 		switch k {
 		case "pgup", "pgdown":
@@ -1423,7 +1854,10 @@ func (m *model) appsKey(msg tea.KeyPressMsg) tea.Cmd {
 	sel, sec, cont := m.apps.sel, m.apps.section, m.apps.container
 	cmd := m.apps.key(msg)
 	force := sel != m.apps.sel || sec != m.apps.section || cont != m.apps.container
-	return tea.Batch(cmd, m.syncAppLogs(force))
+	if force {
+		m.logSelection = logSelection{} // a selecao era dos logs de antes
+	}
+	return tea.Batch(cmd, m.syncAppLogs(force), m.apps.promoRefresh(false))
 }
 
 // scrollLogs rola os logs 10 linhas pra cima (antigos) ou pra baixo.
@@ -1530,7 +1964,12 @@ func (m *model) viewAppLogs(a core.AppStatus, w, h int) string {
 	}
 	for i, f := range p.fields {
 		if f.id == "log-container" {
-			b.WriteString(p.zones.Mark(f.id, "  "+t.fg(t.text).Width(18).Render("Container")+p.render(&field{label: "‹ " + name + " ›", press: f.press}, i)) + "\n")
+			b.WriteString(p.zones.Mark(f.id, "  "+t.fg(t.text).Width(18).Render("Container")+t.selector("‹ "+name+" ›", p.inForm && i == p.focus)))
+			// linhas na tela durante a selecao, como no titulo dos logs da Infra
+			if pos := m.logPosition(); pos != "" {
+				b.WriteString("  " + t.bold().Render("Logs · "+pos))
+			}
+			b.WriteString("\n")
 		}
 	}
 	b.WriteString("\n")

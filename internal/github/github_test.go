@@ -145,6 +145,16 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		io.WriteString(w, testCommit)
+	case p == "/repos/trdSystemDev/meu-app/compare/principal..."+testCommit:
+		if r.URL.Query().Get("per_page") != "1" {
+			f.t.Error("compare sem per_page=1 (a lista de commits nao interessa)")
+		}
+		io.WriteString(w, `{"status": "behind", "ahead_by": 0, "behind_by": 2, "files": [{"filename": "x", "patch": "@@"}]}`)
+	case p == "/repos/trdSystemDev/meu-app/compare/principal...nao-existe":
+		w.WriteHeader(404)
+		io.WriteString(w, `{"message":"Not Found"}`)
+	case p == "/repos/trdSystemDev/meu-app/git/commits/"+testCommit:
+		io.WriteString(w, `{"sha": "`+testCommit+`", "tree": {"sha": "arvore1"}}`)
 	case p == "/repos/trdSystemDev/meu-app/tarball/"+testCommit:
 		// o GitHub redireciona pro codeload, que nao pode receber o token
 		http.Redirect(w, r, "/codeload/"+testCommit, http.StatusFound)
@@ -332,5 +342,24 @@ func TestNormalizeKeyColadaNumaLinha(t *testing.T) {
 		if _, err := NormalizeKey(bad); err == nil {
 			t.Errorf("aceitou %q", bad)
 		}
+	}
+}
+
+func TestCompareETree(t *testing.T) {
+	app, _ := newApp(t, map[string]string{"docker-compose.yml": "services: {}\n"})
+	ctx := context.Background()
+	s, err := app.Open(ctx, Repo{"trdSystemDev", "meu-app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Compare(ctx, "principal", testCommit)
+	if err != nil || c != (Comparison{Status: "behind", BehindBy: 2}) {
+		t.Fatalf("Compare = %+v, %v", c, err)
+	}
+	if _, err := s.Compare(ctx, "principal", "nao-existe"); err == nil || !strings.Contains(err.Error(), "nao achei") {
+		t.Errorf("compare de ref inexistente: %v", err)
+	}
+	if tree, err := s.Tree(ctx, testCommit); err != nil || tree != "arvore1" {
+		t.Fatalf("Tree = %q, %v", tree, err)
 	}
 }

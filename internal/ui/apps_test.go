@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
@@ -477,4 +479,156 @@ func TestAppsListaDeLigarAtualiza(t *testing.T) {
 	click(t, m, "app-sec:Geral")
 	click(t, m, "app-sec:Secrets")
 	waitFor(t, m, "‹ postgres/loja ›")
+}
+
+// o texto de ajuda de cada parte da aba Secrets abre no [i] e fecha com esc
+// ou clique, sem ocupar a tela
+func TestAppsSecretsAjudaNoModal(t *testing.T) {
+	m, _, _ := openApps(t)
+	m.api.CreateApp(context.Background(), apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	waitFor(t, m, "sem deploy")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Secrets")
+	waitFor(t, m, "nenhum secret")
+	if strings.Contains(screen(m), "garage:3900") {
+		t.Fatal("texto de ajuda dos buckets aparece fora do modal")
+	}
+	click(t, m, "info-buckets")
+	if !strings.Contains(screen(m), "garage:3900") {
+		t.Fatalf("modal dos buckets nao abriu:\n%s", screen(m))
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if strings.Contains(screen(m), "garage:3900") {
+		t.Fatal("esc nao fechou o modal")
+	}
+	click(t, m, "info-secrets")
+	if !strings.Contains(screen(m), "/run/secrets/x") {
+		t.Fatalf("modal dos secrets nao abriu:\n%s", screen(m))
+	}
+	m.Update(tea.MouseReleaseMsg{X: 1, Y: 1, Button: tea.MouseLeft})
+	if m.apps.info != nil {
+		t.Fatal("clique nao fechou o modal")
+	}
+}
+
+// os logs do app copiam ao arrastar e rolam sozinhos quando o mouse passa do
+// topo, como os da Infra
+func TestAppsLogsSelecionaECopia(t *testing.T) {
+	m, _, _ := openApps(t)
+	ctx := context.Background()
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	if _, err := m.api.DeployApp(ctx, "loja", ""); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "1/1 no ar")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Logs")
+	var lines []string
+	for i := range 100 {
+		lines = append(lines, fmt.Sprintf("linha %03d", i))
+	}
+	m.logsText = strings.Join(lines, "\n")
+	m.View()
+	area := m.logArea
+	if len(area.lines) == 0 {
+		t.Fatal("logs do app sem area de selecao")
+	}
+	// a area bate com o que esta na tela
+	row := strings.Split(screen(m), "\n")[area.y]
+	if got := ansi.Cut(row, area.x, area.x+9); got != area.lines[0][:9] {
+		t.Fatalf("area fora do lugar: tela %q, area %q", got, area.lines[0])
+	}
+
+	// arrasta da ultima linha visivel pra cima do painel: rola ate o comeco
+	m.Update(tea.MouseClickMsg{X: area.x + 8, Y: area.y + len(area.lines) - 1, Button: tea.MouseLeft})
+	_, cmd := m.Update(tea.MouseMotionMsg{X: area.x, Y: area.y - 1, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("nao comecou a rolar ao passar do topo")
+	}
+	for ticks := 0; cmd != nil; ticks++ {
+		if ticks > 100 {
+			t.Fatal("rolagem nao parou no comeco")
+		}
+		_, cmd = m.Update(logSelectionScrollTick(m.selectionGeneration))
+	}
+	if m.logSelection.viewStart != 0 {
+		t.Fatalf("nao chegou ao comeco: %d", m.logSelection.viewStart)
+	}
+	if want := fmt.Sprintf("Logs · 1–%d/100 · início", m.logSelection.viewHeight); !strings.Contains(screen(m), want) {
+		t.Fatalf("posicao %q nao aparece:\n%s", want, screen(m))
+	}
+	_, cmd = m.Update(tea.MouseReleaseMsg{X: area.x, Y: area.y - 1, Button: tea.MouseLeft})
+	if got := clipboardText(cmd); got != strings.Join(lines, "\n") {
+		t.Fatalf("copiou %q", got)
+	}
+	if !strings.Contains(screen(m), "Texto copiado") {
+		t.Fatal("aviso de copia nao apareceu")
+	}
+
+	// trocar de secao descarta a selecao
+	click(t, m, "app-sec:Geral")
+	if len(m.logSelection.lines) > 0 {
+		t.Fatal("selecao sobrou ao trocar de secao")
+	}
+}
+
+// homologacao pela TUI: o botao cria ligada a producao, o deploy automatico
+// liga por um seletor (e o Salvar do repositorio nao o desfaz) e o commit
+// validado vai pra producao pelo Promover
+func TestAppsHomologacaoEPromocao(t *testing.T) {
+	m, _, gh := openApps(t)
+	ctx := context.Background()
+	const repo = "trdSystemDev/loja"
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: repo})
+	if _, err := m.api.DeployApp(ctx, "loja", ""); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "1/1 no ar")
+	click(t, m, "app:loja")
+	click(t, m, "app-sec:Geral")
+	waitFor(t, m, "Nenhuma homologacao")
+
+	reach(t, m, "homolog-new")
+	click(t, m, "homolog-new")
+	if m.apps.newName.Value() != "loja-homolog" || m.apps.newRepo.Value() != repo {
+		t.Fatalf("cadastro da homologacao: %q %q", m.apps.newName.Value(), m.apps.newRepo.Value())
+	}
+	click(t, m, "new-auto")
+	click(t, m, "new-create")
+	waitFor(t, m, "homologacao de loja")
+	h := appState(t, m, "loja-homolog")
+	if h.PromoteTo != "loja" || !h.AutoDeploy {
+		t.Fatalf("homologacao criada: %+v", h.App)
+	}
+
+	// o Salvar do repositorio mantem o vinculo e o deploy automatico
+	click(t, m, "app-sec:Geral")
+	reach(t, m, "app-save")
+	click(t, m, "app-save")
+	waitFor(t, m, "loja-homolog salvo")
+	if h := appState(t, m, "loja-homolog"); h.PromoteTo != "loja" || !h.AutoDeploy {
+		t.Fatalf("Salvar desfez a homologacao: %+v", h.App)
+	}
+
+	// commit novo, validado na homologacao, promovido pra producao
+	gh.SetFile(repo, "Dockerfile", "FROM nginx:2\n")
+	if _, err := m.api.DeployApp(ctx, "loja-homolog", ""); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "pode promover")
+	reach(t, m, "promote:loja-homolog")
+	click(t, m, "promote:loja-homolog")
+	waitFor(t, m, "loja no ar no commit")
+	if a := appState(t, m, "loja"); a.Commit != gh.Commit(repo) || a.Last.PromotedFrom != "loja-homolog" {
+		t.Fatalf("producao depois de promover: %+v", a.App)
+	}
+	waitFor(t, m, "a producao ja esta no commit")
+
+	// na producao, o deploy automatico liga pelo seletor
+	click(t, m, "app:loja")
+	click(t, m, "auto")
+	waitFor(t, m, "Deploy automatico em loja")
+	if !appState(t, m, "loja").AutoDeploy {
+		t.Fatal("deploy automatico nao ligou")
+	}
 }

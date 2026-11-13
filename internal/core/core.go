@@ -67,6 +67,9 @@ type Core struct {
 	// appsCheck serializa o CheckApps: duas checagens juntas (fim de dois
 	// deploys) publicariam fora de ordem e a mais velha apagaria a nova
 	appsCheck sync.Mutex
+	// autoErrs e o ultimo erro da consulta do deploy automatico por app
+	// (pra registrar no log so quando muda); protegido por mu
+	autoErrs map[string]string
 }
 
 // New cria o Core. Nenhuma acao roda aqui: quem decide quando checar o

@@ -37,6 +37,12 @@ Fluxo de um app novo:
    antes do build e diz o motivo e a correcao: corrija no repositorio e tente
    de novo. Depois do deploy, apps_list e app_logs mostram como ficou.
 
+Homologacao: e um app com promote_to apontando pra producao (mesmo
+repositorio, compose proprio, ex: docker-compose.homolog.yaml, e rotas com o
+nome dela). Valide nela e use app_promote_check e app_promote pra levar o
+commit pra producao; o deploy direto da producao pula a validacao.
+auto_deploy faz o deploy sozinho a cada commit novo na branch do app.
+
 Variaveis valem no proximo deploy; secrets tambem (arquivo em
 ${CAIS_SECRETS}/<nome>, no container /run/secrets/<nome>). Valores de secret
 nunca sao devolvidos.
@@ -101,16 +107,24 @@ type (
 		Value string `json:"value" jsonschema:"valor do secret"`
 	}
 	appCreateArgs struct {
-		Name    string `json:"name" jsonschema:"nome do app: minusculas, numeros e -"`
-		Repo    string `json:"repo" jsonschema:"repositorio do GitHub: dono/repo ou o link"`
-		Branch  string `json:"branch,omitempty" jsonschema:"branch do deploy (padrao: a principal do repositorio)"`
-		Compose string `json:"compose,omitempty" jsonschema:"compose de producao a partir da raiz do repositorio (padrao docker-compose.yml)"`
+		Name       string `json:"name" jsonschema:"nome do app: minusculas, numeros e -"`
+		Repo       string `json:"repo" jsonschema:"repositorio do GitHub: dono/repo ou o link"`
+		Branch     string `json:"branch,omitempty" jsonschema:"branch do deploy (padrao: a principal do repositorio)"`
+		Compose    string `json:"compose,omitempty" jsonschema:"compose de producao a partir da raiz do repositorio (padrao docker-compose.yml)"`
+		PromoteTo  string `json:"promote_to,omitempty" jsonschema:"o app novo e a homologacao deste app (a producao, mesmo repositorio)"`
+		AutoDeploy bool   `json:"auto_deploy,omitempty" jsonschema:"deploy automatico a cada commit novo na branch"`
 	}
 	appUpdateArgs struct {
-		App     string `json:"app" jsonschema:"nome do app"`
-		Repo    string `json:"repo,omitempty" jsonschema:"novo repositorio (vazio mantem)"`
-		Branch  string `json:"branch,omitempty" jsonschema:"nova branch (vazio mantem)"`
-		Compose string `json:"compose,omitempty" jsonschema:"novo arquivo de compose (vazio mantem)"`
+		App        string `json:"app" jsonschema:"nome do app"`
+		Repo       string `json:"repo,omitempty" jsonschema:"novo repositorio (vazio mantem)"`
+		Branch     string `json:"branch,omitempty" jsonschema:"nova branch (vazio mantem)"`
+		Compose    string `json:"compose,omitempty" jsonschema:"novo arquivo de compose (vazio mantem)"`
+		PromoteTo  string `json:"promote_to,omitempty" jsonschema:"vira homologacao deste app (off desfaz; vazio mantem)"`
+		AutoDeploy *bool  `json:"auto_deploy,omitempty" jsonschema:"deploy automatico a cada commit novo na branch (ausente mantem)"`
+	}
+	promoteArgs struct {
+		App     string `json:"app" jsonschema:"a homologacao"`
+		Confirm bool   `json:"confirm,omitempty" jsonschema:"aceita voltar a producao pra um commit mais velho (so com o ok do usuario)"`
 	}
 	deployArgs struct {
 		App string `json:"app" jsonschema:"nome do app"`
@@ -208,11 +222,12 @@ func (t tools) register(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "app_create", Annotations: action(),
 		Description: "Cadastra um app (nao faz deploy). O codigo vem do GitHub pelo GitHub App do cais no deploy."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in appCreateArgs) (*mcp.CallToolResult, apps.App, error) {
-			a, err := t.api.CreateApp(ctx, apps.App{Name: in.Name, Repo: in.Repo, Branch: in.Branch, Compose: in.Compose})
+			a, err := t.api.CreateApp(ctx, apps.App{Name: in.Name, Repo: in.Repo, Branch: in.Branch, Compose: in.Compose,
+				PromoteTo: in.PromoteTo, AutoDeploy: in.AutoDeploy})
 			return nil, a, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_update", Annotations: idempotent(),
-		Description: "Troca repositorio, branch ou arquivo de compose do app (vale no proximo deploy). Campo vazio mantem o atual."},
+		Description: "Troca repositorio, branch, arquivo de compose, a producao (quando o app e homologacao) ou o deploy automatico (vale no proximo deploy). Campo vazio mantem o atual."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in appUpdateArgs) (*mcp.CallToolResult, any, error) {
 			a, err := t.app(ctx, in.App)
 			if err != nil {
@@ -227,10 +242,40 @@ func (t tools) register(s *mcp.Server) {
 			if in.Compose != "" {
 				a.Compose = in.Compose
 			}
+			switch in.PromoteTo {
+			case "":
+			case "off":
+				a.PromoteTo = ""
+			default:
+				a.PromoteTo = in.PromoteTo
+			}
+			if in.AutoDeploy != nil {
+				a.AutoDeploy = *in.AutoDeploy
+			}
 			if err := t.api.UpdateApp(ctx, a); err != nil {
 				return nil, nil, err
 			}
-			return text(fmt.Sprintf("%s: repositorio %s, branch %s, compose %s (vale no proximo deploy).", a.Name, a.Repo, cmpOr(a.Branch, "a principal"), a.ComposeFile())), nil, nil
+			mode := "manual"
+			if a.AutoDeploy {
+				mode = "automatico a cada commit na branch"
+			}
+			out := fmt.Sprintf("%s: repositorio %s, branch %s, compose %s, deploy %s (vale no proximo deploy).", a.Name, a.Repo, cmpOr(a.Branch, "a principal"), a.ComposeFile(), mode)
+			if a.PromoteTo != "" {
+				out += " Homologacao de " + a.PromoteTo + "."
+			}
+			return text(out), nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "app_promote_check", Annotations: readOnly(),
+		Description: "Diz se o commit no ar na homologacao pode ir pra producao: state ready (pode), same (ja esta), older (voltaria a producao: pede confirmacao do usuario) ou blocked (reason diz o que fazer, ex: merge). unvalidated sao commits na branch da producao que nao passaram pela homologacao."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in appArgs) (*mcp.CallToolResult, apps.Promotion, error) {
+			p, err := t.api.CheckPromotion(ctx, in.App)
+			return nil, p, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "app_promote", Annotations: action(),
+		Description: "Sobe na producao o commit validado (no ar e de pe) na homologacao, pelo deploy normal: build com a versao no ar e volta automatica se falhar. O commit tem que estar na branch da producao (merge antes). Voltar a producao pra um commit mais velho so com confirm, depois de perguntar ao usuario. Pode levar minutos."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in promoteArgs) (*mcp.CallToolResult, apps.DeployResult, error) {
+			res, err := t.api.PromoteApp(ctx, in.App, in.Confirm)
+			return nil, res, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_deploy", Annotations: action(),
 		Description: "Deploy do app: baixa o commit, faz o build com a versao antiga no ar e sobe esperando os healthchecks. Se o up falhar, a versao anterior volta. Compose fora do formato do cais e recusado antes do build, com o motivo e a correcao. Pode levar minutos."},

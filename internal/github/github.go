@@ -154,6 +154,11 @@ func IsNotFound(err error) bool {
 
 // do faz uma chamada a API. auth e "Bearer <jwt>" ou "token <instalacao>".
 func (a App) do(ctx context.Context, method, path, auth, accept string, body, out any) ([]byte, error) {
+	return a.doLimit(ctx, method, path, auth, accept, body, out, maxFile)
+}
+
+// doLimit e o do com outro limite de tamanho da resposta.
+func (a App) doLimit(ctx context.Context, method, path, auth, accept string, body, out any, limit int) ([]byte, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -181,11 +186,11 @@ func (a App) do(ctx context.Context, method, path, auth, accept string, body, ou
 		return nil, fmt.Errorf("falando com o GitHub: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFile+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxFile {
+	if len(data) > limit {
 		return nil, fmt.Errorf("resposta do GitHub grande demais (%s)", path)
 	}
 	if resp.StatusCode >= 300 {

@@ -52,11 +52,20 @@ type API interface {
 	// CreateApp cria o app (repositorio, branch, compose); o codigo so vem
 	// no deploy.
 	CreateApp(ctx context.Context, a apps.App) (apps.App, error)
-	// UpdateApp troca repositorio, branch e compose (vale no proximo deploy).
+	// UpdateApp troca repositorio, branch, compose, a producao (quando o app
+	// e homologacao) e o deploy automatico; o codigo novo vale no proximo
+	// deploy.
 	UpdateApp(ctx context.Context, a apps.App) error
 	// DeployApp baixa o commit de ref (vazio = o mais novo da branch), faz
 	// o build com a versao antiga no ar e sobe; se falhar, a anterior volta.
 	DeployApp(ctx context.Context, name, ref string) (apps.DeployResult, error)
+	// CheckPromotion diz se o commit no ar na homologacao pode ir pra
+	// producao, e por que nao quando nao pode. Nao muda nada.
+	CheckPromotion(ctx context.Context, from string) (apps.Promotion, error)
+	// PromoteApp sobe na producao o commit validado na homologacao, pelo
+	// deploy normal. Voltar a producao pra um commit mais velho so com
+	// confirm.
+	PromoteApp(ctx context.Context, from string, confirm bool) (apps.DeployResult, error)
 	// RestartApp reinicia um service do app (ou todos, com service vazio).
 	RestartApp(ctx context.Context, name, service string) error
 	// StopApp para o app sem apagar nada.

@@ -15,11 +15,11 @@ func (m *model) viewDashboard(h int) string {
 	e := m.state.Environment
 	body := m.th.bold().Render("Ambiente") + "\n" + m.renderEnvironment(e)
 
-	btn := m.th.pill(false)
+	k := btnNormal
 	if e.Checking {
-		btn = m.th.disabledPill()
+		k = btnOff
 	}
-	button := m.zones.Mark("check", btn.Render("Verificar novamente"))
+	button := m.zones.Mark("check", m.th.button("Verificar novamente", k, false))
 	return m.th.panel(false, m.w-2, h-2).Render(body + "\n\n" + button)
 }
 

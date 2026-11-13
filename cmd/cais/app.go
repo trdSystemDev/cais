@@ -40,7 +40,7 @@ func runApps(args []string) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "APP\tREPOSITORIO\tCONTAINERS\tNO AR\tULTIMO DEPLOY")
+	fmt.Fprintln(w, "APP\tREPOSITORIO\tDEPLOY\tCONTAINERS\tNO AR\tULTIMO DEPLOY")
 	for _, a := range list.List {
 		running := 0
 		for _, ct := range a.Containers {
@@ -62,11 +62,25 @@ func runApps(args []string) error {
 				}
 				last += ")"
 			}
+			switch {
+			case a.Last.PromotedFrom != "":
+				last += " promovido de " + a.Last.PromotedFrom
+			case a.Last.Auto:
+				last += " automatico"
+			}
 		}
 		if a.Deploying {
 			last = "deploy em andamento"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d/%d rodando\t%s\t%s\n", a.Name, a.Repo, running, len(a.Containers), commit, last)
+		mode := "manual"
+		if a.AutoDeploy {
+			mode = "auto (" + cmpOr(a.Branch, "principal") + ")"
+		}
+		name := a.Name
+		if a.PromoteTo != "" {
+			name += " (homolog de " + a.PromoteTo + ")"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d/%d rodando\t%s\t%s\n", name, a.Repo, mode, running, len(a.Containers), commit, last)
 	}
 	return w.Flush()
 }
@@ -87,7 +101,9 @@ func runApp(args []string) error {
 	unset := fs.String("unset", "", "variaveis a remover, separadas por virgula")
 	importEnv := fs.String("import", "", "env: arquivo .env pra juntar nas variaveis (- le do stdin)")
 	volumes := fs.Bool("volumes", false, "delete: apaga tambem os volumes do compose (os dados)")
-	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
+	yes := fs.Bool("yes", false, "delete: nao pede confirmacao; promote: aceita voltar a producao pra um commit mais velho")
+	promoteTo := fs.String("promote-to", "", "create/set: o app e homologacao deste (a producao); set: off desfaz")
+	auto := fs.String("auto", "", "create/set: deploy automatico a cada commit na branch (on ou off)")
 	pos := parseInterspersed(fs, args)
 	arg := func(i int) string {
 		if i < len(pos) {
@@ -96,7 +112,7 @@ func runApp(args []string) error {
 		return ""
 	}
 	need := map[string][2]int{ // minimo e maximo de argumentos
-		"create": {2, 2}, "deploy": {1, 1}, "guide": {1, 1}, "env": {1, -1},
+		"create": {2, 2}, "deploy": {1, 1}, "promote": {1, 1}, "set": {1, 1}, "guide": {1, 1}, "env": {1, -1},
 		"secrets": {1, 1}, "secret": {2, 2}, "restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "delete": {1, 1}, "db": {1, 3}, "bucket": {1, 3},
 	}
 	lim, ok := need[sub]
@@ -107,6 +123,10 @@ func runApp(args []string) error {
 		return fmt.Errorf("argumentos errados\nuso: %s (detalhes: cais app %s -h)", usageOf("app "+sub), sub)
 	}
 	name := arg(0)
+	autoOn, err := onOff(*auto)
+	if err != nil {
+		return err
+	}
 
 	c, err := connect(*socket)
 	if err != nil {
@@ -121,11 +141,19 @@ func runApp(args []string) error {
 		if err != nil {
 			return err
 		}
-		a, err := c.CreateApp(ctx, apps.App{Name: name, Repo: repo.String(), Branch: *branch, Compose: *composeFile})
+		a, err := c.CreateApp(ctx, apps.App{Name: name, Repo: repo.String(), Branch: *branch, Compose: *composeFile,
+			PromoteTo: *promoteTo, AutoDeploy: autoOn != nil && *autoOn})
 		if err != nil {
 			return err
 		}
-		fmt.Printf("App %s criado (github.com/%s, compose %s).\n\n", a.Name, a.Repo, a.ComposeFile())
+		fmt.Printf("App %s criado (github.com/%s, compose %s).\n", a.Name, a.Repo, a.ComposeFile())
+		if a.PromoteTo != "" {
+			fmt.Printf("Homologacao de %s: valide aqui e promova com: cais app promote %s\n", a.PromoteTo, a.Name)
+		}
+		if a.AutoDeploy {
+			fmt.Printf("Deploy automatico a cada commit na branch %s.\n", cmpOr(a.Branch, "principal"))
+		}
+		fmt.Println()
 		fmt.Printf("Modelo de compose com labels, redes e secrets: cais app guide %s\n", a.Name)
 		fmt.Printf("Variaveis: cais app env %s VAR=valor ...   Secrets: cais app secret %s <nome>\n", a.Name, a.Name)
 		fmt.Printf("Deploy: cais app deploy %s\n", a.Name)
@@ -139,6 +167,10 @@ func runApp(args []string) error {
 			return err
 		}
 		fmt.Printf("%s no ar no commit %s.\n", name, short(res.Commit))
+	case "promote":
+		return appPromote(ctx, c, name, *yes)
+	case "set":
+		return appSet(ctx, c, name, fs, *promoteTo, autoOn)
 	case "guide":
 		text, err := c.AppGuide(ctx, name)
 		if err != nil {
@@ -208,6 +240,101 @@ func runApp(args []string) error {
 			return err
 		}
 		fmt.Print(out)
+	}
+	return nil
+}
+
+// onOff le o valor de -auto (vazio: nao mexe).
+func onOff(v string) (*bool, error) {
+	switch v {
+	case "":
+		return nil, nil
+	case "on":
+		t := true
+		return &t, nil
+	case "off":
+		f := false
+		return &f, nil
+	}
+	return nil, fmt.Errorf("-auto e on ou off, nao %q", v)
+}
+
+// appPromote mostra o que a promocao faz e sobe na producao o commit
+// validado na homologacao.
+func appPromote(ctx context.Context, c *rpc.Client, name string, yes bool) error {
+	p, err := c.CheckPromotion(ctx, name)
+	if err != nil {
+		return err
+	}
+	switch p.State {
+	case apps.PromoteBlocked:
+		return errors.New(p.Reason)
+	case apps.PromoteSame:
+		fmt.Printf("Nada a promover: %s.\n", p.Reason)
+		return nil
+	case apps.PromoteOlder:
+		if !yes {
+			return fmt.Errorf("%s.\nPra promover mesmo assim: cais app promote %s -yes", p.Reason, name)
+		}
+	}
+	fmt.Printf("Promovendo %s (validado em %s) pra %s: build com a versao atual no ar e up...\n", short(p.Deploy), name, p.To)
+	res, err := c.PromoteApp(ctx, name, yes)
+	for _, w := range res.Warnings {
+		fmt.Printf("  aviso: %s\n", w)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s no ar no commit %s.\n", p.To, short(res.Commit))
+	return nil
+}
+
+// appSet troca branch, compose, producao e deploy automatico do app; so o
+// que veio nas flags muda.
+func appSet(ctx context.Context, c *rpc.Client, name string, fs *flag.FlagSet, promoteTo string, auto *bool) error {
+	list, err := c.CheckApps(ctx)
+	if err != nil {
+		return err
+	}
+	var a *apps.App
+	for i := range list.List {
+		if list.List[i].Name == name {
+			a = &list.List[i].App
+		}
+	}
+	if a == nil {
+		return fmt.Errorf("app %s nao existe", name)
+	}
+	changed := false
+	fs.Visit(func(f *flag.Flag) {
+		v := f.Value.String()
+		switch f.Name {
+		case "branch":
+			a.Branch, changed = v, true
+		case "compose":
+			a.Compose, changed = v, true
+		case "promote-to":
+			a.PromoteTo, changed = v, true
+			if v == "off" {
+				a.PromoteTo = ""
+			}
+		case "auto":
+			a.AutoDeploy, changed = *auto, true
+		}
+	})
+	if !changed {
+		return errors.New("nada a mudar: use -branch, -compose, -promote-to ou -auto")
+	}
+	if err := c.UpdateApp(ctx, *a); err != nil {
+		return err
+	}
+	mode := "manual"
+	if a.AutoDeploy {
+		mode = "automatico a cada commit na " + cmpOr(a.Branch, "branch principal")
+	}
+	fmt.Printf("%s: branch %s, compose %s, deploy %s.\n", a.Name, cmpOr(a.Branch, "principal"), a.ComposeFile(), mode)
+	if a.PromoteTo != "" {
+		fmt.Printf("Homologacao de %s (cais app promote %s).\n", a.PromoteTo, a.Name)
 	}
 	return nil
 }

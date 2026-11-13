@@ -30,6 +30,22 @@ type Rules struct {
 	// Networks sao as redes externas que o app pode usar agora: a
 	// proxy_network e as das stacks ligadas.
 	Networks []string
+	// Apps sao os outros apps: um nome do Traefik pertence ao app de nome
+	// mais longo que o prefixa (portal-homolog-web e de portal-homolog, nao de
+	// portal).
+	Apps []string
+}
+
+// traefikOwner diz de qual app e um nome de router/service/middleware: o
+// de nome mais longo entre os que o prefixam (nome igual ou nome-...).
+func traefikOwner(name string, apps []string) string {
+	owner := ""
+	for _, a := range apps {
+		if (name == a || strings.HasPrefix(name, a+"-")) && len(a) > len(owner) {
+			owner = a
+		}
+	}
+	return owner
 }
 
 // ComposeError e um compose fora do formato do cais: cada problema diz o
@@ -222,8 +238,11 @@ func CheckCompose(configJSON []byte, r Rules) (problems, warnings []string) {
 				continue
 			}
 			traefik = true
-			if name := m[2]; name != r.App && !strings.HasPrefix(name, r.App+"-") {
-				bad(n, "o label %s usa o nome %q no Traefik: nomes de router, service e middleware comecam com o nome do app (%s ou %s-<algo>), senao um app pisa na rota de outro", k, name, r.App, r.App)
+			switch owner := traefikOwner(m[2], append([]string{r.App}, r.Apps...)); {
+			case owner == "":
+				bad(n, "o label %s usa o nome %q no Traefik: nomes de router, service e middleware comecam com o nome do app (%s ou %s-<algo>), senao um app pisa na rota de outro", k, m[2], r.App, r.App)
+			case owner != r.App:
+				bad(n, "o label %s usa o nome %q no Traefik, que e do app %s: use %s ou %s-<algo> sem cair no prefixo de %s", k, m[2], owner, r.App, r.App, owner)
 			}
 		}
 		if traefik {

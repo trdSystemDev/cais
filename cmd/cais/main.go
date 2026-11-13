@@ -80,6 +80,7 @@ func newFlags(name string) (*flag.FlagSet, *string) {
 func runDaemon(args []string) error {
 	fs, socket := newFlags("daemon")
 	group := fs.String("group", "", "grupo que pode usar o cais (alem do root)")
+	autoEvery := fs.Duration("auto-every", time.Minute, "intervalo da consulta do deploy automatico ao GitHub")
 	fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -91,6 +92,8 @@ func runDaemon(args []string) error {
 	}
 	c := core.New(core.Deps{})
 	go c.CheckEnvironment(ctx)
+	// deploy automatico: consulta o GitHub (nada de webhook, nenhuma porta)
+	go c.RunAutoDeploy(ctx, *autoEvery)
 
 	log.Printf("cais daemon %s ouvindo em %s", version, *socket)
 	err = rpc.Serve(ctx, ln, c)

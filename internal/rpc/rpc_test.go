@@ -425,6 +425,12 @@ func (f *fakeAppDocker) Down(context.Context, string, bool) error              {
 type fakeSource struct{}
 
 func (fakeSource) Resolve(context.Context, string, string) (string, error) { return "c0ffee", nil }
+func (fakeSource) Compare(context.Context, string, string, string) (apps.Comparison, error) {
+	return apps.Comparison{Status: "identical"}, nil
+}
+func (fakeSource) Tree(_ context.Context, _, commit string) (string, error) {
+	return "tree-" + commit, nil
+}
 func (fakeSource) Download(_ context.Context, _, _, dir string) error {
 	os.Mkdir(dir, 0o700)
 	return os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o644)

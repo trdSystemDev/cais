@@ -86,13 +86,7 @@ func newDBPanel(api core.API, zones *zone.Manager, th theme) *dbPanel {
 func (p *dbPanel) setTheme(th theme) {
 	p.th = th
 	for _, ti := range []*textinput.Model{p.name, p.exts, p.delInput} {
-		s := textinput.DefaultStyles(true)
-		for _, st := range []*textinput.StyleState{&s.Focused, &s.Blurred} {
-			st.Text = lipgloss.NewStyle().Foreground(th.fieldFg).Background(th.fieldBg)
-			st.Placeholder = lipgloss.NewStyle().Foreground(th.muted).Background(th.fieldBg).Italic(true)
-		}
-		s.Cursor.Color = th.accent
-		ti.SetStyles(s)
+		th.styleInput(ti)
 	}
 }
 
@@ -380,7 +374,6 @@ func (p *dbPanel) view(w, h int) string {
 	var b strings.Builder
 	b.WriteString(t.bold().Render("Novo "+what+" no "+p.engine) + "\n")
 	b.WriteString(wrap.Inherit(muted).Render(desc) + "\n\n")
-	field := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(29)
 	focusID := p.focusID()
 	var buttons []string
 	for _, id := range p.ids() {
@@ -394,17 +387,20 @@ func (p *dbPanel) view(w, h int) string {
 			if focused {
 				marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(12)
 			}
-			b.WriteString(p.zones.Mark(id, marker+ls.Render(label)+field.Render(ti.View())) + "\n")
+			b.WriteString(p.zones.Mark(id, marker+ls.Render(label)+t.input(ti, 29)) + "\n")
 			continue
 		}
 		label := map[string]string{"db-create": "Criar", "db-close": "Fechar"}[id]
-		st := t.pill(focused)
-		if p.busy && id == "db-create" {
-			st, label = t.disabledPill(), "Criando..."
+		k := btnNormal
+		if id == "db-close" {
+			k = btnNeutral
 		}
-		buttons = append(buttons, p.zones.Mark(id, st.Render(label)))
+		if p.busy && id == "db-create" {
+			k, label = btnOff, "Criando..."
+		}
+		buttons = append(buttons, " ", p.zones.Mark(id, t.button(label, k, focused)))
 	}
-	b.WriteString("\n  " + strings.Join(buttons, " ") + "\n")
+	b.WriteString("\n" + lipgloss.JoinHorizontal(lipgloss.Top, buttons...) + "\n")
 	if p.err != "" && p.delName == "" {
 		b.WriteString("\n" + wrap.Foreground(t.danger).Render(p.err) + "\n")
 	}
@@ -419,7 +415,7 @@ func (p *dbPanel) view(w, h int) string {
 	if len(p.list) > 0 {
 		b.WriteString("\n" + t.bold().Render("Ja criados") + "\n")
 		del := func(name string) string {
-			return p.zones.Mark("db-del:"+name, t.pill(focusID == "db-del:"+name || p.delName == name).Render("excluir"))
+			return p.zones.Mark("db-del:"+name, t.chip("✕ excluir", btnDanger, focusID == "db-del:"+name || p.delName == name))
 		}
 		writeInfraRows(&b, nameLabel, p.list, t, w-6, del)
 	}
@@ -434,13 +430,14 @@ func (p *dbPanel) view(w, h int) string {
 		if focusID == "db-del-confirm" {
 			marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(12)
 		}
-		b.WriteString(p.zones.Mark("db-del-confirm", marker+ls.Render("Confirmar")+field.Render(p.delInput.View())) + "\n")
-		ok, label := t.pill(focusID == "db-del-ok"), "Excluir"
+		b.WriteString(p.zones.Mark("db-del-confirm", marker+ls.Render("Confirmar")+t.input(p.delInput, 29)) + "\n")
+		k, label := btnDanger, "Excluir"
 		if p.busy {
-			ok, label = t.disabledPill(), "Excluindo..."
+			k, label = btnOff, "Excluindo..."
 		}
-		b.WriteString("\n  " + p.zones.Mark("db-del-ok", ok.Render(label)) + " " +
-			p.zones.Mark("db-del-cancel", t.pill(focusID == "db-del-cancel").Render("Cancelar")) + "\n")
+		b.WriteString("\n" + lipgloss.JoinHorizontal(lipgloss.Top, "  ",
+			p.zones.Mark("db-del-ok", t.button(label, k, focusID == "db-del-ok")), " ",
+			p.zones.Mark("db-del-cancel", t.button("Cancelar", btnNeutral, focusID == "db-del-cancel"))) + "\n")
 		if p.err != "" {
 			b.WriteString("\n" + wrap.Foreground(t.danger).Render(p.err) + "\n")
 		}

@@ -140,13 +140,7 @@ func (p *setupPage) setTheme(th theme) {
 		if it.input == nil {
 			continue
 		}
-		s := textinput.DefaultStyles(true)
-		for _, st := range []*textinput.StyleState{&s.Focused, &s.Blurred} {
-			st.Text = lipgloss.NewStyle().Foreground(th.fieldFg).Background(th.fieldBg)
-			st.Placeholder = lipgloss.NewStyle().Foreground(th.muted).Background(th.fieldBg).Italic(true)
-		}
-		s.Cursor.Color = th.accent
-		it.input.SetStyles(s)
+		th.styleInput(it.input)
 	}
 }
 
@@ -411,11 +405,14 @@ func (p *setupPage) viewForm() string {
 	last := -1
 	for i, it := range p.items {
 		if it.kind == kindButton {
-			st := t.pill(i == p.focus)
+			k := btnNormal
 			if it.id == "run" && !p.canRun() {
-				st = t.disabledPill()
+				k = btnOff
 			}
-			buttons = append(buttons, p.zones.Mark(it.id, st.Render(it.label)))
+			if len(buttons) > 0 {
+				buttons = append(buttons, " ")
+			}
+			buttons = append(buttons, p.zones.Mark(it.id, t.button(it.label, k, i == p.focus)))
 			continue
 		}
 		if it.section != last {
@@ -435,13 +432,13 @@ func (p *setupPage) viewForm() string {
 		var value string
 		switch it.kind {
 		case kindInput:
-			value = field.Render(it.input.View())
+			value = t.input(it.input, 30)
 		case kindSelect:
 			value = field.Render("‹ " + []string{"Let's Encrypt", "CA local (teste)"}[p.tls] + " ›")
 		}
 		rows = append(rows, p.zones.Mark(it.id, marker+label+value))
 	}
-	return strings.Join(rows, "\n") + "\n\n  " + strings.Join(buttons, "  ")
+	return strings.Join(rows, "\n") + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, append([]string{"  "}, buttons...)...)
 }
 
 func (p *setupPage) viewPlan(w int) string {

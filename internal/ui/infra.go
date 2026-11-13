@@ -168,23 +168,26 @@ func (m *model) viewInfra(h int) string {
 			if st.Enabled {
 				text = "Desligar"
 			}
-			btn := t.pill(false)
-			if m.busy() {
-				btn = t.disabledPill()
+			k := btnNormal
+			if st.Enabled {
+				k = btnDanger
 			}
-			line += "  " + m.zones.Mark("toggle:"+name, btn.Render(text))
+			if m.busy() {
+				k = btnOff
+			}
+			line += "  " + m.zones.Mark("toggle:"+name, t.chip(text, k, false))
 			if (name == "postgres" || name == "mysql") && st.Enabled && st.Installed {
-				line += " " + m.zones.Mark("newdb:"+name, t.pill(m.db.engine == name).Render("Novo banco"))
+				line += " " + m.zones.Mark("newdb:"+name, t.chip("+ Novo banco", btnNormal, m.db.engine == name))
 			}
 			if name == "garage" && st.Enabled && st.Installed {
-				line += " " + m.zones.Mark("newdb:"+name, t.pill(m.db.engine == name).Render("Novo bucket"))
+				line += " " + m.zones.Mark("newdb:"+name, t.chip("+ Novo bucket", btnNormal, m.db.engine == name))
 			}
 		}
 		card := t.panel(selected, leftW-4, 2).Render(ansi.Truncate(title, leftW-6, "…") + "\n" + line)
 		cards = append(cards, m.zones.Mark("stack:"+name, card))
 	}
 	header := t.bold().Render("Infra") + "  " + t.fg(t.muted).Render("Base e servicos")
-	footer := m.zones.Mark("infra-refresh", t.pill(false).Render("Atualizar"))
+	footer := m.zones.Mark("infra-refresh", t.button("Atualizar", btnNormal, false))
 	if !m.state.Infra.CheckedAt.IsZero() {
 		footer += "\n" + t.fg(t.muted).Render("Ultima verificacao: "+m.state.Infra.CheckedAt.Local().Format("15:04:05"))
 	}
@@ -254,13 +257,8 @@ func (m *model) viewInfraLogs(w, h int) string {
 	}
 	var b strings.Builder
 	title := "Logs · " + st.Name
-	if s := m.logSelection; len(s.lines) > 0 {
-		title = fmt.Sprintf("Logs · %d–%d/%d", s.viewStart+1, min(len(s.lines), s.viewStart+s.viewHeight), len(s.lines))
-		if s.viewStart == 0 {
-			title += " · início"
-		} else if s.viewStart+s.viewHeight == len(s.lines) {
-			title += " · fim"
-		}
+	if pos := m.logPosition(); pos != "" {
+		title = "Logs · " + pos
 	}
 	b.WriteString(t.bold().Render(ansi.Truncate(title, w-6, "…")) + "\n")
 	if len(st.Containers) > 0 {
@@ -307,6 +305,22 @@ func (m *model) viewInfraLogs(w, h int) string {
 	}
 	m.writeLogs(&b, empty, w, h)
 	return t.panel(false, w-2, h).MaxHeight(h + 2).Render(b.String())
+}
+
+// logPosition diz quais linhas do log estao na tela durante a selecao
+// ("31–60/100", com "· início" ou "· fim" nos limites); vazio sem selecao.
+func (m *model) logPosition() string {
+	s := m.logSelection
+	if len(s.lines) == 0 {
+		return ""
+	}
+	pos := fmt.Sprintf("%d–%d/%d", s.viewStart+1, min(len(s.lines), s.viewStart+s.viewHeight), len(s.lines))
+	if s.viewStart == 0 {
+		pos += " · início"
+	} else if s.viewStart+s.viewHeight == len(s.lines) {
+		pos += " · fim"
+	}
+	return pos
 }
 
 // writeLogs escreve o texto dos logs (m.logsText) no fim de b, com a

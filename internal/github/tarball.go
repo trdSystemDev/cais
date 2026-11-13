@@ -184,3 +184,47 @@ func insideReal(root, dir string) error {
 	}
 	return nil
 }
+
+// maxCompare e o limite da resposta do compare: ela traz a lista de
+// arquivos com os patches, que o cais nao usa mas nao da pra desligar.
+const maxCompare = 64 << 20
+
+// Comparison e a relacao entre dois commits (o compare do GitHub).
+type Comparison struct {
+	// Status: "ahead" (head tem commits que base nao tem), "behind" (head
+	// ja esta no historico de base), "identical" ou "diverged".
+	Status   string `json:"status"`
+	AheadBy  int    `json:"ahead_by"`
+	BehindBy int    `json:"behind_by"`
+}
+
+// Compare compara head com base (branch, tag ou sha).
+func (s *Session) Compare(ctx context.Context, base, head string) (Comparison, error) {
+	var c Comparison
+	path := s.repoPath("/compare/" + url.PathEscape(base) + "..." + url.PathEscape(head) + "?per_page=1")
+	_, err := s.app.doLimit(ctx, http.MethodGet, path, "token "+s.token, "", nil, &c, maxCompare)
+	if IsNotFound(err) {
+		return c, fmt.Errorf("nao achei %s ou %s em %s", base, head, s.Repo)
+	}
+	if err == nil && c.Status == "" {
+		err = fmt.Errorf("resposta inesperada do GitHub no compare de %s...%s", base, head)
+	}
+	return c, err
+}
+
+// Tree devolve o sha da arvore de arquivos do commit: commits com a mesma
+// arvore tem exatamente o mesmo codigo.
+func (s *Session) Tree(ctx context.Context, commit string) (string, error) {
+	var out struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if _, err := s.call(ctx, http.MethodGet, s.repoPath("/git/commits/"+url.PathEscape(commit)), "", nil, &out); err != nil {
+		return "", err
+	}
+	if out.Tree.SHA == "" {
+		return "", fmt.Errorf("resposta inesperada do GitHub pra arvore de %s", commit)
+	}
+	return out.Tree.SHA, nil
+}

@@ -21,10 +21,18 @@ type fakeSource struct {
 	head    string                       // commit da branch
 	commits map[string]map[string]string // commit -> caminho -> conteudo
 	refs    []string                     // refs pedidos no Resolve
+	// historico pra promocao: pais de cada commit, outras branches e
+	// arvore (commits com a mesma arvore tem o mesmo codigo)
+	parents  map[string][]string
+	branches map[string]string
+	trees    map[string]string
 }
 
 func (f *fakeSource) Resolve(_ context.Context, repo, ref string) (string, error) {
 	f.refs = append(f.refs, ref)
+	if c, ok := f.branches[ref]; ok {
+		return c, nil
+	}
 	if _, ok := f.commits[ref]; ok {
 		return ref, nil
 	}
@@ -46,6 +54,59 @@ func (f *fakeSource) Download(_ context.Context, _, commit, dir string) error {
 		}
 	}
 	return nil
+}
+
+// history e o commit e todos os seus ancestrais.
+func (f *fakeSource) history(c string) map[string]bool {
+	seen := map[string]bool{}
+	for todo := []string{c}; len(todo) > 0; todo = todo[1:] {
+		if !seen[todo[0]] {
+			seen[todo[0]] = true
+			todo = append(todo, f.parents[todo[0]]...)
+		}
+	}
+	return seen
+}
+
+func (f *fakeSource) Compare(ctx context.Context, repo, base, head string) (Comparison, error) {
+	b, err := f.Resolve(ctx, repo, base)
+	if err != nil {
+		return Comparison{}, err
+	}
+	h, err := f.Resolve(ctx, repo, head)
+	if err != nil {
+		return Comparison{}, err
+	}
+	hb, hh := f.history(b), f.history(h)
+	var c Comparison
+	for x := range hh {
+		if !hb[x] {
+			c.AheadBy++
+		}
+	}
+	for x := range hb {
+		if !hh[x] {
+			c.BehindBy++
+		}
+	}
+	switch {
+	case c.AheadBy == 0 && c.BehindBy == 0:
+		c.Status = "identical"
+	case c.BehindBy == 0:
+		c.Status = "ahead"
+	case c.AheadBy == 0:
+		c.Status = "behind"
+	default:
+		c.Status = "diverged"
+	}
+	return c, nil
+}
+
+func (f *fakeSource) Tree(_ context.Context, _, commit string) (string, error) {
+	if t, ok := f.trees[commit]; ok {
+		return t, nil
+	}
+	return "tree-" + commit, nil
 }
 
 // fakeDocker registra o que o deploy pediu, com o compose de cada chamada
@@ -375,7 +436,7 @@ func TestParseEnvDeArquivoComum(t *testing.T) {
 
 func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
 	src, secretsDir := "/var/lib/cais/apps/web/src.next", "/var/lib/cais/apps/web/secrets"
-	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}}
+	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}, Apps: []string{"web-homolog"}}
 	cases := map[string]struct{ svc, top, want string }{
 		"porta":             {`"ports": [{"published": "8080", "target": 3000}]`, "", "tire o ports"},
 		"porta aleatoria":   {`"ports": [{"target": 3000}]`, "", "porta aleatoria"},
@@ -396,6 +457,7 @@ func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
 		"build ssh":         {`"build": {"context": "` + src + `", "ssh": ["default"]}`, "", "ssh"},
 		"router de outro":   {`"labels": {"traefik.http.routers.loja.rule": "Host(` + "`x`" + `)"}, "networks": {"proxy_network": null}`, "", "comecam com o nome do app"},
 		"traefik sem rede":  {`"labels": {"traefik.enable": "true"}`, "", "nao esta na proxy_network"},
+		"router da homolog": {`"labels": {"traefik.http.routers.web-homolog.rule": "Host(` + "`x`" + `)"}, "networks": {"proxy_network": null}`, "", "que e do app web-homolog"},
 		"rede de outro app": {"", `"networks": {"outra": {"name": "loja_default", "external": true}}`, "nao e da infra"},
 		"rede com name":     {"", `"networks": {"outra": {"name": "loja_default"}}`, "Tire o name"},
 		"infra desligada":   {"", `"networks": {"mysql_network": {"name": "mysql_network", "external": true}}`, "Ligue o mysql"},

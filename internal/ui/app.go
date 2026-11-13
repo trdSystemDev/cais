@@ -382,7 +382,14 @@ func (m *model) View() tea.View {
 	case tabSetup:
 		body = m.setup.view(m.w, bodyH)
 	}
-	content := m.zones.Scan(lipgloss.JoinVertical(lipgloss.Left, header, body, footer))
+	content := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	if m.tab == tabApps && m.apps.info != nil {
+		// sem zona no Fechar: o compositor perde as marcas, e qualquer clique fecha
+		box := m.th.modal(*m.apps.info, m.w, m.th.button("Fechar", btnNormal, true))
+		content = lipgloss.NewCompositor(lipgloss.NewLayer(content), lipgloss.NewLayer(box).
+			X(max(0, (m.w-lipgloss.Width(box))/2)).Y(max(0, (m.h-lipgloss.Height(box))/2)).Z(1)).Render()
+	}
+	content = m.zones.Scan(content)
 	if m.copiedNotice {
 		notice := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.th.ok).
 			Background(m.th.fieldBg).Foreground(m.th.text).Padding(0, 2).Bold(true).Render("Texto copiado")

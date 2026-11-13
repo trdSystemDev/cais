@@ -219,8 +219,8 @@ As ferramentas chamam as mesmas acoes da TUI e do CLI, com as mesmas regras
 
 - ler: `status`, `infra_status`, `infra_logs`, `apps_list`,
   `app_logs`, `app_guide`, `app_env_get`, `app_secrets_list`,
-  `databases_list`, `buckets_list`;
-- agir: `app_create`, `app_update`, `app_deploy`, `app_restart`, `app_stop`,
+  `databases_list`, `buckets_list`, `app_promote_check`;
+- agir: `app_create`, `app_update`, `app_deploy`, `app_promote`, `app_restart`, `app_stop`,
   `app_env_set`, `app_secret_set`, `database_create`, `bucket_create`,
   `app_link_database`/`app_unlink_database`, `app_link_bucket`/`app_unlink_bucket`.
 
@@ -234,7 +234,7 @@ devolvidos (a IA ve so os nomes).
 2. Bootstrap: templates das stacks + assistente da VPS vazia
 3. Apps: repositorio do GitHub com compose de producao, deploy com volta, logs, restart
 4. Bancos: database e usuario por app no Postgres/MySQL compartilhado
-5. Deploy automatico no push (webhook do GitHub App)
+5. Deploy automatico (feito: consulta ao GitHub a cada minuto, sem webhook nem porta) e homologacao com promocao
 6. Backups
 7. `install.sh` (feito: compila no clone, sem releases)
 8. MCP (feito: `cais mcp` pelo SSH, sem exclusoes nem Setup)
@@ -413,6 +413,65 @@ e `cais setup secret github_app_key < chave.pem`. O app precisa da permissao
 
 Em desenvolvimento (Windows/macOS) o socket padrao fica na pasta temporaria;
 rode `cais daemon` num terminal e `cais` em outro.
+
+## Homologacao e promocao
+
+A homologacao e um **app separado**, ligado a producao (`promote_to`): mesmo
+repositorio, compose proprio (o nome que quiser, ex:
+`docker-compose.homolog.yaml`) e branch propria ou a mesma da producao. Por ser
+outro projeto compose, sobe, cai e faz deploy sem tocar na producao; variaveis,
+secrets, bancos e buckets sao dela. As rotas do Traefik usam o nome dela
+(`portal-homolog-*` e o dominio `portal-homolog.exemplo.com.br`; a Ajuda gera) e o
+cais nao deixa a producao usar um nome que e da homologacao (o nome e do app
+de prefixo mais longo).
+
+```sh
+cais app create portal-homolog trdSystemDev/portal-web -branch homolog \
+    -compose docker-compose.homolog.yaml -promote-to portal -auto on
+cais app promote portal-homolog        # sobe na producao o commit validado
+```
+
+Na TUI: Geral da producao -> **Criar homologacao**; a homologacao aparece
+embaixo da producao na lista, e a Geral das duas mostra o que promover faria.
+
+**Promover** sobe na producao o commit que esta no ar (e de pe) na
+homologacao, pelo deploy normal da producao (build com a versao atual no ar e
+volta automatica se falhar). A regra e a mesma pra homologacao na mesma branch
+(um commit a frente) ou numa branch propria: o commit validado tem que estar no
+historico da branch da producao. Assim um deploy futuro da branch nao desfaz a
+promocao.
+
+- sem merge: bloqueia e pede o merge (PR) da branch da homologacao;
+- squash merge: o commit validado nao fica no historico, mas a arvore de
+  arquivos da ponta da branch e igual a dele, entao sobe a ponta (mesmo codigo);
+- homologacao desatualizada (sem commits que ja estao na producao) ou commit
+  mais velho que o da producao: pede confirmacao (`-yes`), porque a producao
+  perderia codigo;
+- homologacao com o ultimo deploy falhado, parada ou com container doente:
+  nao promove.
+
+O build da producao e refeito a partir do mesmo commit (nao ha registry): com
+lockfiles o resultado e o mesmo, mas `FROM` sem versao fixa pode puxar outra
+imagem base. Migracao de banco nao volta com o codigo: faca migracoes
+compativeis com a versao anterior.
+
+### Deploy automatico
+
+Cada app escolhe: **manual** ou **automatico a cada commit na branch dele**
+(TUI: seletor Deploy na Geral; CLI: `cais app set <app> -auto on|off`). O daemon
+consulta o GitHub a cada minuto (`cais daemon --auto-every`), sem webhook e sem
+abrir porta. Um commit que falhou nao e tentado de novo; o proximo sim.
+
+| Como quer trabalhar | producao | homologacao |
+|---|---|---|
+| tudo manual | manual | manual |
+| producao direto da main | auto (main) | - |
+| homolog automatica, promocao manual | manual | auto (homolog) |
+| homolog automatica e producao no merge | auto (main) | auto (homolog) |
+
+Com producao automatica, o merge na main ja sobe a producao (sem passar pelo
+Promover); com homologacao na mesma branch, a producao automatica pularia a
+validacao.
 
 ## Build
 

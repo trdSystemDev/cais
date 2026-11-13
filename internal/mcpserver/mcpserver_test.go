@@ -138,7 +138,7 @@ func TestFerramentasSemExclusao(t *testing.T) {
 	slices.Sort(names)
 	want := []string{
 		"app_create", "app_deploy", "app_env_get", "app_env_set", "app_guide", "app_link_bucket", "app_link_database",
-		"app_logs", "app_restart", "app_secret_set", "app_secrets_list", "app_stop", "app_unlink_bucket",
+		"app_logs", "app_promote", "app_promote_check", "app_restart", "app_secret_set", "app_secrets_list", "app_stop", "app_unlink_bucket",
 		"app_unlink_database", "app_update", "apps_list", "bucket_create", "buckets_list", "database_create",
 		"databases_list", "infra_logs", "infra_status", "status",
 	}

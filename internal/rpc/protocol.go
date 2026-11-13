@@ -29,6 +29,8 @@ const (
 	MethodAppCreate        = "app.create"        // params: apps.App
 	MethodAppUpdate        = "app.update"        // params: apps.App
 	MethodAppDeploy        = "app.deploy"        // params: deployParams
+	MethodAppPromoteCheck  = "app.promote_check" // params: appParams
+	MethodAppPromote       = "app.promote"       // params: promoteParams
 	MethodAppRestart       = "app.restart"       // params: appParams (service opcional)
 	MethodAppStop          = "app.stop"          // params: appParams
 	MethodAppDelete        = "app.delete"        // params: deleteParams
@@ -122,6 +124,12 @@ type deleteParams struct {
 	Name string `json:"name"`
 	// Volumes apaga tambem os volumes do compose (os dados do app).
 	Volumes bool `json:"volumes,omitempty"`
+}
+
+type promoteParams struct {
+	Name string `json:"name"` // a homologacao
+	// Confirm aceita voltar a producao pra um commit mais velho.
+	Confirm bool `json:"confirm,omitempty"`
 }
 
 type deployParams struct {

@@ -57,8 +57,14 @@ func (s logSelection) text() string {
 	return strings.Join(lines, "\n")
 }
 
+// logsOnScreen diz se a tela mostra logs (Infra, ou a secao Logs de um app):
+// so ai arrastar o mouse seleciona e copia.
+func (m *model) logsOnScreen() bool {
+	return m.tab == tabInfra || (m.tab == tabApps && m.apps.section == secLogs && m.apps.selected() != nil)
+}
+
 func (m *model) startLogSelection(msg tea.MouseClickMsg) bool {
-	if m.tab != tabInfra || m.disconnected || msg.Button != tea.MouseLeft {
+	if !m.logsOnScreen() || m.disconnected || msg.Button != tea.MouseLeft {
 		return false
 	}
 	area := m.logArea
@@ -142,7 +148,7 @@ func (m *model) selectionScrollCmd() tea.Cmd {
 
 func (m *model) scrollLogSelection(generation uint64) tea.Cmd {
 	s := &m.logSelection
-	if generation != m.selectionGeneration || !s.dragging || !s.tickPending || m.tab != tabInfra || m.disconnected {
+	if generation != m.selectionGeneration || !s.dragging || !s.tickPending || !m.logsOnScreen() || m.disconnected {
 		return nil
 	}
 	s.tickPending = false

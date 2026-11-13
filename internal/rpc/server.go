@@ -176,6 +176,20 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		}
 		return wrap(s.api.DeployApp(s.ctx, p.Name, p.Ref))
 
+	case MethodAppPromoteCheck:
+		var p appParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.CheckPromotion(s.ctx, p.Name))
+
+	case MethodAppPromote:
+		var p promoteParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.PromoteApp(s.ctx, p.Name, p.Confirm))
+
 	case MethodAppRestart:
 		var p appParams
 		if err := params(m, &p); err != nil {

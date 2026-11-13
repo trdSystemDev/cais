@@ -1,6 +1,6 @@
 // Package githubtest e uma API do GitHub falsa pros testes de quem usa o
-// GitHub App (core, TUI): repositorios em memoria, com o commit da branch
-// principal e o tarball dele.
+// GitHub App (core, TUI): repositorios em memoria, com o historico (linear)
+// da branch principal: cada mudanca de arquivo e um commit novo.
 package githubtest
 
 import (
@@ -35,9 +35,11 @@ type Server struct {
 	Key   []byte // chave privada do app (PEM), pra gravar no secret
 	AppID int64
 
-	mu    sync.Mutex
-	pub   *rsa.PublicKey
-	repos map[string]map[string]string
+	mu      sync.Mutex
+	pub     *rsa.PublicKey
+	repos   map[string]map[string]string
+	history map[string][]string          // repo -> commits, do mais velho ao atual
+	snaps   map[string]map[string]string // commit -> arquivos
 }
 
 // New sobe a API com os repositorios dados.
@@ -47,8 +49,11 @@ func New(t *testing.T, appID int64, repos map[string]map[string]string) *Server 
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{AppID: appID, pub: &k.PublicKey, repos: repos,
+	s := &Server{AppID: appID, pub: &k.PublicKey, repos: repos, history: map[string][]string{}, snaps: map[string]map[string]string{},
 		Key: pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})}
+	for repo := range repos {
+		s.record(repo)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.serve(t, w, r) }))
 	t.Cleanup(srv.Close)
 	s.URL = srv.URL
@@ -114,18 +119,37 @@ func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		}
 		io.WriteString(w, c)
 	case rest[0] == "commits" && len(rest) == 2:
-		commit := commitOf(files)
-		if rest[1] != "main" && rest[1] != commit {
+		commit := s.resolve(full, rest[1])
+		if commit == "" {
 			notFound()
 			return
 		}
 		io.WriteString(w, commit)
 	case rest[0] == "tarball" && len(rest) == 2:
-		if rest[1] != commitOf(files) {
+		snap, ok := s.snaps[rest[1]]
+		if !ok {
 			notFound()
 			return
 		}
-		w.Write(tarball(t, parts[2]+"-"+rest[1][:7], files))
+		w.Write(tarball(t, parts[2]+"-"+rest[1][:7], snap))
+	case rest[0] == "compare" && len(rest) == 2:
+		base, head, _ := strings.Cut(rest[1], "...")
+		bi, hi := s.index(full, base), s.index(full, head)
+		if bi < 0 || hi < 0 {
+			notFound()
+			return
+		}
+		status := map[bool]string{true: "ahead", false: "behind"}[hi > bi]
+		if hi == bi {
+			status = "identical"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"status": status, "ahead_by": max(0, hi-bi), "behind_by": max(0, bi-hi)})
+	case rest[0] == "git" && len(rest) == 3 && rest[1] == "commits":
+		if _, ok := s.snaps[rest[2]]; !ok {
+			notFound()
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"sha": rest[2], "tree": map[string]string{"sha": "tree-" + rest[2]}})
 	default:
 		t.Errorf("githubtest: rota inesperada %s %s", r.Method, r.URL.Path)
 		notFound()
@@ -145,6 +169,45 @@ func (s *Server) SetFile(repo, path, content string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.repos[repo][path] = content
+	s.record(repo)
+}
+
+// record guarda o estado atual dos arquivos como o commit mais novo.
+func (s *Server) record(repo string) {
+	files := s.repos[repo]
+	c := commitOf(files)
+	if h := s.history[repo]; len(h) > 0 && h[len(h)-1] == c {
+		return
+	}
+	snap := make(map[string]string, len(files))
+	for k, v := range files {
+		snap[k] = v
+	}
+	s.snaps[c] = snap
+	s.history[repo] = append(s.history[repo], c)
+}
+
+// resolve devolve o commit de ref: main (ou vazio) e o atual; sha so se
+// for do historico.
+func (s *Server) resolve(repo, ref string) string {
+	if i := s.index(repo, ref); i >= 0 {
+		return s.history[repo][i]
+	}
+	return ""
+}
+
+// index e a posicao de ref no historico do repositorio (-1 se nao existe).
+func (s *Server) index(repo, ref string) int {
+	h := s.history[repo]
+	if ref == "main" || ref == "" {
+		return len(h) - 1
+	}
+	for i := len(h) - 1; i >= 0; i-- {
+		if h[i] == ref {
+			return i
+		}
+	}
+	return -1
 }
 
 func commitOf(files map[string]string) string {

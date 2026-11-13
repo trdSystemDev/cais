@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -57,6 +58,12 @@ type App struct {
 	// Buckets sao os buckets do Garage que o app usa (o deploy grava
 	// s3_<bucket>_access_key e s3_<bucket>_secret_key).
 	Buckets []BucketLink `yaml:"buckets,omitempty" json:"buckets,omitempty"`
+	// PromoteTo e a producao deste app quando ele e uma homologacao: o
+	// commit validado aqui e promovido pra ela (Promote).
+	PromoteTo string `yaml:"promote_to,omitempty" json:"promote_to,omitempty"`
+	// AutoDeploy faz o deploy sozinho quando a branch ganha um commit novo
+	// (o daemon consulta o GitHub; nenhuma porta abre).
+	AutoDeploy bool `yaml:"auto_deploy,omitempty" json:"auto_deploy,omitempty"`
 }
 
 // ComposeFile e o compose do app, com o padrao.
@@ -80,6 +87,12 @@ type Deploy struct {
 	// Problems sao o que tira o compose do formato do cais: o deploy parou
 	// antes do build. Cada um diz o motivo e o jeito certo.
 	Problems []string `yaml:"problems,omitempty" json:"problems,omitempty"`
+	// PromotedFrom e a homologacao de onde veio o commit (vazio: deploy
+	// direto).
+	PromotedFrom string `yaml:"promoted_from,omitempty" json:"promoted_from,omitempty"`
+	// Auto diz que o deploy foi disparado sozinho por um commit novo na
+	// branch.
+	Auto bool `yaml:"auto,omitempty" json:"auto,omitempty"`
 }
 
 // Source e de onde vem o codigo (o GitHub, pelo GitHub App).
@@ -89,7 +102,24 @@ type Source interface {
 	Resolve(ctx context.Context, repo, ref string) (string, error)
 	// Download extrai o codigo do commit em dir (que nao existe ainda).
 	Download(ctx context.Context, repo, commit, dir string) error
+	// Compare diz onde head esta em relacao a base (branch ou commit).
+	Compare(ctx context.Context, repo, base, head string) (Comparison, error)
+	// Tree devolve a arvore de arquivos do commit: dois commits com a
+	// mesma arvore tem o mesmo codigo (ex: squash merge).
+	Tree(ctx context.Context, repo, commit string) (string, error)
 }
+
+// Comparison e a relacao entre dois commits, como o compare do GitHub:
+// Status "ahead" (head tem commits que base nao tem), "behind" (head ja esta
+// no historico de base), "identical" ou "diverged".
+type Comparison struct {
+	Status   string `json:"status"`
+	AheadBy  int    `json:"ahead_by"`
+	BehindBy int    `json:"behind_by"`
+}
+
+// InHistory diz se head ja faz parte do historico de base.
+func (c Comparison) InHistory() bool { return c.Status == "behind" || c.Status == "identical" }
 
 // Docker sao as operacoes de projeto compose que os apps usam.
 type Docker interface {
@@ -154,6 +184,13 @@ func Check(a App) error {
 	if a.Branch != "" && (!refRe.MatchString(a.Branch) || path.Clean(a.Branch) != a.Branch) {
 		errs = append(errs, fmt.Errorf("branch invalida %q", a.Branch))
 	}
+	if a.PromoteTo != "" {
+		if err := CheckName(a.PromoteTo); err != nil {
+			errs = append(errs, fmt.Errorf("producao: %w", err))
+		} else if a.PromoteTo == a.Name {
+			errs = append(errs, errors.New("o app nao pode ser a homologacao dele mesmo"))
+		}
+	}
 	if c := a.Compose; c != "" {
 		if !fileRe.MatchString(c) || path.Clean(c) != c || c[0] == '/' || c == ".." || len(c) > 2 && c[:3] == "../" {
 			errs = append(errs, fmt.Errorf("arquivo de compose invalido %q (caminho .yml a partir da raiz do repositorio)", c))
@@ -189,6 +226,9 @@ func (m Manager) Create(a App) (App, error) {
 	if _, err := os.Stat(m.dir(a.Name)); err == nil {
 		return App{}, fmt.Errorf("app %q ja existe", a.Name)
 	}
+	if err := m.checkLink(a); err != nil {
+		return App{}, err
+	}
 	if err := os.MkdirAll(m.SecretsPath(a.Name), 0o700); err != nil {
 		return App{}, err
 	}
@@ -196,7 +236,8 @@ func (m Manager) Create(a App) (App, error) {
 	return a, m.save(a)
 }
 
-// Update troca repositorio, branch e compose do app (vale no proximo deploy).
+// Update troca repositorio, branch, compose, a producao (homologacao) e o
+// deploy automatico do app (o codigo novo vale no proximo deploy).
 func (m Manager) Update(a App) error {
 	cur, err := m.Get(a.Name)
 	if err != nil {
@@ -205,8 +246,40 @@ func (m Manager) Update(a App) error {
 	if err := Check(a); err != nil {
 		return err
 	}
-	cur.Repo, cur.Branch, cur.Compose = a.Repo, a.Branch, a.Compose
+	if err := m.checkLink(a); err != nil {
+		return err
+	}
+	cur.Repo, cur.Branch, cur.Compose, cur.PromoteTo, cur.AutoDeploy = a.Repo, a.Branch, a.Compose, a.PromoteTo, a.AutoDeploy
 	return m.save(cur)
+}
+
+// checkLink confere o vinculo de homologacao: a producao existe, usa o
+// mesmo repositorio e nao e homologacao de outro (sem corrente); e um app
+// que ja tem homologacao nao vira homologacao.
+func (m Manager) checkLink(a App) error {
+	all, err := m.List()
+	if err != nil {
+		return err
+	}
+	for _, o := range all {
+		if o.Name != a.Name && o.PromoteTo == a.Name && a.PromoteTo != "" {
+			return fmt.Errorf("%s ja e a producao de %s: nao pode ser homologacao de outro app", a.Name, o.Name)
+		}
+	}
+	if a.PromoteTo == "" {
+		return nil
+	}
+	prod, err := m.Get(a.PromoteTo)
+	if err != nil {
+		return fmt.Errorf("producao %s: %w", a.PromoteTo, err)
+	}
+	switch {
+	case prod.PromoteTo != "":
+		return fmt.Errorf("%s ja e homologacao de %s: promova direto pra %s", prod.Name, prod.PromoteTo, prod.PromoteTo)
+	case !strings.EqualFold(prod.Repo, a.Repo):
+		return fmt.Errorf("a homologacao usa o mesmo repositorio da producao (%s usa %s)", prod.Name, prod.Repo)
+	}
+	return nil
 }
 
 // Get le o app.yaml.
@@ -278,6 +351,18 @@ type DeployResult struct {
 // esperando os healthchecks. Se o up falhar e havia versao no ar, ela
 // volta. Os avisos sobre o compose nao impedem o deploy.
 func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, error) {
+	return m.deploy(ctx, name, ref, Deploy{})
+}
+
+// AutoDeploy e o Deploy disparado por um commit novo na branch: fica
+// registrado como automatico.
+func (m Manager) AutoDeploy(ctx context.Context, name, commit string) (DeployResult, error) {
+	return m.deploy(ctx, name, commit, Deploy{Auto: true})
+}
+
+// deploy faz o Deploy; tag tem o que o registro do deploy leva alem do
+// resultado (origem da promocao, automatico).
+func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (DeployResult, error) {
 	a, err := m.Get(name)
 	if err != nil {
 		return DeployResult{}, err
@@ -304,7 +389,8 @@ func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, er
 	}
 	fail := func(err error) (DeployResult, error) {
 		os.RemoveAll(filepath.Join(dir, next))
-		m.record(a, Deploy{At: m.Now(), Commit: commit, Error: err.Error(), Warnings: res.Warnings, Problems: res.Problems})
+		m.record(a, Deploy{At: m.Now(), Commit: commit, Error: err.Error(), Warnings: res.Warnings, Problems: res.Problems,
+			PromotedFrom: tag.PromotedFrom, Auto: tag.Auto})
 		return res, err
 	}
 	if _, err := os.Stat(filepath.Join(dir, next, a.ComposeFile())); err != nil {
@@ -322,7 +408,7 @@ func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, er
 		return fail(err)
 	}
 	res.Problems, res.Warnings = CheckCompose(cfg, Rules{App: name, Src: filepath.Join(dir, next),
-		SecretsDir: m.SecretsPath(name), DotEnv: m.dotEnvPath(a, next), Networks: m.Networks})
+		SecretsDir: m.SecretsPath(name), DotEnv: m.dotEnvPath(a, next), Networks: m.Networks, Apps: m.otherApps(name)})
 	if len(res.Problems) > 0 {
 		return fail(&ComposeError{App: name, Problems: res.Problems})
 	}
@@ -346,7 +432,7 @@ func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, er
 	if upErr == nil {
 		upErr = m.settle(ctx, a)
 	}
-	last := Deploy{At: m.Now(), Commit: commit, Warnings: res.Warnings}
+	last := Deploy{At: m.Now(), Commit: commit, Warnings: res.Warnings, PromotedFrom: tag.PromotedFrom, Auto: tag.Auto}
 	if upErr != nil {
 		last.Error = upErr.Error()
 		if hadPrev {
@@ -363,6 +449,18 @@ func (m Manager) Deploy(ctx context.Context, name, ref string) (DeployResult, er
 	a.Commit = commit
 	m.record(a, last)
 	return res, nil
+}
+
+// otherApps sao os nomes dos outros apps (pra regra dos nomes do Traefik).
+func (m Manager) otherApps(name string) []string {
+	all, _ := m.List()
+	var out []string
+	for _, a := range all {
+		if a.Name != name {
+			out = append(out, a.Name)
+		}
+	}
+	return out
 }
 
 // settle observa os containers por m.Settle: reiniciando, parado com erro ou
