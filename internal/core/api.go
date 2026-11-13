@@ -67,6 +67,10 @@ type API interface {
 	// deploy normal. Voltar a producao pra um commit mais velho so com
 	// confirm.
 	PromoteApp(ctx context.Context, from string, confirm bool) (apps.DeployResult, error)
+	// RollbackApp volta o app pra um deploy anterior do historico que deu
+	// certo (commit vazio: o anterior ao no ar), com as imagens guardadas
+	// quando existem; o deploy automatico espera um commit novo.
+	RollbackApp(ctx context.Context, name, commit string) (apps.DeployResult, error)
 	// RestartApp reinicia um service do app (ou todos, com service vazio).
 	RestartApp(ctx context.Context, name, service string) error
 	// StopApp para o app sem apagar nada.

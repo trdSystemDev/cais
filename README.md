@@ -220,7 +220,7 @@ As ferramentas chamam as mesmas acoes da TUI e do CLI, com as mesmas regras
 - ler: `status`, `infra_status`, `infra_logs`, `apps_list`,
   `app_logs`, `app_guide`, `app_env_get`, `app_secrets_list`,
   `databases_list`, `buckets_list`, `app_promote_check`;
-- agir: `app_create`, `app_update`, `app_deploy`, `app_promote`, `app_restart`, `app_stop`,
+- agir: `app_create`, `app_update`, `app_deploy`, `app_rollback`, `app_promote`, `app_restart`, `app_stop`,
   `app_env_set`, `app_secret_set`, `database_create`, `bucket_create`,
   `app_link_database`/`app_unlink_database`, `app_link_bucket`/`app_unlink_bucket`.
 
@@ -332,6 +332,8 @@ cais app deploy meu-app                      # o commit mais novo da branch
 cais app deploy meu-app -ref 3f2a1c9         # ou um commit/branch
 cais apps                                    # estado de todos
 cais app logs meu-app meu-app-web-1
+cais app history meu-app                     # ultimos deploys
+cais app rollback meu-app [commit]           # volta pra um deploy anterior (sem build)
 cais app restart meu-app [service]
 cais app stop meu-app
 cais app delete meu-app [-volumes]           # pede o nome pra confirmar; -volumes apaga os dados
@@ -464,6 +466,21 @@ e `cais setup secret github_app_key < chave.pem`. O app precisa da permissao
 
 Em desenvolvimento (Windows/macOS) o socket padrao fica na pasta temporaria;
 rode `cais daemon` num terminal e `cais` em outro.
+
+### Historico e rollback
+
+Cada app guarda os ultimos 20 deploys (quando, commit, manual/automatico/
+promovido/rollback e se deu certo) e, dos ultimos 5 que deram certo, as
+imagens (`<imagem>:cais-<commit>`). **Voltar** (TUI: Geral -> Historico ->
+voltar, que pede confirmacao; CLI: `cais app rollback <app> [commit]`) baixa
+o commit, poe as imagens guardadas no lugar sem build e sobe pela troca
+normal (sem queda; se falhar, a versao no ar volta). Sem imagem guardada, faz
+o build. As variaveis e os secrets sao os de agora, nao os da epoca.
+
+Com deploy automatico ligado, a ponta da branch na hora do rollback nao sobe
+sozinha (desfaria o rollback): o automatico volta no proximo commit novo, a
+correcao. O rollback automatico de um deploy que falhou tambem usa as
+imagens guardadas.
 
 ## Homologacao e promocao
 

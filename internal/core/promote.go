@@ -93,7 +93,9 @@ func (c *Core) AutoDeployOnce(ctx context.Context) (started []string, done <-cha
 		}
 		head, err := m.Source.Resolve(ctx, a.Repo, a.Branch)
 		c.autoLog(a.Name, err)
-		if err != nil || head == a.Commit || (a.Last != nil && a.Last.Commit == head) {
+		// depois de um rollback, a ponta de entao nao sobe (desfaria o
+		// rollback): so um commit novo
+		if err != nil || head == a.Commit || (a.Last != nil && a.Last.Commit == head) || head == a.AutoHold {
 			continue
 		}
 		unlock, err := c.lockApp(a.Name)

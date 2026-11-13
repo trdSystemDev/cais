@@ -44,6 +44,10 @@ func (f *fakeDocker) PS(_ context.Context, p docker.Project) ([]docker.Container
 }
 func (f *fakeDocker) Restart(context.Context, docker.Project, string) error { return nil }
 func (f *fakeDocker) Stop(context.Context, docker.Project) error            { return nil }
+func (_ *fakeDocker) TagImage(context.Context, string, string) error        { return nil }
+func (_ *fakeDocker) HasImage(context.Context, string) bool                 { return false }
+func (_ *fakeDocker) ImageTags(context.Context, string) ([]string, error)   { return nil, nil }
+func (_ *fakeDocker) RemoveImages(context.Context, []string) error          { return nil }
 func (_ *fakeDocker) PruneImages(context.Context, string) error             { return nil }
 
 func (f *fakeDocker) Rollout(context.Context, docker.Project, string, string, bool) error { return nil }
@@ -141,7 +145,7 @@ func TestFerramentasSemExclusao(t *testing.T) {
 	slices.Sort(names)
 	want := []string{
 		"app_create", "app_deploy", "app_env_get", "app_env_set", "app_guide", "app_link_bucket", "app_link_database",
-		"app_logs", "app_promote", "app_promote_check", "app_restart", "app_secret_set", "app_secrets_list", "app_stop", "app_unlink_bucket",
+		"app_logs", "app_promote", "app_promote_check", "app_restart", "app_rollback", "app_secret_set", "app_secrets_list", "app_stop", "app_unlink_bucket",
 		"app_unlink_database", "app_update", "apps_list", "bucket_create", "buckets_list", "database_create",
 		"databases_list", "infra_logs", "infra_status", "status",
 	}

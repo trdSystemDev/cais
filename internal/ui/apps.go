@@ -96,8 +96,11 @@ type appsPage struct {
 
 	// promocao: o que cada homologacao ligada ao app selecionado faria
 	// agora (consulta o GitHub; refeita quando os commits no ar mudam)
-	promos   map[string]promoResult // homologacao -> resultado
-	promoSig map[string]string      // homologacao -> commits no ar quando consultou
+	promos map[string]promoResult // homologacao -> resultado
+	// rollbackArm e o commit do historico com o "voltar" ja apertado uma
+	// vez (o segundo aperto confirma)
+	rollbackArm string
+	promoSig    map[string]string // homologacao -> commits no ar quando consultou
 
 	container  int    // logs: container do app selecionado
 	pendingSel string // app recem-criado: seleciona quando chegar no estado
@@ -119,6 +122,7 @@ type (
 		ok       string
 		err      error
 		deployed *apps.DeployResult
+		rollback bool
 	}
 	appCreatedMsg struct {
 		app apps.App
@@ -457,6 +461,23 @@ func (p *appsPage) rebuild() {
 		add(restart)
 		add(stop)
 
+		// historico: "voltar" nos deploys que deram certo (um por commit,
+		// menos o que esta no ar)
+		seen := map[string]bool{a.Commit: true}
+		for _, d := range a.History {
+			if !d.OK() || seen[d.Commit] {
+				continue
+			}
+			seen[d.Commit] = true
+			commit := d.Commit
+			f := btn("rollback:"+commit, "voltar", func() tea.Cmd { return p.rollback(commit) })
+			f.chip, f.kind = true, btnInfo
+			if p.rollbackArm == commit {
+				f.label, f.kind = "confirmar: voltar pra "+shortCommit(commit), btnWarn
+			}
+			add(f)
+		}
+
 		// promocao: na homologacao e na producao que tem homologacao
 		hs := p.homologs(*a)
 		if len(hs) > 0 {
@@ -632,6 +653,29 @@ func (p *appsPage) deploy() tea.Cmd {
 	return func() tea.Msg {
 		res, err := p.api.DeployApp(context.Background(), name, ref)
 		return appActionMsg{app: name, err: err, deployed: &res}
+	}
+}
+
+// rollback volta o app pro commit do historico; o primeiro aperto so arma.
+func (p *appsPage) rollback(commit string) tea.Cmd {
+	a := p.selected()
+	if a == nil || p.busy != "" {
+		return nil
+	}
+	if p.rollbackArm != commit {
+		p.rollbackArm = commit
+		p.setStatus("warn", "Voltar "+a.Name+" pra "+shortCommit(commit)+"? Aperte de novo pra confirmar (variaveis e secrets sao os de agora).")
+		p.rebuild()
+		return nil
+	}
+	p.rollbackArm = ""
+	name := a.Name
+	p.busy = "deploy"
+	p.detailErr = ""
+	p.setStatus("warn", "Voltando "+name+" pra "+shortCommit(commit)+" (imagens guardadas, sem queda)...")
+	return func() tea.Msg {
+		res, err := p.api.RollbackApp(context.Background(), name, commit)
+		return appActionMsg{app: name, err: err, deployed: &res, rollback: true}
 	}
 }
 
@@ -940,6 +984,12 @@ func (p *appsPage) update(msg tea.Msg) (tea.Cmd, bool) {
 				p.detailErr += "\nAvisos sobre o compose:\n- " + strings.Join(msg.deployed.Warnings, "\n- ")
 			}
 			p.setStatus("danger", "Nao deu certo:")
+		case msg.deployed != nil && msg.rollback:
+			how := "com as imagens guardadas"
+			if !msg.deployed.Images {
+				how = "com build (as imagens nao estavam guardadas)"
+			}
+			p.setStatus("ok", msg.app+" voltou pro commit "+shortCommit(msg.deployed.Commit)+", "+how+".")
 		case msg.deployed != nil:
 			p.setStatus("ok", msg.app+" no ar no commit "+shortCommit(msg.deployed.Commit)+".")
 			if len(msg.deployed.Warnings) > 0 {
@@ -1565,6 +1615,7 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 	p.picker(b, "auto", autoText(a.AutoDeploy, a.Branch))
 	b.WriteString("\n")
 	p.inline(b, "deploy", "restart", "stop")
+	p.viewHistory(b, a, w)
 	p.viewPromotion(b, a, w)
 
 	b.WriteString("\n" + t.rule(w) + "\n")
@@ -1589,6 +1640,58 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 		}
 	}
 	p.inline(b, "delete-volumes", "delete")
+}
+
+// viewHistory e o historico de deploys da aba Geral, com o "voltar" nos
+// que deram certo.
+func (p *appsPage) viewHistory(b *strings.Builder, a core.AppStatus, w int) {
+	if len(a.History) == 0 {
+		return
+	}
+	t := p.th
+	b.WriteString("\n" + t.bold().Render("Historico") + "  " + t.fg(t.muted).Render("ultimos deploys; voltar usa as imagens guardadas (sem build)") + "\n")
+	if a.AutoHold != "" && a.AutoDeploy {
+		b.WriteString(lipgloss.NewStyle().Width(w).Foreground(t.warn).Render("  Deploy automatico esperando um commit novo: depois do rollback, "+
+			shortCommit(a.AutoHold)+" nao sobe sozinho.") + "\n")
+	}
+	shown, withBtn := 0, map[string]bool{}
+	for _, d := range a.History {
+		if shown == 8 {
+			break
+		}
+		shown++
+		origin := "manual"
+		switch {
+		case d.Rollback:
+			origin = "rollback"
+		case d.Auto:
+			origin = "automatico"
+		case d.PromotedFrom != "":
+			origin = "de " + d.PromotedFrom
+		}
+		line := fmt.Sprintf("  %s  %s  %-10s ", d.At.Local().Format("02/01 15:04"), shortCommit(d.Commit), origin)
+		c, result := t.ok, "ok"
+		if !d.OK() {
+			c, result = t.danger, "falhou"
+		}
+		if d.OK() && d.Commit == a.Commit {
+			result = "no ar"
+		}
+		row := line + t.fg(c).Render(fmt.Sprintf("%-7s", result))
+		// o botao fica na linha mais nova do commit (um por commit)
+		if !withBtn[d.Commit] {
+			for i, f := range p.fields {
+				if f.id == "rollback:"+d.Commit {
+					withBtn[d.Commit] = true
+					if p.inForm && i == p.focus {
+						p.markFocus(b, 1)
+					}
+					row += " " + p.zones.Mark(f.id, p.render(f, i))
+				}
+			}
+		}
+		b.WriteString(ansi.Truncate(row, w, "…") + "\n")
+	}
 }
 
 func (p *appsPage) viewEnv(b *strings.Builder, w int) {

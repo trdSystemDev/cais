@@ -242,6 +242,20 @@ Flags:
 Exemplos:
   cais app deploy portal
   cais app deploy portal -ref 1910cca`},
+		{name: "app history", usage: "app history <nome>", short: "os ultimos deploys: quando, commit, origem e resultado"},
+		{name: "app rollback", usage: "app rollback <nome> [commit]", short: "volta pra um deploy anterior que deu certo (sem build)", long: `
+Sem commit, volta pro deploy anterior ao que esta no ar. O commit tem que
+estar no historico (cais app history) com deploy que deu certo; pra qualquer
+outro, use cais app deploy -ref.
+
+Os ultimos 5 deploys que deram certo guardam as imagens: a volta nao refaz o
+build e passa pela troca sem queda. As variaveis e os secrets sao os de
+agora. Com deploy automatico ligado, ele espera um commit novo na branch (o
+que estava no ar antes do rollback nao sobe sozinho).
+
+Exemplos:
+  cais app rollback portal
+  cais app rollback portal 1910cca`},
 		{name: "app guide", usage: "app guide <nome>", short: "modelo de compose: labels do Traefik, redes, secrets"},
 		{name: "app env", usage: "app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]", short: "mostra ou muda as variaveis (.env do projeto);\n-import junta um .env (- le do stdin)", long: `
 Sem mudancas, so mostra. As variaveis viram o .env do projeto no deploy

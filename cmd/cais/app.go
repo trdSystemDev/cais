@@ -112,7 +112,7 @@ func runApp(args []string) error {
 		return ""
 	}
 	need := map[string][2]int{ // minimo e maximo de argumentos
-		"create": {2, 2}, "deploy": {1, 1}, "promote": {1, 1}, "set": {1, 1}, "guide": {1, 1}, "env": {1, -1},
+		"create": {2, 2}, "deploy": {1, 1}, "rollback": {1, 2}, "history": {1, 1}, "promote": {1, 1}, "set": {1, 1}, "guide": {1, 1}, "env": {1, -1},
 		"secrets": {1, 1}, "secret": {2, 2}, "restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "delete": {1, 1}, "db": {1, 3}, "bucket": {1, 3},
 	}
 	lim, ok := need[sub]
@@ -167,6 +167,20 @@ func runApp(args []string) error {
 			return err
 		}
 		fmt.Printf("%s no ar no commit %s.\n", name, short(res.Commit))
+	case "rollback":
+		fmt.Printf("Voltando %s pra %s (imagens guardadas quando existem, sem queda)...\n", name, cmpOr(arg(1), "o deploy anterior"))
+		res, err := c.RollbackApp(ctx, name, arg(1))
+		if err != nil {
+			return err
+		}
+		how := "com as imagens guardadas"
+		if !res.Images {
+			how = "com build (as imagens desse commit nao estavam guardadas)"
+		}
+		fmt.Printf("%s no ar no commit %s, %s.\n", name, short(res.Commit), how)
+		fmt.Println("Variaveis e secrets sao os de agora. O deploy automatico (se ligado) espera um commit novo na branch.")
+	case "history":
+		return appHistory(ctx, c, name)
 	case "promote":
 		return appPromote(ctx, c, name, *yes)
 	case "set":
@@ -640,4 +654,61 @@ func parseInterspersed(fs *flag.FlagSet, args []string) []string {
 		pos = append(pos, fs.Arg(0))
 		args = fs.Args()[1:]
 	}
+}
+
+// appHistory lista os ultimos deploys do app.
+func appHistory(ctx context.Context, c *rpc.Client, name string) error {
+	st, err := c.CheckApps(ctx)
+	if err != nil {
+		return err
+	}
+	for _, a := range st.List {
+		if a.Name != name {
+			continue
+		}
+		if len(a.History) == 0 {
+			fmt.Printf("%s ainda nao tem deploy.\n", name)
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "QUANDO\tCOMMIT\tORIGEM\tRESULTADO")
+		for _, d := range a.History {
+			origin := "manual"
+			switch {
+			case d.Rollback:
+				origin = "rollback"
+			case d.Auto:
+				origin = "automatico"
+			case d.PromotedFrom != "":
+				origin = "promovido de " + d.PromotedFrom
+			}
+			result := "ok"
+			if d.Images {
+				result = "ok (imagens guardadas)"
+			}
+			if !d.OK() {
+				result = "falhou: " + firstLineOf(d.Error)
+				if d.RolledBack {
+					result += " (a anterior voltou)"
+				}
+			}
+			mark := ""
+			if d.OK() && d.Commit == a.Commit {
+				mark = " <- no ar"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s%s\n", d.At.Local().Format("02/01/2006 15:04"), short(d.Commit), origin, result, mark)
+		}
+		w.Flush()
+		if a.AutoHold != "" {
+			fmt.Printf("\nDeploy automatico esperando um commit novo (depois do rollback; %s nao sobe sozinho).\n", short(a.AutoHold))
+		}
+		fmt.Printf("\nVoltar: cais app rollback %s [commit]\n", name)
+		return nil
+	}
+	return fmt.Errorf("app %q nao encontrado", name)
+}
+
+func firstLineOf(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }

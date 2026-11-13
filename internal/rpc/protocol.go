@@ -31,6 +31,7 @@ const (
 	MethodAppDeploy        = "app.deploy"        // params: deployParams
 	MethodAppPromoteCheck  = "app.promote_check" // params: appParams
 	MethodAppPromote       = "app.promote"       // params: promoteParams
+	MethodAppRollback      = "app.rollback"      // params: deployParams (ref = commit)
 	MethodAppRestart       = "app.restart"       // params: appParams (service opcional)
 	MethodAppStop          = "app.stop"          // params: appParams
 	MethodAppDelete        = "app.delete"        // params: deleteParams

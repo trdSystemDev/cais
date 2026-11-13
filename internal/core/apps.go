@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,6 +148,26 @@ func (c *Core) DeployApp(ctx context.Context, name, ref string) (apps.DeployResu
 
 	c.setDeploying(name, true)
 	res, err := c.appManager().Deploy(ctx, name, ref)
+	c.setDeploying(name, false)
+	c.CheckApps(ctx)
+	return res, err
+}
+
+// RollbackApp volta o app pra um deploy anterior que deu certo (commit
+// vazio: o anterior ao que esta no ar), com as imagens guardadas quando
+// existem. O deploy automatico espera um commit novo na branch.
+func (c *Core) RollbackApp(ctx context.Context, name, commit string) (apps.DeployResult, error) {
+	if err := apps.CheckName(name); err != nil {
+		return apps.DeployResult{}, err
+	}
+	unlock, err := c.lockApp(name)
+	if err != nil {
+		return apps.DeployResult{}, err
+	}
+	defer unlock()
+
+	c.setDeploying(name, true)
+	res, err := c.appManager().Rollback(ctx, name, strings.TrimSpace(commit))
 	c.setDeploying(name, false)
 	c.CheckApps(ctx)
 	return res, err

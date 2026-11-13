@@ -169,6 +169,13 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 		}
 		return ok(s.api.UpdateApp(s.ctx, p))
 
+	case MethodAppRollback:
+		var p deployParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.RollbackApp(s.ctx, p.Name, p.Ref))
+
 	case MethodAppDeploy:
 		var p deployParams
 		if err := params(m, &p); err != nil {

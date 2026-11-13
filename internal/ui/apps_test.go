@@ -63,6 +63,10 @@ func (f *fakeApps) PS(_ context.Context, p docker.Project) ([]docker.Container, 
 }
 func (f *fakeApps) Restart(context.Context, docker.Project, string) error { return nil }
 func (f *fakeApps) Stop(context.Context, docker.Project) error            { return nil }
+func (_ *fakeApps) TagImage(context.Context, string, string) error        { return nil }
+func (_ *fakeApps) HasImage(context.Context, string) bool                 { return false }
+func (_ *fakeApps) ImageTags(context.Context, string) ([]string, error)   { return nil, nil }
+func (_ *fakeApps) RemoveImages(context.Context, []string) error          { return nil }
 func (_ *fakeApps) PruneImages(context.Context, string) error             { return nil }
 
 func (f *fakeApps) Rollout(context.Context, docker.Project, string, string, bool) error { return nil }
@@ -633,5 +637,43 @@ func TestAppsHomologacaoEPromocao(t *testing.T) {
 	waitFor(t, m, "Deploy automatico em loja")
 	if !appState(t, m, "loja").AutoDeploy {
 		t.Fatal("deploy automatico nao ligou")
+	}
+}
+
+// o historico aparece na aba Geral; voltar pede confirmacao e sobe o
+// commit anterior
+func TestAppsHistoricoEVoltar(t *testing.T) {
+	m, _, gh := openApps(t)
+	ctx := context.Background()
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	if _, err := m.api.DeployApp(ctx, "loja", ""); err != nil {
+		t.Fatal(err)
+	}
+	bom := gh.Commit("trdSystemDev/loja")
+	gh.SetFile("trdSystemDev/loja", "Dockerfile", "FROM nginx:2\n")
+	if _, err := m.api.DeployApp(ctx, "loja", ""); err != nil {
+		t.Fatal(err)
+	}
+	novo := gh.Commit("trdSystemDev/loja")
+	waitFor(t, m, "1/1 no ar")
+	click(t, m, "app:loja")
+	reach(t, m, "rollback:"+bom)
+	waitFor(t, m, "Historico")
+	if !strings.Contains(screen(m), novo[:7]) {
+		t.Fatalf("historico sem o deploy novo:\n%s", screen(m))
+	}
+
+	// o primeiro aperto so pergunta
+	click(t, m, "rollback:"+bom)
+	waitFor(t, m, "Aperte de novo pra confirmar")
+	if a := appState(t, m, "loja"); a.Commit != novo {
+		t.Fatal("voltou sem confirmar")
+	}
+	reach(t, m, "rollback:"+bom)
+	click(t, m, "rollback:"+bom)
+	waitFor(t, m, "loja voltou pro commit "+bom[:7])
+	a := appState(t, m, "loja")
+	if a.Commit != bom || !a.History[0].Rollback {
+		t.Fatalf("depois de voltar: %+v", a.App)
 	}
 }

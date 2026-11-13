@@ -103,3 +103,45 @@ func TestDeployAutomatico(t *testing.T) {
 		t.Error("deploy automatico num app manual")
 	}
 }
+
+// rollback num app com deploy automatico: o automatico nao sobe de novo o
+// commit que acabou de sair, so o proximo
+func TestRollbackPausaODeployAutomatico(t *testing.T) {
+	c, _, gh := newAppsCore(t)
+	ctx := context.Background()
+	const repo = "trdSystemDev/meu-app"
+	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: repo, AutoDeploy: true})
+	round := func() []string {
+		started, done := c.AutoDeployOnce(ctx)
+		<-done
+		return started
+	}
+	round()
+	bom := gh.Commit(repo)
+	gh.SetFile(repo, "Dockerfile", "FROM node:24 # bug\n")
+	round()
+	bug := gh.Commit(repo)
+	if a := findApp(snap(t, c).Apps.List, "meu-app"); a.Commit != bug || len(a.History) != 2 {
+		t.Fatalf("antes do rollback: %+v", a)
+	}
+
+	res, err := c.RollbackApp(ctx, "meu-app", "")
+	if err != nil || res.Commit != bom {
+		t.Fatalf("rollback %+v %v", res, err)
+	}
+	if got := round(); len(got) != 0 {
+		t.Fatalf("o automatico desfez o rollback: %v", got)
+	}
+	a := findApp(snap(t, c).Apps.List, "meu-app")
+	if a.Commit != bom || a.AutoHold != bug || !a.History[0].Rollback {
+		t.Fatalf("depois do rollback: %+v", a)
+	}
+	// a correcao chega: o automatico volta
+	gh.SetFile(repo, "Dockerfile", "FROM node:24 # corrigido\n")
+	if got := round(); len(got) != 1 {
+		t.Fatalf("correcao: %v", got)
+	}
+	if a := findApp(snap(t, c).Apps.List, "meu-app"); a.Commit != gh.Commit(repo) || a.AutoHold != "" {
+		t.Fatalf("depois da correcao: %+v", a)
+	}
+}

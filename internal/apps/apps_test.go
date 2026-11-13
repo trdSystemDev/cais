@@ -117,6 +117,7 @@ type fakeDocker struct {
 	failUp map[string]bool // compose (conteudo) cujo up falha
 	// compose (conteudo) cujo rollout falha
 	failRollout map[string]bool
+	images      map[string]string             // tag -> id da imagem
 	envSeen     map[string]string             // .env lido no Config
 	ps          map[string][]docker.Container // compose -> containers depois do up
 }
@@ -133,11 +134,17 @@ func (f *fakeDocker) Config(_ context.Context, p docker.Project) ([]byte, error)
 	if f.config == "" {
 		return []byte(`{"services": {}}`), nil
 	}
-	return []byte(f.config), nil
+	// {{src}} e a pasta do codigo desta chamada (contexto do build)
+	return []byte(strings.ReplaceAll(f.config, "{{src}}", filepath.Dir(p.Files[0]))), nil
 }
 
 func (f *fakeDocker) Build(_ context.Context, p docker.Project) error {
-	f.calls = append(f.calls, "build "+f.compose(p))
+	c := f.compose(p)
+	f.calls = append(f.calls, "build "+c)
+	if f.images != nil {
+		// o build troca a imagem do service web pela do codigo
+		f.images[p.Name+"-web"] = "img-" + c
+	}
 	return nil
 }
 
@@ -176,6 +183,43 @@ func (f *fakeDocker) Rollout(_ context.Context, p docker.Project, service, image
 	f.calls = append(f.calls, call+" "+c)
 	if f.failRollout[c] {
 		return errors.New("container web-2 is unhealthy")
+	}
+	return nil
+}
+
+// imagens: tag -> id; o build do compose v<n> gera a imagem "img-v<n>"
+func (f *fakeDocker) TagImage(_ context.Context, src, dst string) error {
+	id, ok := f.images[src]
+	if !ok {
+		return errors.New("no such image " + src)
+	}
+	f.images[dst] = id
+	f.calls = append(f.calls, "tag "+src+" "+dst)
+	return nil
+}
+
+func (f *fakeDocker) HasImage(_ context.Context, ref string) bool {
+	_, ok := f.images[ref]
+	return ok
+}
+
+func (f *fakeDocker) ImageTags(_ context.Context, project string) ([]string, error) {
+	var out []string
+	for t := range f.images {
+		if strings.HasPrefix(t, project+"-") {
+			out = append(out, t)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func (f *fakeDocker) RemoveImages(_ context.Context, refs []string) error {
+	for _, r := range refs {
+		delete(f.images, r)
+	}
+	if len(refs) > 0 {
+		f.calls = append(f.calls, "rmi "+strings.Join(refs, " "))
 	}
 	return nil
 }
@@ -347,7 +391,7 @@ func TestDeployFalhoVoltaAAnterior(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unhealthy") || !strings.Contains(err.Error(), "restaurada") {
 		t.Fatalf("erro %v", err)
 	}
-	if !slices.Equal(d.calls, []string{"config v2", "build v2", "up v2", "build v1", "up v1"}) {
+	if !slices.Equal(d.calls, []string{"config v2", "build v2", "up v2", "config v1", "build v1", "up v1"}) {
 		t.Errorf("chamadas %v", d.calls)
 	}
 	a, _ := m.Get("web")
@@ -687,7 +731,7 @@ func TestDeployObservaOsContainersDepoisDoUp(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "reinicia sem parar") || !strings.Contains(err.Error(), "restaurada") {
 		t.Fatalf("erro %v", err)
 	}
-	if !slices.Equal(d.calls, []string{"config v2", "build v2", "up v2", "build v1", "up v1"}) {
+	if !slices.Equal(d.calls, []string{"config v2", "build v2", "up v2", "config v1", "build v1", "up v1"}) {
 		t.Errorf("chamadas %v", d.calls)
 	}
 
@@ -878,10 +922,128 @@ func TestDeployComTrocaQueFalhaVoltaAAnterior(t *testing.T) {
 		t.Fatalf("erro %v", err)
 	}
 	// o up da v2 nem roda; a anterior volta (rebuild pra imagem voltar a ser a dela)
-	if !slices.Equal(d.calls, []string{"config v2", "build v2", "rollout app web-app v2", "build v1", "up v1"}) {
+	if !slices.Equal(d.calls, []string{"config v2", "build v2", "rollout app web-app v2", "config v1", "build v1", "up v1"}) {
 		t.Errorf("chamadas %v", d.calls)
 	}
 	if a, _ := m.Get("web"); a.Commit != "c1" || !a.Last.RolledBack {
 		t.Errorf("app %+v / %+v", a, a.Last)
+	}
+}
+
+func TestHistoricoERollbackComImagensGuardadas(t *testing.T) {
+	m, src, d := newManager(t)
+	d.images = map[string]string{}
+	d.config = `{"services": {"web": {"build": {"context": "{{src}}"}, "logging": {"options": {"max-size": "1m"}}}}}`
+	src.commits["c3"] = map[string]string{"docker-compose.yml": "v3"}
+	m.Create(App{Name: "web", Repo: "o/web", AutoDeploy: true})
+	ctx := context.Background()
+	for _, c := range []string{"c1", "c2", "c3"} {
+		if _, err := m.Deploy(ctx, "web", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, _ := m.Get("web")
+	if len(a.History) != 3 || a.History[0].Commit != "c3" || a.History[2].Commit != "c1" {
+		t.Fatalf("historico %+v", a.History)
+	}
+	// cada deploy guardou a imagem do seu commit
+	for _, c := range []string{"c1", "c2", "c3"} {
+		if d.images["web-web:cais-"+c] != "img-v"+c[1:] {
+			t.Errorf("imagem guardada de %s: %v", c, d.images)
+		}
+	}
+
+	// sem commit: volta pro anterior ao que esta no ar, sem build
+	src.head = "c3"
+	d.calls = nil
+	res, err := m.Rollback(ctx, "web", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Commit != "c2" || !res.Images {
+		t.Errorf("rollback %+v", res)
+	}
+	for _, c := range d.calls {
+		if strings.HasPrefix(c, "build") {
+			t.Errorf("fez build no rollback: %v", d.calls)
+		}
+	}
+	if d.images["web-web"] != "img-v2" {
+		t.Errorf("a imagem no ar nao e a de c2: %v", d.images)
+	}
+	a, _ = m.Get("web")
+	if a.Commit != "c2" || !a.History[0].Rollback || !a.History[0].Images || a.AutoHold != "c3" {
+		t.Errorf("app depois do rollback %+v / %+v", a, a.History[0])
+	}
+
+	// um deploy normal libera o automatico de novo
+	if _, err := m.Deploy(ctx, "web", "c3"); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := m.Get("web"); a.AutoHold != "" {
+		t.Errorf("hold ficou: %q", a.AutoHold)
+	}
+
+	// erros: commit fora do historico, commit que esta no ar
+	if _, err := m.Rollback(ctx, "web", "deadbeef"); err == nil || !strings.Contains(err.Error(), "-ref deadbeef") {
+		t.Errorf("commit fora do historico: %v", err)
+	}
+	if _, err := m.Rollback(ctx, "web", "c3"); err == nil || !strings.Contains(err.Error(), "ja esta no ar") {
+		t.Errorf("rollback pro commit no ar: %v", err)
+	}
+}
+
+func TestRollbackSemImagemGuardadaFazBuild(t *testing.T) {
+	m, _, d := newManager(t)
+	d.images = map[string]string{}
+	d.config = `{"services": {"web": {"build": {"context": "{{src}}"}, "logging": {"options": {"max-size": "1m"}}}}}`
+	m.Create(App{Name: "web", Repo: "o/web"})
+	ctx := context.Background()
+	m.Deploy(ctx, "web", "c1")
+	m.Deploy(ctx, "web", "c2")
+	delete(d.images, "web-web:cais-c1") // limpa por fora, por exemplo
+	d.calls = nil
+	res, err := m.Rollback(ctx, "web", "c1")
+	if err != nil || res.Images || !slices.Contains(d.calls, "build v1") {
+		t.Fatalf("rollback %+v %v %v", res, err, d.calls)
+	}
+}
+
+func TestImagensGuardadasSoDosUltimosDeploys(t *testing.T) {
+	m, src, d := newManager(t)
+	d.images = map[string]string{}
+	d.config = `{"services": {"web": {"build": {"context": "{{src}}"}, "logging": {"options": {"max-size": "1m"}}}}}`
+	m.Create(App{Name: "web", Repo: "o/web"})
+	ctx := context.Background()
+	for i := 1; i <= KeepImages+2; i++ {
+		c := fmt.Sprintf("c%d", i)
+		src.commits[c] = map[string]string{"docker-compose.yml": fmt.Sprintf("v%d", i)}
+		if _, err := m.Deploy(ctx, "web", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i <= KeepImages+2; i++ {
+		_, ok := d.images[fmt.Sprintf("web-web:cais-c%d", i)]
+		if want := i > 2; ok != want {
+			t.Errorf("imagem de c%d guardada: %v", i, ok)
+		}
+	}
+	a, _ := m.Get("web")
+	if len(a.History) != KeepImages+2 {
+		t.Errorf("historico com %d", len(a.History))
+	}
+}
+
+func TestCommitTag(t *testing.T) {
+	cases := map[string]string{
+		"web-web":                        "web-web:cais-0123456789ab",
+		"ghcr.io/o/app:1.2":              "ghcr.io/o/app:cais-0123456789ab",
+		"registry.local:5000/app":        "registry.local:5000/app:cais-0123456789ab",
+		"registry.local:5000/app:latest": "registry.local:5000/app:cais-0123456789ab",
+	}
+	for img, want := range cases {
+		if got := commitTag(img, "0123456789abcdef"); got != want {
+			t.Errorf("%s: %s", img, got)
+		}
 	}
 }

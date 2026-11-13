@@ -53,6 +53,13 @@ type App struct {
 	// Commit e o commit no ar (ultimo deploy que deu certo).
 	Commit string  `yaml:"commit,omitempty" json:"commit,omitempty"`
 	Last   *Deploy `yaml:"last_deploy,omitempty" json:"last_deploy,omitempty"`
+	// History sao os ultimos deploys (HistorySize), do mais novo pro mais
+	// velho, os que falharam inclusive.
+	History []Deploy `yaml:"history,omitempty" json:"history,omitempty"`
+	// AutoHold e a ponta da branch quando houve um rollback: o deploy
+	// automatico nao sobe esse commit (desfaria o rollback) e volta a
+	// funcionar no proximo commit novo.
+	AutoHold string `yaml:"auto_hold,omitempty" json:"auto_hold,omitempty"`
 	// Databases sao os bancos da infra que o app usa (a credencial fica no
 	// cais; o deploy grava <engine>_<nome>_user e <engine>_<nome>_pass).
 	Databases []DBLink `yaml:"databases,omitempty" json:"databases,omitempty"`
@@ -94,7 +101,21 @@ type Deploy struct {
 	// Auto diz que o deploy foi disparado sozinho por um commit novo na
 	// branch.
 	Auto bool `yaml:"auto,omitempty" json:"auto,omitempty"`
+	// Rollback e a volta manual pra um deploy anterior (Manager.Rollback).
+	Rollback bool `yaml:"rollback,omitempty" json:"rollback,omitempty"`
+	// Images diz que subiu com as imagens guardadas desse commit, sem build.
+	Images bool `yaml:"images,omitempty" json:"images,omitempty"`
 }
+
+// OK diz se o deploy subiu.
+func (d Deploy) OK() bool { return d.Error == "" }
+
+// HistorySize e quantos deploys o app guarda no historico.
+const HistorySize = 20
+
+// KeepImages e de quantos deploys (os ultimos que deram certo, um por
+// commit) as imagens ficam guardadas: voltar pra eles nao refaz o build.
+const KeepImages = 5
 
 // Source e de onde vem o codigo (o GitHub, pelo GitHub App).
 type Source interface {
@@ -137,6 +158,11 @@ type Docker interface {
 	// PruneImages remove as imagens sem uso do projeto (versoes que o
 	// build trocou).
 	PruneImages(ctx context.Context, project string) error
+	// Imagens guardadas por commit (rollback sem build).
+	TagImage(ctx context.Context, src, dst string) error
+	HasImage(ctx context.Context, ref string) bool
+	ImageTags(ctx context.Context, project string) ([]string, error)
+	RemoveImages(ctx context.Context, refs []string) error
 	// Down remove o projeto pelo nome; volumes apaga tambem os dados.
 	Down(ctx context.Context, name string, volumes bool) error
 }
@@ -352,6 +378,8 @@ type DeployResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 	// Problems e por que o compose foi recusado (vazio se passou).
 	Problems []string `json:"problems,omitempty"`
+	// Images diz que subiu com as imagens guardadas do commit, sem build.
+	Images bool `json:"images,omitempty"`
 }
 
 // Deploy baixa o commit de ref (vazio = o mais novo da branch do app),
@@ -398,7 +426,7 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	fail := func(err error) (DeployResult, error) {
 		os.RemoveAll(filepath.Join(dir, next))
 		m.record(a, Deploy{At: m.Now(), Commit: commit, Error: err.Error(), Warnings: res.Warnings, Problems: res.Problems,
-			PromotedFrom: tag.PromotedFrom, Auto: tag.Auto})
+			PromotedFrom: tag.PromotedFrom, Auto: tag.Auto, Rollback: tag.Rollback})
 		return res, err
 	}
 	if _, err := os.Stat(filepath.Join(dir, next, a.ComposeFile())); err != nil {
@@ -420,8 +448,14 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	if len(res.Problems) > 0 {
 		return fail(&ComposeError{App: name, Problems: res.Problems})
 	}
-	if err := m.Docker.Build(ctx, p); err != nil {
-		return fail(err)
+	// voltar pra um deploy anterior usa as imagens guardadas dele (sem
+	// build); sem elas, ou num deploy normal, o build faz
+	built := builtImages(cfg, p.Name)
+	res.Images = tag.Rollback && m.restoreImages(ctx, built, commit)
+	if !res.Images {
+		if err := m.Docker.Build(ctx, p); err != nil {
+			return fail(err)
+		}
 	}
 
 	// troca: src vira src.prev e o novo vira src
@@ -451,7 +485,8 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	if upErr == nil {
 		upErr = m.settle(ctx, a)
 	}
-	last := Deploy{At: m.Now(), Commit: commit, Warnings: res.Warnings, PromotedFrom: tag.PromotedFrom, Auto: tag.Auto}
+	last := Deploy{At: m.Now(), Commit: commit, Warnings: res.Warnings, PromotedFrom: tag.PromotedFrom, Auto: tag.Auto,
+		Rollback: tag.Rollback, Images: res.Images}
 	if upErr != nil {
 		last.Error = upErr.Error()
 		if hadPrev {
@@ -467,9 +502,10 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	}
 	a.Commit = commit
 	m.record(a, last)
-	// a imagem da versao anterior nao serve mais (a volta refaz o build com
-	// cache); sem isso elas se acumulam a cada deploy. Falhar aqui nao
+	// as imagens deste commit ficam guardadas (rollback sem build) e as de
+	// deploys velhos saem; o que sobrar sem tag e lixo. Falhar aqui nao
 	// desfaz um deploy que deu certo.
+	m.keepImages(ctx, name, built, commit)
 	m.Docker.PruneImages(ctx, p.Name)
 	return res, nil
 }
@@ -565,8 +601,13 @@ func (m Manager) rollback(ctx context.Context, a App) error {
 	}
 	os.RemoveAll(failed)
 	p := m.project(a, SrcDir)
-	if err := m.Docker.Build(ctx, p); err != nil {
-		return err
+	// as imagens guardadas da versao no ar voltam sem build; sem elas, o
+	// build refaz (com o cache das camadas)
+	cfg, err := m.Docker.Config(ctx, p)
+	if err != nil || !m.restoreImages(ctx, builtImages(cfg, p.Name), a.Commit) {
+		if err := m.Docker.Build(ctx, p); err != nil {
+			return err
+		}
 	}
 	return m.Docker.Up(ctx, p)
 }
@@ -578,9 +619,64 @@ func (m Manager) record(a App, d Deploy) {
 	}
 	if d.Error == "" {
 		cur.Commit = d.Commit
+		if !d.Rollback {
+			cur.AutoHold = "" // deploy normal: o automatico segue
+		}
 	}
 	cur.Last = &d
+	cur.History = append([]Deploy{d}, cur.History...)
+	if len(cur.History) > HistorySize {
+		cur.History = cur.History[:HistorySize]
+	}
 	m.save(cur)
+}
+
+// Rollback volta o app pra um deploy anterior que deu certo (commit
+// vazio: o anterior ao que esta no ar), com as imagens guardadas dele
+// quando existem, pela troca normal (sem queda, e volta sozinho se falhar).
+// As variaveis e os secrets sao os de agora. O deploy automatico fica
+// parado ate a branch ganhar um commit novo: senao subiria de novo o que
+// acabou de sair.
+func (m Manager) Rollback(ctx context.Context, name, commit string) (DeployResult, error) {
+	a, err := m.Get(name)
+	if err != nil {
+		return DeployResult{}, err
+	}
+	target := ""
+	for _, d := range a.History {
+		if !d.OK() {
+			continue
+		}
+		if commit == "" && d.Commit != a.Commit {
+			target = d.Commit
+			break
+		}
+		if commit != "" && (d.Commit == commit || len(commit) >= 7 && strings.HasPrefix(d.Commit, commit)) {
+			target = d.Commit
+			break
+		}
+	}
+	switch {
+	case target == "" && commit == "":
+		return DeployResult{}, fmt.Errorf("%s nao tem um deploy anterior que deu certo pra voltar", name)
+	case target == "":
+		return DeployResult{}, fmt.Errorf("o commit %s nao esta no historico de deploys que deram certo de %s (pra qualquer commit: cais app deploy %s -ref %s)", commit, name, name, commit)
+	case target == a.Commit:
+		return DeployResult{}, fmt.Errorf("%s ja esta no ar", short(target))
+	}
+	head, err := m.Source.Resolve(ctx, a.Repo, a.Branch)
+	if err != nil {
+		head = a.Commit
+	}
+	res, err := m.deploy(ctx, name, target, Deploy{Rollback: true})
+	if err != nil {
+		return res, err
+	}
+	if cur, err := m.Get(name); err == nil {
+		cur.AutoHold = head
+		m.save(cur)
+	}
+	return res, nil
 }
 
 func short(commit string) string {

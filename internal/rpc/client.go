@@ -434,3 +434,8 @@ func (c *Client) RestoreBackup(ctx context.Context, req core.RestoreRequest) (re
 	err = c.call(ctx, MethodBackupRestore, req, &res)
 	return
 }
+
+func (c *Client) RollbackApp(ctx context.Context, name, commit string) (res apps.DeployResult, err error) {
+	err = c.call(ctx, MethodAppRollback, deployParams{Name: name, Ref: commit}, &res)
+	return
+}

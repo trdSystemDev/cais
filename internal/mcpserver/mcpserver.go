@@ -36,6 +36,8 @@ Fluxo de um app novo:
 5. app_deploy. Se o compose estiver fora do formato do cais, o deploy recusa
    antes do build e diz o motivo e a correcao: corrija no repositorio e tente
    de novo. Depois do deploy, apps_list e app_logs mostram como ficou.
+   Se a versao nova subiu mas esta com bug, app_rollback volta pra anterior
+   (sem build) enquanto a correcao nao chega.
 
 Homologacao: e um app com promote_to apontando pra producao (mesmo
 repositorio, compose proprio, ex: docker-compose.homolog.yaml, e rotas com o
@@ -125,6 +127,10 @@ type (
 	promoteArgs struct {
 		App     string `json:"app" jsonschema:"a homologacao"`
 		Confirm bool   `json:"confirm,omitempty" jsonschema:"aceita voltar a producao pra um commit mais velho (so com o ok do usuario)"`
+	}
+	rollbackArgs struct {
+		App    string `json:"app" jsonschema:"nome do app"`
+		Commit string `json:"commit,omitempty" jsonschema:"commit do historico pra voltar (vazio: o deploy anterior ao no ar)"`
 	}
 	deployArgs struct {
 		App string `json:"app" jsonschema:"nome do app"`
@@ -284,6 +290,12 @@ func (t tools) register(s *mcp.Server) {
 			if err != nil && len(res.Problems) > 0 && !strings.Contains(err.Error(), res.Problems[0]) {
 				err = fmt.Errorf("%w\n- %s", err, strings.Join(res.Problems, "\n- "))
 			}
+			return nil, res, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "app_rollback", Annotations: action(),
+		Description: "Volta o app pra um deploy anterior que deu certo (commit vazio: o anterior ao que esta no ar; o historico esta em apps_list). Usa as imagens guardadas dos ultimos deploys, sem build, e troca sem queda. Variaveis e secrets sao os de agora. Com auto_deploy, o automatico espera um commit novo na branch."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in rollbackArgs) (*mcp.CallToolResult, apps.DeployResult, error) {
+			res, err := t.api.RollbackApp(ctx, in.App, in.Commit)
 			return nil, res, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_restart", Annotations: idempotent(),
