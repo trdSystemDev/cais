@@ -22,7 +22,13 @@ services:
       - --providers.docker.endpoint=tcp://traefik-docker-proxy:2375
       - --providers.docker.network=proxy_network
       - --entrypoints.web.address=:80
+{{- if eq .HTTPSPort 443}}
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
+{{- else}}
+      # HTTPS publicado fora da 443 (teste ou migracao): o redirecionamento
+      # leva pra porta de fora (o "websecure" levaria pra 443, onde nao ha nada)
+      - --entrypoints.web.http.redirections.entrypoint.to=:{{.HTTPSPort}}
+{{- end}}
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls=true

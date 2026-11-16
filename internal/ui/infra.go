@@ -215,7 +215,12 @@ func (m *model) viewInfra(h int) string {
 			statusColor = t.warn
 		}
 		title := t.bold().Render(mark+" "+name) + "  " + t.fg(statusColor).Render(status)
-		line := t.fg(t.muted).Render(map[string]string{"proxy": "HTTPS dos apps", "postgres": "Banco", "mysql": "Banco", "garage": "S3"}[name])
+		role := map[string]string{"proxy": "HTTPS dos apps", "postgres": "Banco", "mysql": "Banco", "garage": "S3"}[name]
+		// porta fora do padrao (teste, migracao) fica a vista no card
+		if pc := m.setup.plan.Config.Proxy; name == "proxy" && pc.HTTPPort > 0 && !pc.StandardPorts() {
+			role = fmt.Sprintf(":%d/:%d", pc.HTTPPort, pc.HTTPSPort)
+		}
+		line := t.fg(t.muted).Render(role)
 		if def.Optional {
 			text := "Ligar"
 			if st.Enabled {
@@ -365,7 +370,7 @@ func (m *model) viewInfraLogs(w, h int) string {
 	b.WriteString("\n")
 	empty := ""
 	if len(st.Containers) == 0 {
-		empty = "Nenhum container disponivel. Ligue o servico ou execute o Setup."
+		empty = "Nenhum container. Ligue o servico (ou Aplicar, se ja estiver ligado)."
 	}
 	m.writeLogs(&b, empty, w, h)
 	return t.panel(false, w-2, h).MaxHeight(h + 2).Render(b.String())

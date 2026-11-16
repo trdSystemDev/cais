@@ -85,7 +85,8 @@ Flags:
   --test-domain dominio   so no modo de teste: os nomes que a CA local assina
                           (ex: trd.localhost; apps em <app>.trd.localhost)
   --http-port porta       porta http do proxy no host (padrao 80)
-  --https-port porta      porta https do proxy no host (padrao 443)
+  --https-port porta      porta https do proxy no host (padrao 443); fora de
+                          80/443 o Let's Encrypt nao emite: so pra teste
   --github-app-id id      App ID do GitHub App do cais (baixa o codigo dos apps)
   --host-s3 host          endpoint S3 do Garage (obrigatorio com o Garage)
   --notify-from e-mail    remetente dos avisos (um remetente validado na Brevo)
@@ -97,7 +98,8 @@ Os avisos sao e-mails pela Brevo quando um deploy automatico falha de vez
 
 Exemplos:
   cais setup config --email voce@exemplo.com.br --github-app-id 123456
-  cais setup config --tls selfsigned --test-domain trd.localhost   # teste no PC`},
+  cais setup config --tls selfsigned --test-domain trd.localhost   # teste no PC
+  cais setup config --http-port 8080 --https-port 8443 && cais service proxy on`},
 		{name: "setup secret", usage: "setup secret <nome>", short: "grava um secret informado (le do stdin), ex: github_app_key", long: `
 No terminal le sem eco; com stdin redirecionado, le o arquivo.
 

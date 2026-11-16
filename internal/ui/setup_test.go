@@ -212,3 +212,46 @@ func TestSetupSemDominio(t *testing.T) {
 	click(t, m, "save")
 	waitFor(t, m, "precisa do dominio do")
 }
+
+// trocar a porta do proxy: Setup -> Salvar (nada sobe) -> Infra -> Aplicar
+// (o proxy sobe de novo, com o compose nas portas novas)
+func TestSetupTrocaAPortaDoProxy(t *testing.T) {
+	c, ups, _ := testCore(t, okChecker)
+	setupDone(t, c, "proxy")
+	before := ups.Load()
+	m := open(t, c)
+	click(t, m, "tab:Setup")
+	waitFor(t, m, "Porta HTTP")
+	m.setup.get("httpPort").input.SetValue("8080")
+	m.setup.get("httpsPort").input.SetValue("8443")
+	click(t, m, "save")
+	waitFor(t, m, "Config salva.")
+	waitFor(t, m, "Aplicar na aba Infra")
+	if ups.Load() != before {
+		t.Fatal("salvar subiu o proxy")
+	}
+	info, _ := c.LoadConfig(context.Background())
+	if info.Config.Proxy.HTTPPort != 8080 || info.Config.Proxy.HTTPSPort != 8443 || !info.Config.HasStack("proxy") {
+		t.Fatalf("config: %+v", info.Config)
+	}
+
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "✓ proxy")
+	waitFor(t, m, ":8080/:8443")
+	click(t, m, "apply:proxy")
+	waitFor(t, m, "config aplicada no proxy.")
+	if ups.Load() != before+1 {
+		t.Fatalf("aplicar nao subiu o proxy de novo (%d -> %d)", before, ups.Load())
+	}
+	plan, _ := c.PlanSetup(context.Background())
+	compose, _ := os.ReadFile(plan.Stacks[0].File)
+	if !strings.Contains(string(compose), `"8080:80"`) || !strings.Contains(string(compose), "entrypoint.to=:8443") {
+		t.Errorf("compose do proxy sem as portas novas:\n%s", compose)
+	}
+
+	// porta invalida: nao grava e diz por que
+	click(t, m, "tab:Setup")
+	m.setup.get("httpsPort").input.SetValue("8080")
+	click(t, m, "save")
+	waitFor(t, m, "nao podem ser iguais")
+}

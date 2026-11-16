@@ -83,6 +83,11 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 		fmt.Fprintf(w, "  tls\tCA local, so pra teste (nomes de %s)\n", cfg.TestDomain)
 	}
 	fmt.Fprintf(w, "  portas\t%d (http), %d (https)\n", cfg.Proxy.HTTPPort, cfg.Proxy.HTTPSPort)
+	defer func() {
+		if warn := cfg.PortsWarning(); warn != "" {
+			fmt.Fprintf(out, "\nAtencao: %s\n", warn)
+		}
+	}()
 	if cfg.Notify.On() {
 		fmt.Fprintf(w, "  avisos\t%s (de %s, pela Brevo)\n", strings.Join(cfg.Notify.To, ", "), cfg.Notify.From)
 	} else {

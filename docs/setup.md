@@ -95,6 +95,24 @@ containers dela (`docker compose down`, sem `-v`) e o compose vira
 religar a stack traz tudo de volta. Stacks de versoes antigas do cais sao
 tratadas do mesmo jeito.
 
+## Portas do proxy
+
+O proxy sobe nas portas 80 e 443 do host. Pra testar (ou numa migracao, com
+outro proxy ainda nas 80/443), da pra usar outras: na aba **Setup**, secao
+**Proxy**, ou pelo CLI. Mudou com o proxy ligado, aplique (aba **Infra** ->
+**Aplicar**, ou `cais service proxy on`): o container sobe de novo na porta
+nova.
+
+```sh
+cais setup config --http-port 8080 --https-port 8443
+cais service proxy on        # aplica: o proxy volta nas portas novas
+```
+
+Com HTTPS fora da 443, o redirecionamento de HTTP leva pra porta certa
+(`http://site:8080` -> `https://site:8443`). O Let's Encrypt, porem, valida
+pela porta 80 da internet: fora de 80/443 ele nao emite certificado e os
+sites abrem com aviso. A aba Setup e o `cais setup` avisam.
+
 ## Acesso aos bancos
 
 Os bancos nao tem painel web: so escutam no loopback da VPS (`127.0.0.1:5432` e

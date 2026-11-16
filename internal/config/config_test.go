@@ -220,3 +220,22 @@ func TestLoadConfigComDominio(t *testing.T) {
 		t.Fatalf("producao: %+v %v", c, err)
 	}
 }
+
+// fora de 80/443 com Let's Encrypt: avisa (nao bloqueia: serve pra teste)
+func TestAvisoDePortasForaDoPadrao(t *testing.T) {
+	c := validConfig()
+	if c.PortsWarning() != "" {
+		t.Fatalf("avisou nas portas padrao: %s", c.PortsWarning())
+	}
+	c.Proxy = Proxy{HTTPPort: 8080, HTTPSPort: 8443}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("recusou porta de teste: %v", err)
+	}
+	if w := c.PortsWarning(); !strings.Contains(w, "8080/8443") || !strings.Contains(w, "Let's Encrypt") {
+		t.Errorf("aviso: %q", w)
+	}
+	c.TLS, c.TestDomain = TLSSelfSigned, "trd.localhost"
+	if c.PortsWarning() != "" {
+		t.Error("avisou do Let's Encrypt no modo de teste (CA local)")
+	}
+}

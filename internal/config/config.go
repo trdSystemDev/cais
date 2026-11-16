@@ -61,6 +61,28 @@ type Proxy struct {
 	HTTPSPort int `yaml:"https_port" json:"https_port"`
 }
 
+// Portas padrao do proxy no host.
+const (
+	DefaultHTTPPort  = 80
+	DefaultHTTPSPort = 443
+)
+
+// StandardPorts diz se o proxy esta em 80 e 443. Fora delas o Let's Encrypt
+// nao emite certificado: ele valida pela porta 80 da internet.
+func (p Proxy) StandardPorts() bool {
+	return p.HTTPPort == DefaultHTTPPort && p.HTTPSPort == DefaultHTTPSPort
+}
+
+// PortsWarning e o aviso sobre portas fora do padrao com Let's Encrypt;
+// vazio quando nao ha o que avisar.
+func (c Config) PortsWarning() string {
+	if c.Proxy.StandardPorts() || !c.LetsEncrypt() {
+		return ""
+	}
+	return fmt.Sprintf("o proxy esta nas portas %d/%d: o Let's Encrypt valida pela porta 80 da internet e nao vai emitir "+
+		"certificado (os sites abrem com aviso de certificado). Fora de 80/443 so pra teste ou migracao.", c.Proxy.HTTPPort, c.Proxy.HTTPSPort)
+}
+
 // Hosts troca o nome publico de uma stack. Vazio usa o padrao.
 type Hosts struct {
 	// S3 e o endpoint S3 do Garage (padrao s3.<domain>).
@@ -147,7 +169,7 @@ func (c Config) LetsEncrypt() bool { return c.TLS == "" || c.TLS == TLSLetsEncry
 // Default devolve a configuracao inicial do Setup, sem dominio e e-mail.
 func Default() Config {
 	return Config{
-		Proxy: Proxy{HTTPPort: 80, HTTPSPort: 443},
+		Proxy: Proxy{HTTPPort: DefaultHTTPPort, HTTPSPort: DefaultHTTPSPort},
 	}
 }
 

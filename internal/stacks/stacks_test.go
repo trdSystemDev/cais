@@ -131,7 +131,8 @@ func TestProxyNasceVazioComPortasEEmail(t *testing.T) {
 		"--providers.docker.exposedbydefault=false",
 		// o docker.sock so chega pelo socket-proxy somente leitura
 		"--providers.docker.endpoint=tcp://traefik-docker-proxy:2375",
-		"--entrypoints.web.http.redirections.entrypoint.to=websecure",
+		// HTTPS fora da 443: o redirecionamento vai pra porta publicada
+		"--entrypoints.web.http.redirections.entrypoint.to=:8443",
 		// o padrao de 60s corta upload grande dos apps
 		"--entrypoints.websecure.transport.respondingtimeouts.readtimeout=30m",
 		"--certificatesresolvers.le.acme.email=admin@exemplo.com.br",
@@ -155,6 +156,16 @@ func TestProxyNasceVazioComPortasEEmail(t *testing.T) {
 		if strings.Contains(k, ".routers.") {
 			t.Errorf("site declarado no proxy: %s", k)
 		}
+	}
+}
+
+// nas portas padrao o redirecionamento vai pro entrypoint (443)
+func TestProxyRedirecionaPraPortaHTTPS(t *testing.T) {
+	_, cf := render(t, "proxy", validConfig())
+	cmd := cf.Services["traefik"].Command
+	if !slices.Contains(cmd, "--entrypoints.web.http.redirections.entrypoint.to=websecure") ||
+		slices.ContainsFunc(cmd, func(f string) bool { return strings.HasSuffix(f, "to=:443") }) {
+		t.Errorf("redirecionamento nas portas padrao: %v", cmd)
 	}
 }
 

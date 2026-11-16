@@ -37,7 +37,7 @@ var setupSections = []struct{ title, hint string }{
 	{"Geral", "cada app traz o proprio dominio no compose"},
 	{"GitHub App do cais", "baixa o codigo dos repositorios privados no deploy"},
 	{"Avisos por e-mail", "pela Brevo: deploy automatico ou backup que falhou"},
-	{"Hosts", "S3: obrigatorio com o Garage ligado"},
+	{"Proxy", "portas no host (padrao 80/443) e o S3 do Garage"},
 }
 
 const (
@@ -115,6 +115,8 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	p.get("brevoKey").input.EchoMode = textinput.EchoPassword
 
 	section = 3
+	input("httpPort", "Porta HTTP", "80")
+	input("httpsPort", "Porta HTTPS", "443")
 	input("hostS3", "S3", "")
 	p.items = append(p.items,
 		&item{id: "save", label: "Salvar", kind: kindButton, section: section},
@@ -220,6 +222,8 @@ func (p *setupPage) fill(c config.Config) {
 		p.get("ghAppID").input.SetValue(strconv.FormatInt(c.GitHub.AppID, 10))
 	}
 	p.get("hostS3").input.SetValue(c.Hosts.S3)
+	p.get("httpPort").input.SetValue(strconv.Itoa(c.Proxy.HTTPPort))
+	p.get("httpsPort").input.SetValue(strconv.Itoa(c.Proxy.HTTPSPort))
 	p.get("notifyFrom").input.SetValue(c.Notify.From)
 	p.get("notifyTo").input.SetValue(strings.Join(c.Notify.To, ", "))
 }
@@ -230,6 +234,15 @@ func (p *setupPage) fill(c config.Config) {
 func (p *setupPage) formApply() func(*config.Config) {
 	val := func(id string) string { return strings.TrimSpace(p.get(id).input.Value()) }
 	email, tls, testDomain, appID, s3, from := val("email"), p.tls, val("testDomain"), val("ghAppID"), val("hostS3"), val("notifyFrom")
+	// vazio e o padrao; texto que nao e numero vira 0, e a validacao explica
+	port := func(id string, def int) int {
+		if v := val(id); v != "" {
+			n, _ := strconv.Atoi(v)
+			return n
+		}
+		return def
+	}
+	httpPort, httpsPort := port("httpPort", config.DefaultHTTPPort), port("httpsPort", config.DefaultHTTPSPort)
 	var to []string
 	for _, addr := range strings.FieldsFunc(val("notifyTo"), func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
 		to = append(to, addr)
@@ -247,6 +260,7 @@ func (p *setupPage) formApply() func(*config.Config) {
 			c.GitHub.AppID = -1 // a validacao da config explica
 		}
 		c.Hosts.S3 = s3
+		c.Proxy.HTTPPort, c.Proxy.HTTPSPort = httpPort, httpsPort
 		c.Notify.From, c.Notify.To = from, to
 	}
 }
@@ -473,6 +487,10 @@ func (p *setupPage) viewPlan(w int) string {
 		for _, x := range pl.Missing {
 			b.WriteString(wrap.Render("  "+t.fg(t.danger).Render(x.Name)+": "+x.Desc) + "\n")
 		}
+	}
+
+	if w := pl.Config.PortsWarning(); w != "" {
+		b.WriteString("\n" + wrap.Foreground(t.warn).Render("Atencao: "+w) + "\n")
 	}
 
 	// o Setup so configura: os servicos se ligam e se aplicam na Infra
