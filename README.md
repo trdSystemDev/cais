@@ -58,8 +58,9 @@ chaves. Opcoes e detalhes em [docs/instalacao.md](docs/instalacao.md).
    ```
 
 2. Na aba **Setup**, preencha o e-mail do Let's Encrypt e o GitHub App e
-   clique em **Executar setup**: sobe o proxy com HTTPS.
-3. Na aba **Infra**, ligue o que for usar: Postgres, MySQL, Garage (S3).
+   clique em **Salvar**. O Setup so guarda a configuracao: nada sobe.
+3. Na aba **Infra**, ligue o **proxy** (publica os apps com HTTPS) e o que
+   mais for usar: Postgres, MySQL, Garage (S3).
 4. Na aba **Apps**, **+ Novo app** com o link do repositorio. A **Ajuda** do
    app gera o trecho do compose (dominio, redes, secrets) pra colar no
    repositorio. Depois, **Deploy**.
@@ -67,6 +68,7 @@ chaves. Opcoes e detalhes em [docs/instalacao.md](docs/instalacao.md).
 O mesmo pelo CLI, na VPS (ou `ssh cais@ip-da-vps <comando>`):
 
 ```sh
+cais service proxy on
 cais app create loja dono/loja -compose docker-compose.producao.yml
 cais app guide loja                     # o trecho do compose pra colar
 cais app env loja DOMINIO=loja.exemplo.com.br

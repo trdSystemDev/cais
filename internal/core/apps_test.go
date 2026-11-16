@@ -404,7 +404,7 @@ func TestCreateBucket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Stacks, cfg.Hosts.S3 = append(cfg.Stacks, "garage"), "s3.exemplo.com.br"
+	cfg.Stacks, cfg.Hosts.S3 = append(cfg.Stacks, "proxy", "garage"), "s3.exemplo.com.br"
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +459,7 @@ func TestDeleteDatabaseEBucket(t *testing.T) {
 		return "", nil
 	}
 	cfg, _ := config.Load(c.deps.ConfigPath)
-	cfg.Stacks, cfg.Hosts.S3 = append(cfg.Stacks, "garage"), "s3.exemplo.com.br"
+	cfg.Stacks, cfg.Hosts.S3 = append(cfg.Stacks, "proxy", "garage"), "s3.exemplo.com.br"
 	c.SaveConfig(ctx, cfg)
 	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"})
 	c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "loja"})

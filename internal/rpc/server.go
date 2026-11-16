@@ -424,9 +424,6 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodSetupPlan:
 		return wrap(s.api.PlanSetup(s.work))
 
-	case MethodSetupRun:
-		return wrap(s.api.RunSetup(s.work))
-
 	case MethodNotifyTest:
 		return ok(s.api.TestNotify(s.work))
 

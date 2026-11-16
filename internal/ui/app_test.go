@@ -304,7 +304,7 @@ func TestAtalhoNumericoTrocaDeAba(t *testing.T) {
 	waitFor(t, m, "Pronto.")
 
 	press(t, m, "3")
-	waitFor(t, m, "Base e servicos")
+	waitFor(t, m, "nada sobe sem ligar")
 	if m.tab != tabInfra {
 		t.Fatalf("aba %d", m.tab)
 	}
@@ -355,7 +355,7 @@ func setupDone(t *testing.T, c *core.Core, services ...string) {
 
 func TestInfraMostraAsStacks(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
-	setupDone(t, c, "postgres")
+	setupDone(t, c, "proxy", "postgres")
 	// mysql ligado na config depois, sem aplicar
 	info, _ := c.LoadConfig(context.Background())
 	info.Config.Stacks = append(info.Config.Stacks, "mysql")
@@ -366,7 +366,7 @@ func TestInfraMostraAsStacks(t *testing.T) {
 	waitFor(t, m, "Ultima verificacao")
 	out := screen(m)
 	for _, want := range []string{
-		"Base · sobe sempre", "✓ proxy", "Logs · proxy",
+		"HTTPS dos apps", "✓ proxy", "Logs · proxy",
 		"✓ postgres", "ainda nao subiu", // mysql
 		"· garage", "Ligar", "Desligar",
 	} {
@@ -374,11 +374,18 @@ func TestInfraMostraAsStacks(t *testing.T) {
 			t.Errorf("tela sem %q:\n%s", want, out)
 		}
 	}
-	// as fixas nao tem botao
-	for _, core := range []string{"proxy"} {
-		if z := m.zones.Get("toggle:" + core); z != nil && !z.IsZero() {
-			t.Errorf("%s tem botao de desligar", core)
+	// todos ligam e desligam, o proxy tambem; o mysql, ligado na config sem
+	// subir, tem o Aplicar
+	for _, name := range []string{"proxy", "postgres", "mysql", "garage"} {
+		if z := m.zones.Get("toggle:" + name); z == nil || z.IsZero() {
+			t.Errorf("%s sem botao de ligar/desligar", name)
 		}
+	}
+	if z := m.zones.Get("apply:mysql"); z == nil || z.IsZero() {
+		t.Errorf("mysql sem o Aplicar:\n%s", out)
+	}
+	if z := m.zones.Get("apply:proxy"); z != nil && !z.IsZero() {
+		t.Error("proxy em dia com o Aplicar")
 	}
 }
 
@@ -419,7 +426,7 @@ func TestInfraSemConfigAvisa(t *testing.T) {
 
 func TestInfraAtualizaAoAbrirEPeloBotao(t *testing.T) {
 	c, _, pss := testCore(t, okChecker)
-	setupDone(t, c, "postgres")
+	setupDone(t, c, "proxy", "postgres")
 	m := open(t, c)
 
 	click(t, m, "tab:Infra")
@@ -438,21 +445,44 @@ func TestInfraAtualizaAoAbrirEPeloBotao(t *testing.T) {
 	}
 }
 
-// depois de um Setup pela TUI, a Infra ja reflete o que subiu
-func TestInfraAtualizaDepoisDoSetup(t *testing.T) {
-	c, _, pss := testCore(t, okChecker)
+// o proxy liga pela Infra; mudar a config dele no Setup mostra o Aplicar,
+// que sobe de novo so com a config nova
+func TestInfraLigaOProxyEAplicaAConfig(t *testing.T) {
+	c, ups, _ := testCore(t, okChecker)
 	m := open(t, c)
 	click(t, m, "tab:Setup")
-	fill(t, m, "trd.localhost")
+	// Let's Encrypt: o e-mail vai no compose do proxy
+	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
 	click(t, m, "save")
-	waitFor(t, m, "Pronto pra executar")
-	click(t, m, "run")
-	waitFor(t, m, "Setup concluido.")
-	if pss.Load() == 0 {
-		t.Fatal("Setup terminou sem atualizar a Infra")
+	waitFor(t, m, "Config salva.")
+	if ups.Load() != 0 {
+		t.Fatal("salvar subiu stack")
 	}
+
 	click(t, m, "tab:Infra")
+	waitFor(t, m, "· proxy")
+	click(t, m, "toggle:proxy")
+	waitFor(t, m, "proxy ligado.")
 	waitFor(t, m, "✓ proxy")
+	if ups.Load() != 1 {
+		t.Fatalf("%d compose up, esperava 1 (proxy)", ups.Load())
+	}
+
+	// e-mail novo muda o compose do proxy: Aplicar
+	click(t, m, "tab:Setup")
+	m.setup.get("email").input.SetValue("outro@exemplo.com.br")
+	click(t, m, "save")
+	waitFor(t, m, "Aplicar na aba Infra")
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Aplicar")
+	click(t, m, "apply:proxy")
+	waitFor(t, m, "config aplicada no proxy.")
+	if ups.Load() != 2 {
+		t.Fatalf("%d compose up, esperava 2", ups.Load())
+	}
+	if info, _ := c.LoadConfig(context.Background()); !info.Config.HasStack("proxy") {
+		t.Fatal("aplicar desligou o proxy")
+	}
 }
 
 // Novo banco: database e usuario com senha nova, e a lista com secrets e espaco
@@ -486,7 +516,7 @@ func TestInfraNovoBanco(t *testing.T) {
 // Novo bucket no Garage: bucket e chave, e a lista com os secrets do app
 func TestInfraNovoBucket(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
-	setupDone(t, c, "garage")
+	setupDone(t, c, "proxy", "garage")
 	m := open(t, c)
 	click(t, m, "tab:Infra")
 	waitFor(t, m, "Novo bucket")
@@ -504,7 +534,7 @@ func TestInfraNovoBucket(t *testing.T) {
 // excluir da lista: pede o nome digitado, recusa ligado a app, depois apaga
 func TestInfraExcluirBancoEBucket(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
-	setupDone(t, c, "postgres", "garage")
+	setupDone(t, c, "proxy", "postgres", "garage")
 	ctx := context.Background()
 	c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "loja"})
 	c.CreateBucket(ctx, "loja-fotos")

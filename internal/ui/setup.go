@@ -6,9 +6,9 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -62,19 +62,9 @@ type setupPage struct {
 
 	cfg     config.Config // ultima lida: base do que o form nao mostra
 	plan    bootstrap.Plan
-	setup   core.Setup // ultima foto do Setup no estado
 	status  string
 	statusC string // ok, warn, danger
 	saveErr string // por que o ultimo Salvar falhou (varias linhas)
-	showRun bool   // painel mostra a execucao em vez do plano
-	running bool   // o clique em Executar ainda nao voltou
-
-	// inicio da ultima execucao ja vista: uma execucao nova troca o painel
-	// pro andamento. Nao da pra depender de ver Running, porque o core so
-	// entrega a foto mais recente e um Setup rapido pode passar inteiro
-	// entre duas leituras.
-	lastStart time.Time
-	gotState  bool
 }
 
 // Respostas das chamadas ao core (feitas fora do Update).
@@ -93,7 +83,6 @@ type (
 		err  error
 		keys []string // chaves gravadas junto (GitHub App, Brevo)
 	}
-	runDoneMsg    struct{ err error }
 	notifyTestMsg struct{ err error }
 )
 
@@ -129,7 +118,6 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	input("hostS3", "S3", "")
 	p.items = append(p.items,
 		&item{id: "save", label: "Salvar", kind: kindButton, section: section},
-		&item{id: "run", label: "Executar setup", kind: kindButton, section: section},
 		&item{id: "notifyTest", label: "Testar e-mail", kind: kindButton, section: section})
 	p.setTheme(th)
 	p.setFocus(0)
@@ -177,19 +165,6 @@ func (p *setupPage) planCmd() tea.Cmd {
 	}
 }
 
-func (p *setupPage) onState(s core.State) {
-	p.setup = s.Setup
-	start := s.Setup.StartedAt
-	// a primeira foto pode trazer uma execucao antiga: so marca como vista
-	if p.gotState && start.After(p.lastStart) {
-		p.showRun = true // Setup disparado daqui, do CLI ou do MCP
-	}
-	if s.Setup.Running && !p.gotState {
-		p.showRun = true // abriu a TUI com um Setup em andamento
-	}
-	p.lastStart, p.gotState = start, true
-}
-
 func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case loadedMsg:
@@ -206,7 +181,6 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		}
 		p.plan = msg.plan
 	case savedMsg:
-		p.showRun = false
 		if msg.err != nil {
 			// a validacao junta varios erros, um por linha: vao pro painel
 			p.saveErr = msg.err.Error()
@@ -229,15 +203,6 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		} else {
 			p.setStatus("ok", "E-mail de teste enviado.")
 		}
-	case runDoneMsg:
-		p.running = false
-		if msg.err != nil {
-			p.setStatus("danger", "Setup parou: "+firstLine(msg.err.Error()))
-		} else {
-			p.setStatus("ok", "Setup concluido.")
-		}
-		// a CA e os bancos aparecem no fim; o plano novo traz as instrucoes
-		return p.planCmd()
 	}
 	return nil
 }
@@ -259,33 +224,36 @@ func (p *setupPage) fill(c config.Config) {
 	p.get("notifyTo").input.SetValue(strings.Join(c.Notify.To, ", "))
 }
 
-// formConfig monta a config do formulario, mantendo o que ele nao mostra
-// (portas do proxy, servicos ligados na aba Infra) como estava.
-func (p *setupPage) formConfig() config.Config {
-	c := p.cfg
+// formApply le o formulario agora e devolve o que ele muda numa config: so
+// os campos da aba. O resto (servicos ligados na Infra, backup, portas)
+// fica como estiver na config na hora de gravar.
+func (p *setupPage) formApply() func(*config.Config) {
 	val := func(id string) string { return strings.TrimSpace(p.get(id).input.Value()) }
-	c.Email = val("email")
-	c.TLS, c.TestDomain = "", ""
-	if p.tls == 1 {
-		c.TLS, c.TestDomain = config.TLSSelfSigned, val("testDomain")
+	email, tls, testDomain, appID, s3, from := val("email"), p.tls, val("testDomain"), val("ghAppID"), val("hostS3"), val("notifyFrom")
+	var to []string
+	for _, addr := range strings.FieldsFunc(val("notifyTo"), func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+		to = append(to, addr)
 	}
-	c.GitHub.AppID = 0
-	if id, err := strconv.ParseInt(val("ghAppID"), 10, 64); err == nil {
-		c.GitHub.AppID = id
-	} else if val("ghAppID") != "" {
-		c.GitHub.AppID = -1 // a validacao da config explica
+	return func(c *config.Config) {
+		c.Email = email
+		c.TLS, c.TestDomain = "", ""
+		if tls == 1 {
+			c.TLS, c.TestDomain = config.TLSSelfSigned, testDomain
+		}
+		c.GitHub.AppID = 0
+		if id, err := strconv.ParseInt(appID, 10, 64); err == nil {
+			c.GitHub.AppID = id
+		} else if appID != "" {
+			c.GitHub.AppID = -1 // a validacao da config explica
+		}
+		c.Hosts.S3 = s3
+		c.Notify.From, c.Notify.To = from, to
 	}
-	c.Hosts.S3 = val("hostS3")
-	c.Notify.From = val("notifyFrom")
-	c.Notify.To = nil
-	for _, to := range strings.FieldsFunc(val("notifyTo"), func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
-		c.Notify.To = append(c.Notify.To, to)
-	}
-	return c
 }
 
 func (p *setupPage) save() tea.Cmd {
-	c := p.formConfig()
+	apply := p.formApply()
+	base := p.cfg
 	var key []byte
 	if text := strings.TrimSpace(p.get("ghKey").input.Value()); text != "" {
 		var err error
@@ -300,6 +268,13 @@ func (p *setupPage) save() tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		var keys []string
+		// a config de agora, nao a de quando a aba abriu: um servico ligado
+		// na Infra depois disso nao pode ser desligado por este Salvar
+		c := base
+		if info, err := p.api.LoadConfig(ctx); err == nil && info.Exists {
+			c = info.Config
+		}
+		apply(&c)
 		err := p.api.SaveConfig(ctx, c)
 		if err == nil && key != nil {
 			if err = p.api.SetSecret(ctx, "github_app_key", string(key)); err == nil {
@@ -321,20 +296,6 @@ func (p *setupPage) notifyTest() tea.Cmd {
 	p.setStatus("warn", "Mandando o e-mail de teste...")
 	return func() tea.Msg {
 		return notifyTestMsg{p.api.TestNotify(context.Background())}
-	}
-}
-
-func (p *setupPage) canRun() bool { return !p.running && !p.setup.Running && p.plan.Ready() }
-
-func (p *setupPage) run() tea.Cmd {
-	if !p.canRun() {
-		return nil
-	}
-	p.showRun, p.running = true, true
-	p.setStatus("warn", "Executando o Setup...")
-	return func() tea.Msg {
-		_, err := p.api.RunSetup(context.Background())
-		return runDoneMsg{err}
 	}
 }
 
@@ -375,8 +336,6 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		p.tls = 1 - p.tls
 	case it.id == "save":
 		return p.save()
-	case it.id == "run":
-		return p.run()
 	case it.id == "notifyTest":
 		return p.notifyTest()
 	}
@@ -402,8 +361,6 @@ func (p *setupPage) key(msg tea.KeyPressMsg) tea.Cmd {
 	switch k {
 	case "ctrl+s":
 		return p.save()
-	case "ctrl+r":
-		return p.run()
 	case "tab", "down":
 		return p.setFocus(p.focus + 1)
 	case "shift+tab", "up":
@@ -438,11 +395,7 @@ func (p *setupPage) view(w, h int) string {
 	left := t.panel(true, formWidth+4, h-2).Render(t.bold().Render("Configuracao") + "\n\n" + p.viewForm() + "\n\n" + status)
 
 	rightW := max(w-lipgloss.Width(left)-1, 20)
-	title, content := "Plano", p.viewPlan(rightW-4)
-	if p.showRun {
-		title, content = "Execucao", p.viewRun(rightW-4)
-	}
-	right := t.panel(false, rightW, h-2).Render(t.bold().Render(title) + "\n" + content)
+	right := t.panel(false, rightW, h-2).Render(t.bold().Render("Servicos") + "\n" + p.viewPlan(rightW-4))
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
@@ -461,9 +414,6 @@ func (p *setupPage) viewForm() string {
 		}
 		if it.kind == kindButton {
 			k := btnNormal
-			if it.id == "run" && !p.canRun() {
-				k = btnOff
-			}
 			if len(buttons) > 0 {
 				buttons = append(buttons, " ")
 			}
@@ -511,27 +461,9 @@ func (p *setupPage) viewPlan(w int) string {
 	if !pl.Configured {
 		b.WriteString("\n" + t.fg(t.warn).Bold(true).Render("Ainda sem configuracao.") + "\n\n")
 		b.WriteString(wrap.Render("Preencha o e-mail (avisos do Let's Encrypt) e o GitHub App e salve (ctrl+s). "+
-			"Nao ha dominio da VPS: cada app traz o proprio dominio no compose, e o certificado sai pra ele. "+
-			"Bancos e storage voce liga depois, na aba Infra.") + "\n")
+			"Salvar so grava a configuracao: nada sobe. Depois, na aba Infra, ligue o proxy (publica os apps "+
+			"com HTTPS) e o que mais for usar: Postgres, MySQL, Garage.") + "\n")
 		return b.String()
-	}
-
-	b.WriteString("\n" + t.bold().Render("Stacks") + "\n")
-	for _, s := range pl.Stacks {
-		c := map[string]color.Color{bootstrap.ChangeNew: t.ok, bootstrap.ChangeModified: t.warn}[s.Change]
-		if c == nil {
-			c = t.muted
-		}
-		b.WriteString(fmt.Sprintf("  %-11s %s %s\n", s.Name, t.fg(c).Render(fmt.Sprintf("%-9s", s.Change)), muted.Render(s.Desc)))
-	}
-	if len(pl.Disable) > 0 {
-		b.WriteString("\n" + t.bold().Render("Desativadas") + " " + muted.Render("(derrubadas no Setup; os volumes ficam)") + "\n")
-		for _, s := range pl.Disable {
-			b.WriteString(fmt.Sprintf("  %-11s %s\n", s.Name, muted.Render(s.Desc)))
-		}
-	}
-	if len(pl.CreateSecrets) > 0 {
-		b.WriteString("\n" + t.bold().Render("Secrets a gerar") + "\n" + wrap.Render("  "+strings.Join(pl.CreateSecrets, ", ")) + "\n")
 	}
 	for _, pr := range pl.Problems {
 		b.WriteString("\n" + wrap.Foreground(t.danger).Render(pr) + "\n")
@@ -542,49 +474,35 @@ func (p *setupPage) viewPlan(w int) string {
 			b.WriteString(wrap.Render("  "+t.fg(t.danger).Render(x.Name)+": "+x.Desc) + "\n")
 		}
 	}
-	if pl.Ready() {
-		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render("Pronto pra executar") + muted.Render(" (ctrl+r)"))
-		if pl.CAFile == "" {
-			b.WriteString(muted.Render(" -- antes, aponte o DNS dos nomes pra esta VPS"))
+
+	// o Setup so configura: os servicos se ligam e se aplicam na Infra
+	if len(pl.Stacks) == 0 {
+		b.WriteString("\n" + wrap.Render("Configuracao salva. Nenhum servico ligado: ligue na aba Infra. "+
+			"O proxy publica os apps com HTTPS; Postgres, MySQL e Garage conforme o uso.") + "\n")
+	} else {
+		b.WriteString("\n" + muted.Render("Ligados na aba Infra:") + "\n")
+		for _, s := range pl.Stacks {
+			state, c := "em dia", t.ok
+			switch s.Change {
+			case bootstrap.ChangeModified:
+				state, c = "a config salva muda ele: Aplicar na aba Infra", t.warn
+			case bootstrap.ChangeNew:
+				state, c = "ainda nao subiu: Aplicar na aba Infra", t.warn
+			}
+			b.WriteString(wrap.Render(fmt.Sprintf("  %-9s %s", s.Name, t.fg(c).Render(state))) + "\n")
 		}
-		b.WriteString("\n")
+	}
+	if len(pl.Disable) > 0 {
+		b.WriteString("\n" + muted.Render("Desligados, ainda no disco (saem na proxima aplicacao; os volumes ficam):") + "\n")
+		for _, s := range pl.Disable {
+			b.WriteString(fmt.Sprintf("  %s\n", s.Name))
+		}
+	}
+	if pl.CAFile == "" && !slices.ContainsFunc(pl.Stacks, func(s bootstrap.StackPlan) bool { return s.Name == "proxy" }) {
+		b.WriteString("\n" + wrap.Inherit(muted).Render("Antes de ligar o proxy, aponte o DNS dos dominios dos apps pra esta VPS: "+
+			"o Let's Encrypt confere o dominio ao emitir o certificado.") + "\n")
 	}
 	b.WriteString(p.viewAccess(w))
-	return b.String()
-}
-
-func (p *setupPage) viewRun(w int) string {
-	t, s := p.th, p.setup
-	var b strings.Builder
-	b.WriteString("\n")
-	if len(s.Steps) == 0 {
-		return b.String() + t.fg(t.warn).Render("Comecando...")
-	}
-	for _, st := range s.Steps {
-		mark := map[bootstrap.Status]string{
-			bootstrap.Done:    t.fg(t.ok).Render("✓"),
-			bootstrap.Running: t.fg(t.warn).Render("◐"),
-			bootstrap.Failed:  t.fg(t.danger).Render("✗"),
-		}[st.Status]
-		if mark == "" {
-			mark = t.fg(t.muted).Render("·")
-		}
-		line := mark + " " + st.Desc
-		if st.Detail != "" && st.Status != bootstrap.Failed {
-			line += t.fg(t.muted).Render(" — " + st.Detail)
-		}
-		b.WriteString(lipgloss.NewStyle().Width(w).Render(line) + "\n")
-	}
-	switch {
-	case s.Running || p.running:
-		b.WriteString("\n" + t.fg(t.warn).Render("Executando... pode sair: o Setup continua no daemon.") + "\n")
-	case s.Error != "":
-		b.WriteString("\n" + lipgloss.NewStyle().Width(w).Foreground(t.danger).Render("Parou: "+s.Error) + "\n")
-		b.WriteString("\n" + t.fg(t.muted).Render("Corrija e execute de novo: nada que ja existe e refeito.") + "\n")
-	default:
-		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render("Setup concluido.") + "\n")
-		b.WriteString(p.viewAccess(w))
-	}
 	return b.String()
 }
 

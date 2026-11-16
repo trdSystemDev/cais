@@ -7,7 +7,7 @@ import (
 
 // todo comando que cria flags (newFlags) tem o proprio -h
 func TestTodoComandoTemAjuda(t *testing.T) {
-	names := []string{"daemon", "state", "check", "setup config", "setup secret", "setup run", "service", "apps",
+	names := []string{"daemon", "state", "check", "setup config", "setup secret", "service", "apps",
 		"db create", "db list", "db delete", "bucket create", "bucket list", "bucket delete"}
 	for _, sub := range []string{"create", "deploy", "guide", "env", "db", "bucket", "secrets", "secret", "restart", "stop", "logs", "delete"} {
 		names = append(names, "app "+sub)

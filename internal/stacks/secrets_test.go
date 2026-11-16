@@ -38,7 +38,7 @@ func TestEnsureSecretsGeraCertificadoLocal(t *testing.T) {
 	c := validConfig()
 	c.TestDomain, c.TLS = "trd.localhost", config.TLSSelfSigned
 	c.Stacks = []string{"postgres"}
-	c.Stacks = []string{"postgres", "garage"}
+	c.Stacks = []string{"proxy", "postgres", "garage"}
 	c.Hosts.S3 = "arquivos.outro.localhost"
 
 	create, _, err := PlanSecrets(s, c)
@@ -135,7 +135,7 @@ func TestEnsureSecretsSoDasStacksAtivas(t *testing.T) {
 		t.Errorf("o proxy com Let's Encrypt nao precisa de secret: %v", res.Created)
 	}
 
-	c.Stacks, c.Hosts.S3 = []string{"garage"}, "s3.exemplo.com.br"
+	c.Stacks, c.Hosts.S3 = []string{"proxy", "garage"}, "s3.exemplo.com.br"
 	res, _ = EnsureSecrets(s, c)
 	rpc, _ := s.Get("garage_rpc_secret")
 	if !slices.Contains(res.Created, "garage_rpc_secret") || len(rpc) != 64 {

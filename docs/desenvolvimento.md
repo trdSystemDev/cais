@@ -109,7 +109,7 @@ trd.localhost` (o systemd-resolved e os navegadores ja resolvem `*.localhost`
 pra 127.0.0.1; `.local` e recusado porque e do mDNS), e os apps em
 `<app>.trd.localhost`. O cais cria uma CA local
 restrita ao dominio do teste (name constraints: nao assina nada fora dele) e um
-certificado com SAN pra todos os nomes; o `setup run` termina mostrando como
+certificado com SAN pra todos os nomes; ligar o proxy termina mostrando como
 confiar nela (`trust anchor`). Use `CAIS_SOCKET`, `CAIS_CONFIG` e `CAIS_DATA_DIR` numa pasta
 persistente (nao `/tmp`: os volumes sobrevivem ao reboot e os secrets nao).
 

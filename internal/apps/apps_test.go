@@ -269,7 +269,8 @@ func newManager(t *testing.T) (Manager, *fakeSource, *fakeDocker) {
 	}}
 	d := &fakeDocker{failUp: map[string]bool{}}
 	now := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
-	return Manager{Root: filepath.Join(t.TempDir(), "apps"), Source: src, Docker: d, Now: func() time.Time { return now }}, src, d
+	return Manager{Root: filepath.Join(t.TempDir(), "apps"), Source: src, Docker: d, Now: func() time.Time { return now },
+		Networks: []string{ProxyNetwork}}, src, d
 }
 
 func TestCheckRecusa(t *testing.T) {
@@ -528,7 +529,7 @@ func TestParseEnvDeArquivoComum(t *testing.T) {
 
 func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
 	src, secretsDir := "/var/lib/cais/apps/web/src.next", "/var/lib/cais/apps/web/secrets"
-	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}, Apps: []string{"web-homolog"}}
+	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network", ProxyNetwork}, Apps: []string{"web-homolog"}}
 	cases := map[string]struct{ svc, top, want string }{
 		"porta":             {`"ports": [{"published": "8080", "target": 3000}]`, "", "tire o ports"},
 		"porta aleatoria":   {`"ports": [{"target": 3000}]`, "", "porta aleatoria"},
@@ -590,7 +591,7 @@ func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
 		"postgres_network": {"name": "postgres_network", "external": true}},
 	"volumes": {"dados": {"name": "web_dados"}},
 	"secrets": {"jwt": {"file": "` + secretsDir + `/jwt"}, "env": {}}}`
-	problems, warnings := CheckCompose([]byte(cfg), Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}})
+	problems, warnings := CheckCompose([]byte(cfg), Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network", ProxyNetwork}})
 	if len(problems) != 0 {
 		t.Fatalf("recusou o formato do cais: %v", problems)
 	}
@@ -608,7 +609,7 @@ func TestCheckComposeAvisaSemHealthcheckOuSemDrain(t *testing.T) {
 			"logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}}` + hc + `}},
 			"networks": {"proxy_network": {"name": "proxy_network", "external": true}}}`)
 	}
-	r := Rules{App: "web", Src: "/x"}
+	r := Rules{App: "web", Src: "/x", Networks: []string{ProxyNetwork}}
 	cases := map[string]struct{ hc, want string }{
 		"sem healthcheck": {``, "sem healthcheck no compose"},
 		"desligado":       {`, "healthcheck": {"disable": true}`, "sem healthcheck no compose"},
@@ -708,7 +709,7 @@ func TestModeloDaAjudaPassaNaChecagem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("o modelo nao e um compose valido: %v\n%s", err, g)
 	}
-	problems, warnings := CheckCompose(out, Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network"}})
+	problems, warnings := CheckCompose(out, Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network", ProxyNetwork}})
 	if len(problems) != 0 {
 		t.Fatalf("o modelo da Ajuda foi recusado: %v\n%s", problems, g)
 	}
@@ -1326,7 +1327,7 @@ func TestDeployComUpTravadoVoltaAAnteriorDepoisDoLimite(t *testing.T) {
 // volume do app nao entra no backup: o deploy avisa (sem bloquear), com os
 // nomes; compose sem volume nao ganha o aviso
 func TestCheckComposeAvisaVolumeForaDoBackup(t *testing.T) {
-	r := Rules{App: "web", Src: "/x"}
+	r := Rules{App: "web", Src: "/x", Networks: []string{ProxyNetwork}}
 	logging := `"logging": {"driver": "json-file", "options": {"max-size": "20m"}}`
 	with := []byte(`{"services": {"web": {` + logging + `, "volumes": [{"type": "volume", "source": "uploads", "target": "/data"}]}},
 		"volumes": {"uploads": {"name": "web_uploads"}, "cache": {"name": "web_cache"}}}`)
@@ -1340,5 +1341,24 @@ func TestCheckComposeAvisaVolumeForaDoBackup(t *testing.T) {
 	without := []byte(`{"services": {"web": {` + logging + `}}}`)
 	if _, w := CheckCompose(without, r); len(w) != 0 {
 		t.Errorf("aviso sem volume: %v", w)
+	}
+}
+
+// com o proxy desligado, app com dominio e recusado com o aviso de ligar o
+// proxy; app sem dominio (worker) passa
+func TestCheckComposeSemProxyLigado(t *testing.T) {
+	web := `{"services": {"web": {"image": "x", "labels": {"traefik.enable": "true"},
+		"networks": {"default": null, "proxy_network": null}}},
+		"networks": {"default": {"name": "web_default"}, "proxy_network": {"name": "proxy_network", "external": true}}}`
+	problems, _ := CheckCompose([]byte(web), Rules{App: "web", Src: "/x"})
+	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "Ligue o proxy na aba Infra") {
+		t.Fatalf("app com dominio sem proxy: %v", problems)
+	}
+	if problems, _ := CheckCompose([]byte(web), Rules{App: "web", Src: "/x", Networks: []string{ProxyNetwork}}); len(problems) != 0 {
+		t.Fatalf("app com dominio com proxy: %v", problems)
+	}
+	worker := `{"services": {"worker": {"image": "x"}}}`
+	if problems, _ := CheckCompose([]byte(worker), Rules{App: "web", Src: "/x"}); len(problems) != 0 {
+		t.Fatalf("worker sem proxy: %v", problems)
 	}
 }

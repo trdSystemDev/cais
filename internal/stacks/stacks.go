@@ -23,14 +23,14 @@ type Stack struct {
 	Desc string `json:"desc"`
 	// Requires sao as stacks que precisam estar de pe antes (redes externas).
 	Requires []string `json:"requires,omitempty"`
-	// Optional e servico que o usuario liga e desliga (aba Infra); as
-	// outras sobem sempre (config.CoreStacks).
+	// Optional e servico que o usuario liga e desliga (aba Infra). Hoje
+	// todas sao: nada sobe sem ser ligado.
 	Optional bool `json:"optional,omitempty"`
 }
 
 // All lista as stacks na ordem de subida: cada uma so depende das anteriores.
 var All = []Stack{
-	{Name: "proxy", Desc: "Traefik: reverse proxy e TLS, sites por label"},
+	{Name: "proxy", Desc: "Traefik: publica os apps com HTTPS (Let's Encrypt)", Optional: true},
 	{Name: "postgres", Desc: "Postgres compartilhado, so no loopback (tunel SSH)", Optional: true},
 	{Name: "mysql", Desc: "MySQL compartilhado, so no loopback (tunel SSH)", Optional: true},
 	{Name: "garage", Desc: "Storage S3 (Garage), publico com TLS", Requires: []string{"proxy"}, Optional: true},
@@ -50,18 +50,13 @@ func Enabled(c config.Config) ([]Stack, error) {
 	var errs []error
 	seen := map[string]bool{}
 	for _, name := range c.Stacks {
-		st, ok := Get(name)
+		_, ok := Get(name)
 		switch {
 		case !ok:
 			errs = append(errs, fmt.Errorf("stack desconhecida %q", name))
 		case seen[name]:
 			errs = append(errs, fmt.Errorf("stack %q repetida", name))
-		case !st.Optional:
-			// config antiga que lista uma fixa: ela ja sobe sempre
 		}
-		seen[name] = true
-	}
-	for _, name := range config.CoreStacks {
 		seen[name] = true
 	}
 
@@ -72,7 +67,7 @@ func Enabled(c config.Config) ([]Stack, error) {
 		}
 		for _, req := range s.Requires {
 			if !seen[req] {
-				errs = append(errs, fmt.Errorf("stack %q precisa da stack %q", s.Name, req))
+				errs = append(errs, fmt.Errorf("o %s precisa do %s ligado: ligue o %s antes (aba Infra, ou cais service %s on); pra desligar o %s, desligue o %s primeiro", s.Name, req, req, req, req, s.Name))
 			}
 		}
 		if err := checkStack(s.Name, c); err != nil {

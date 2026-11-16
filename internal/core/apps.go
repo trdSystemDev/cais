@@ -23,6 +23,10 @@ func (c *Core) appManager() apps.Manager {
 		DBCredentials: c.dbCredentials, BucketCredentials: c.bucketCredentials}
 	if cfg, err := config.Load(c.deps.ConfigPath); err == nil {
 		m.Networks = infraNetworks(cfg)
+		// sem o proxy ligado, app com dominio nao tem quem o publique
+		if cfg.HasStack("proxy") {
+			m.Networks = append(m.Networks, apps.ProxyNetwork)
+		}
 	}
 	return m
 }

@@ -35,8 +35,6 @@ func runSetup(args []string) error {
 		return setupConfig(args)
 	case "secret":
 		return setupSecret(args)
-	case "run":
-		return setupRun(args)
 	case "notify-test":
 		return setupNotifyTest(args)
 	default:
@@ -71,6 +69,7 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 		fmt.Fprintf(out, "Ainda sem configuracao (%s).\n\n", info.Path)
 		fmt.Fprintln(out, "Comece com:")
 		fmt.Fprintln(out, "  cais setup config --email voce@exemplo.com.br --github-app-id <id>")
+		fmt.Fprintln(out, "  cais service proxy on")
 		return
 	}
 
@@ -92,21 +91,28 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 	w.Flush()
 
 	if len(p.Stacks) > 0 {
-		fmt.Fprintln(out, "\nStacks:")
+		fmt.Fprintln(out, "\nServicos ligados:")
 		for _, s := range p.Stacks {
-			fmt.Fprintf(w, "  %s\t%s\t%s\n", s.Name, s.Change, s.Desc)
+			state := "em dia"
+			switch s.Change {
+			case bootstrap.ChangeModified:
+				state = "config salva pra aplicar: cais service " + s.Name + " on"
+			case bootstrap.ChangeNew:
+				state = "ainda nao subiu: cais service " + s.Name + " on"
+			}
+			fmt.Fprintf(w, "  %s\t%s\n", s.Name, state)
 		}
 		w.Flush()
+	} else if info.Exists {
+		fmt.Fprintln(out, "\nNenhum servico ligado. Comece pelo proxy (publica os apps com HTTPS):")
+		fmt.Fprintln(out, "  cais service proxy on")
 	}
 	if len(p.Disable) > 0 {
-		fmt.Fprintln(out, "\nDesativadas (o run derruba; os volumes, com os dados, ficam):")
+		fmt.Fprintln(out, "\nDesligados, ainda no disco (saem na proxima aplicacao; os volumes, com os dados, ficam):")
 		for _, s := range p.Disable {
 			fmt.Fprintf(w, "  %s\t%s\n", s.Name, s.Desc)
 		}
 		w.Flush()
-	}
-	if len(p.CreateSecrets) > 0 {
-		fmt.Fprintf(out, "\nSecrets que o cais vai gerar: %s\n", strings.Join(p.CreateSecrets, ", "))
 	}
 	if len(p.Problems) > 0 {
 		fmt.Fprintln(out, "\nProblemas:")
@@ -119,14 +125,6 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 		for _, m := range p.Missing {
 			fmt.Fprintf(out, "  - %s: %s\n      cais setup secret %s\n", m.Name, m.Desc, m.Name)
 		}
-	}
-	if p.Ready() {
-		if p.CAFile == "" {
-			fmt.Fprintln(out, "\nPronto. Antes de rodar, aponte o DNS dos nomes acima pra esta VPS.")
-		} else {
-			fmt.Fprintln(out, "\nPronto. Certificados da CA local: depois do run, confie nela (instrucoes no fim).")
-		}
-		fmt.Fprintln(out, "Execute: cais setup run")
 	}
 }
 
@@ -287,20 +285,6 @@ func setupNotifyTest(args []string) error {
 	return nil
 }
 
-func setupRun(args []string) error {
-	fs, socket := newFlags("setup run")
-	fs.Parse(args)
-	c, err := connect(*socket)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	return withProgress(c, func(ctx context.Context) error {
-		_, err := c.RunSetup(ctx)
-		return err
-	})
-}
-
 func runService(args []string) error {
 	fs, socket := newFlags("service")
 	fs.Parse(args)
@@ -353,7 +337,7 @@ func withProgress(c *rpc.Client, action func(context.Context) error) error {
 	if runErr != nil {
 		return runErr
 	}
-	fmt.Println("\nSetup concluido.")
+	fmt.Println("\nPronto.")
 	if p, err := c.PlanSetup(ctx); err == nil {
 		printDBAccess(os.Stdout, p)
 		printTrust(os.Stdout, p)

@@ -44,12 +44,13 @@ type API interface {
 	// avisos (config notify, chave no secret brevo_api_key).
 	TestNotify(ctx context.Context) error
 
-	// PlanSetup diz o que o Setup faria agora, sem mudar nada.
+	// PlanSetup diz como a config salva fica nos servicos ligados (o que
+	// mudaria ao aplicar), sem mudar nada.
 	PlanSetup(ctx context.Context) (bootstrap.Plan, error)
-	// RunSetup executa o Setup, publicando o progresso em State.Setup.
-	RunSetup(ctx context.Context) (Setup, error)
-	// SetService liga ou desliga um servico opcional (postgres, mysql,
-	// garage) e aplica na hora, pelo Setup.
+	// SetService liga ou desliga um servico (proxy, postgres, mysql,
+	// garage) e aplica na hora; ligar o que ja esta ligado aplica a config
+	// salva nele. O progresso vai pra State.Setup. Salvar a config nunca
+	// sobe nada: so isto.
 	SetService(ctx context.Context, name string, on bool) (Setup, error)
 
 	// CheckApps le os apps e os containers deles e publica em State.Apps.

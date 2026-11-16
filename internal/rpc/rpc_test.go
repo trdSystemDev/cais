@@ -313,27 +313,29 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	}
 	cfg := info.Config
 	cfg.Email = "admin@exemplo.com.br"
-	cfg.Stacks = []string{"postgres"}
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
 	if info, _ = c.LoadConfig(ctx); !info.Exists || info.Config.Email != "admin@exemplo.com.br" {
 		t.Fatalf("config nao gravou: %+v", info)
 	}
-
+	// salvar a config so configura: nada sobe, nem o proxy
 	plan, err := c.PlanSetup(ctx)
-	if err != nil || !plan.Ready() || len(plan.Stacks) != 2 {
-		t.Fatalf("plano: %+v, %v", plan, err)
+	if err != nil || !plan.Ready() || len(plan.Stacks) != 0 || ups.Load() != 0 {
+		t.Fatalf("plano depois de salvar: %+v, %v (%d compose up)", plan, err, ups.Load())
 	}
 
 	states, unsub, _ := c.Subscribe(ctx)
 	defer unsub()
-	setup, err := c.RunSetup(ctx)
-	if err != nil || setup.Running || setup.Error != "" {
-		t.Fatalf("RunSetup: %+v, %v", setup, err)
+	// os servicos ligam pelo socket, um a um
+	for _, svc := range []string{"proxy", "postgres"} {
+		setup, err := c.SetService(ctx, svc, true)
+		if err != nil || setup.Running || setup.Error != "" {
+			t.Fatalf("ligar %s: %+v, %v", svc, setup, err)
+		}
 	}
-	if ups.Load() != 2 {
-		t.Errorf("%d compose up, esperava 2", ups.Load())
+	if plan, _ = c.PlanSetup(ctx); len(plan.Stacks) != 2 || plan.Stacks[0].Change != "igual" {
+		t.Errorf("plano com os dois ligados: %+v", plan.Stacks)
 	}
 	// o progresso chegou pela notificacao de estado
 	st := recv(t, states, func(s core.State) bool { return !s.Setup.Running && !s.Setup.FinishedAt.IsZero() })

@@ -275,7 +275,7 @@ func steps(enabled []stacks.Stack, disable []StackPlan, cfg config.Config) []Ste
 	return out
 }
 
-// Run executa o Setup: gera secrets, grava os compose e sobe as stacks em
+// Run aplica a config nos servicos ligados: gera secrets, grava os compose e sobe as stacks em
 // ordem, esperando cada uma ficar saudavel antes da proxima. report recebe
 // uma copia dos passos a cada mudanca. Pode rodar de novo a qualquer
 // momento: nada que ja existe e regenerado e stacks iguais nao sao

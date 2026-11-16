@@ -23,7 +23,6 @@ const (
 	MethodConfigSave       = "config.save" // params: config.Config
 	MethodSecretSet        = "secret.set"  // params: secretParams
 	MethodSetupPlan        = "setup.plan"
-	MethodSetupRun         = "setup.run"
 	MethodNotifyTest       = "notify.test"
 	MethodServiceSet       = "service.set" // params: serviceParams
 	MethodAppsCheck        = "apps.check"

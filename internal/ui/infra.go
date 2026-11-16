@@ -17,11 +17,12 @@ import (
 	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
-// serviceDoneMsg e a volta do liga/desliga de um servico opcional.
+// serviceDoneMsg e a volta do liga/desliga (ou do Aplicar) de um servico.
 type serviceDoneMsg struct {
-	name string
-	on   bool
-	err  error
+	name  string
+	on    bool
+	apply bool // ja estava ligado: aplicou a config salva
+	err   error
 }
 
 // optional sao os servicos que a aba Infra liga e desliga, na ordem da tela.
@@ -46,22 +47,46 @@ func (m *model) stacksCmd() tea.Cmd {
 // busy diz se ha uma mudanca sendo aplicada (daqui, do CLI ou do MCP).
 func (m *model) busy() bool { return m.toggling != "" || m.state.Setup.Running }
 
-// toggle liga ou desliga um servico opcional. O core grava a config e roda
-// o Setup; o andamento chega pelo estado.
-func (m *model) toggle(name string) tea.Cmd {
+// toggle liga ou desliga um servico. O core grava a config e aplica; o
+// andamento chega pelo estado.
+func (m *model) toggle(name string) tea.Cmd { return m.setService(name, !m.serviceOn(name), false) }
+
+// apply aplica num servico ligado a config salva no Setup (ligar de novo o
+// que ja esta ligado).
+func (m *model) apply(name string) tea.Cmd {
+	if !m.serviceOn(name) || !m.needsApply(name) {
+		return nil
+	}
+	return m.setService(name, true, true)
+}
+
+func (m *model) setService(name string, on, apply bool) tea.Cmd {
 	if m.busy() {
 		return nil
 	}
-	on := !m.serviceOn(name)
 	m.toggling = name
 	m.togglingOn = on
 	m.infraMsgStack = name
 	verb := map[bool]string{true: "Ligando", false: "Desligando"}[on]
+	if apply {
+		verb = "Aplicando a config no"
+	}
 	m.infraMsgC, m.infraMsg = "warn", verb+" "+name+"..."
 	return func() tea.Msg {
 		_, err := m.api.SetService(context.Background(), name, on)
-		return serviceDoneMsg{name, on, err}
+		return serviceDoneMsg{name, on, apply, err}
 	}
+}
+
+// needsApply diz se a config salva muda o servico ligado (ou se ele ainda
+// nao subiu): o card mostra o Aplicar.
+func (m *model) needsApply(name string) bool {
+	for _, s := range m.setup.plan.Stacks {
+		if s.Name == name {
+			return s.Change != bootstrap.ChangeUnchanged
+		}
+	}
+	return false
 }
 
 func (m *model) serviceOn(name string) bool {
@@ -79,6 +104,8 @@ func (m *model) onServiceDone(msg serviceDoneMsg) tea.Cmd {
 	switch {
 	case msg.err != nil:
 		m.infraMsgC, m.infraMsg = "danger", firstLine(msg.err.Error())
+	case msg.apply:
+		m.infraMsgC, m.infraMsg = "ok", "config aplicada no "+msg.name+"."
 	case msg.on:
 		m.infraMsgC, m.infraMsg = "ok", msg.name+" ligado."
 	default:
@@ -188,11 +215,7 @@ func (m *model) viewInfra(h int) string {
 			statusColor = t.warn
 		}
 		title := t.bold().Render(mark+" "+name) + "  " + t.fg(statusColor).Render(status)
-		label := "Base · sobe sempre"
-		if def.Optional {
-			label = "Opcional"
-		}
-		line := t.fg(t.muted).Render(label)
+		line := t.fg(t.muted).Render(map[string]string{"proxy": "HTTPS dos apps", "postgres": "Banco", "mysql": "Banco", "garage": "S3"}[name])
 		if def.Optional {
 			text := "Ligar"
 			if st.Enabled {
@@ -206,6 +229,13 @@ func (m *model) viewInfra(h int) string {
 				k = btnOff
 			}
 			line += "  " + m.zones.Mark("toggle:"+name, t.chip(text, k, false))
+			if st.Enabled && m.needsApply(name) {
+				ak := btnNormal
+				if m.busy() {
+					ak = btnOff
+				}
+				line += " " + m.zones.Mark("apply:"+name, t.chip("Aplicar", ak, false))
+			}
 			if (name == "postgres" || name == "mysql") && st.Enabled && st.Installed {
 				line += " " + m.zones.Mark("newdb:"+name, t.chip("+ Novo banco", btnNormal, m.db.engine == name))
 			}
@@ -216,7 +246,7 @@ func (m *model) viewInfra(h int) string {
 		card := t.panel(selected, leftW-4, 2).Render(ansi.Truncate(title, leftW-6, "…") + "\n" + line)
 		cards = append(cards, m.zones.Mark("stack:"+name, card))
 	}
-	header := t.bold().Render("Infra") + "  " + t.fg(t.muted).Render("Base e servicos")
+	header := t.bold().Render("Infra") + "  " + t.fg(t.muted).Render("Servicos: nada sobe sem ligar")
 	footer := m.zones.Mark("infra-refresh", t.button("Atualizar", btnNormal, false))
 	if !m.state.Infra.CheckedAt.IsZero() {
 		footer += "\n" + t.fg(t.muted).Render("Ultima verificacao: "+m.state.Infra.CheckedAt.Local().Format("15:04:05"))
@@ -430,6 +460,11 @@ func (m *model) infraClick(msg tea.MouseMsg) tea.Cmd {
 			m.infraSel = i
 			return m.db.show(name)
 		}
+		if m.zones.Get("apply:" + name).InBounds(msg) {
+			m.infraSel = i
+			m.infraContainer = 0
+			return tea.Batch(m.apply(name), m.syncInfraLogs(true))
+		}
 		if m.zones.Get("toggle:" + name).InBounds(msg) {
 			m.infraSel = i
 			m.infraContainer = 0
@@ -455,7 +490,12 @@ func (m *model) infraKey(k string) tea.Cmd {
 	n := len(infraOrder())
 	switch k {
 	case "r":
-		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
+		return tea.Batch(m.stacksCmd(), m.setup.planCmd(), m.syncInfraLogs(true))
+	case "a":
+		if name := infraOrder()[m.infraSel]; name != backupCard {
+			return m.apply(name)
+		}
+		return nil
 	case "b":
 		// Novo banco no Postgres/MySQL ou Novo bucket no Garage selecionado
 		if st := m.selectedStack(); (st.Name == "postgres" || st.Name == "mysql" || st.Name == "garage") && st.Enabled && st.Installed {

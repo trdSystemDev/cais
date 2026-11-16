@@ -258,33 +258,28 @@ func TestEnabledValidaDependencias(t *testing.T) {
 	}
 }
 
-// as fixas sobem sem estar na config; listar uma delas (config antiga) e aceito
-func TestFixasSempreAtivas(t *testing.T) {
-	for _, list := range [][]string{nil, {"proxy"}} {
-		c := validConfig()
-		c.Stacks = list
-		got, err := Enabled(c)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var names []string
-		for _, s := range got {
-			names = append(names, s.Name)
-		}
-		if strings.Join(names, ",") != "proxy" {
-			t.Errorf("stacks %v com config %v", names, list)
-		}
+// nenhuma stack sobe sem estar na config, nem o proxy; e o Garage precisa
+// dele (ligar sem, ou desligar o proxy com o Garage ligado, e recusado)
+func TestSoSobeOQueFoiLigado(t *testing.T) {
+	c := validConfig()
+	c.Stacks = nil
+	if got, err := Enabled(c); err != nil || len(got) != 0 {
+		t.Fatalf("sem nada ligado: %v %v", got, err)
+	}
+	c.Stacks, c.Hosts.S3 = []string{"garage"}, "s3.exemplo.com.br"
+	if _, err := Enabled(c); err == nil || !strings.Contains(err.Error(), "ligue o proxy antes") {
+		t.Fatalf("garage sem proxy: %v", err)
 	}
 	for _, s := range All {
-		if s.Optional == config.IsCore(s.Name) {
-			t.Errorf("%s: Optional e config.CoreStacks divergem", s.Name)
+		if !s.Optional {
+			t.Errorf("%s nao e opcional: subiria sem ser ligado", s.Name)
 		}
 	}
 }
 
 func TestGaragePublicadoEmS3(t *testing.T) {
 	c := validConfig()
-	c.Stacks, c.Hosts.S3 = []string{"garage"}, "s3.exemplo.com.br"
+	c.Stacks, c.Hosts.S3 = []string{"proxy", "garage"}, "s3.exemplo.com.br"
 	r, cf := render(t, "garage", c)
 	labels := labelsOf(t, cf, "garage")
 	if labels["traefik.http.routers.garage.rule"] != "Host(`s3.exemplo.com.br`)" {

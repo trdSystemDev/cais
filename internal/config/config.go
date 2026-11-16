@@ -37,8 +37,8 @@ type Config struct {
 	// nele: a CA local so assina nomes dele (ex: trd.localhost, e os apps
 	// em <app>.trd.localhost). Fora do modo de teste nao vale.
 	TestDomain string `yaml:"test_domain,omitempty" json:"test_domain,omitempty"`
-	// Stacks sao os servicos opcionais ligados (postgres, mysql, garage).
-	// As stacks fixas (CoreStacks) sobem sempre e nao precisam estar aqui.
+	// Stacks sao os servicos ligados na aba Infra (proxy, postgres, mysql,
+	// garage). Nenhum sobe sem ser ligado: o Setup so configura.
 	Stacks []string `yaml:"stacks,omitempty" json:"stacks,omitempty"`
 	Proxy  Proxy    `yaml:"proxy" json:"proxy"`
 	Hosts  Hosts    `yaml:"hosts,omitempty" json:"hosts"`
@@ -144,20 +144,6 @@ const (
 // LetsEncrypt diz se os certificados vem do Let's Encrypt.
 func (c Config) LetsEncrypt() bool { return c.TLS == "" || c.TLS == TLSLetsEncrypt }
 
-// CoreStacks sobem sempre: sem proxy nao da pra publicar app nenhum. O
-// resto (bancos, storage) e ligado conforme o uso.
-var CoreStacks = []string{"proxy"}
-
-// IsCore diz se a stack e fixa.
-func IsCore(name string) bool {
-	for _, s := range CoreStacks {
-		if s == name {
-			return true
-		}
-	}
-	return false
-}
-
 // Default devolve a configuracao inicial do Setup, sem dominio e e-mail.
 func Default() Config {
 	return Config{
@@ -168,11 +154,8 @@ func Default() Config {
 // S3Host e o endpoint publico do Garage (API S3).
 func (c Config) S3Host() string { return c.Hosts.S3 }
 
-// HasStack diz se a stack esta ativa: as fixas sempre estao.
+// HasStack diz se a stack esta ligada.
 func (c Config) HasStack(name string) bool {
-	if IsCore(name) {
-		return true
-	}
 	for _, s := range c.Stacks {
 		if s == name {
 			return true

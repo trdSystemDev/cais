@@ -14,6 +14,7 @@ import (
 // InfraNetworks sao as redes das stacks da infra que um app pode usar, com a
 // stack de cada uma (a mensagem diz qual ligar).
 var InfraNetworks = map[string]string{
+	"proxy_network":    "proxy",
 	"postgres_network": "postgres",
 	"mysql_network":    "mysql",
 	"garage_network":   "garage",
@@ -29,7 +30,7 @@ type Rules struct {
 	SecretsDir string // ${CAIS_SECRETS}
 	DotEnv     string // o .env que o cais grava
 	// Networks sao as redes externas que o app pode usar agora: a
-	// proxy_network e as das stacks ligadas.
+	// as das stacks ligadas (proxy_network so com o proxy ligado).
 	Networks []string
 	// Apps sao os outros apps: um nome do Traefik pertence ao app de nome
 	// mais longo que o prefixa (portal-homolog-web e de portal-homolog, nao de
@@ -306,7 +307,7 @@ func CheckCompose(configJSON []byte, r Rules) (problems, warnings []string) {
 		if name == "" {
 			name = key
 		}
-		allowed := name == ProxyNetwork || contains(r.Networks, name)
+		allowed := contains(r.Networks, name)
 		switch {
 		case nw.External && allowed:
 		case nw.External && InfraNetworks[name] != "":

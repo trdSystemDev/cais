@@ -30,8 +30,8 @@ const (
 var helps = map[int]string{
 	tabDashboard: "enter/r verifica · ",
 	tabApps:      "↑↓ app · ←→ secao · enter/tab entra no formulario · esc volta · n novo app · ",
-	tabInfra:     "↑↓ card · ←→ container · espaco liga/desliga · r atualiza · ",
-	tabSetup:     "tab/↑↓ campo · espaco marca · ctrl+s salva · ctrl+r executa · ",
+	tabInfra:     "↑↓ card · ←→ container · espaco liga/desliga · a aplica · r atualiza · ",
+	tabSetup:     "tab/↑↓ campo · espaco marca · ctrl+s salva · ",
 }
 
 // App e a TUI inteira. Nada e desenhado ate Run ser chamado.
@@ -262,19 +262,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.syncAppLogs(false))
 	}
 	// respostas das acoes da aba Setup
-	cmd := m.setup.update(msg)
-	if _, ok := msg.(runDoneMsg); ok {
-		// o Setup mexeu nas stacks: a aba Infra ja abre atualizada
-		cmd = tea.Batch(cmd, m.stacksCmd())
-	}
-	return m, cmd
+	return m, m.setup.update(msg)
 }
 
 // onState aplica uma foto nova do estado e devolve o que ela dispara
 // (logs, variaveis e ajuda do app selecionado).
 func (m *model) onState(s core.State) tea.Cmd {
 	m.state = s
-	m.setup.onState(m.state)
 	m.db.importing = s.Import
 	appsCmd := m.apps.onState(m.state)
 	return tea.Batch(m.syncInfraLogs(false), appsCmd, m.syncAppLogs(false))
@@ -289,7 +283,8 @@ func (m *model) setTab(i int) tea.Cmd {
 	m.logSelection = logSelection{}
 	m.tab = i
 	if i == tabInfra && !m.state.Infra.Checking {
-		return tea.Batch(m.stacksCmd(), m.backupRefreshCmd(), m.syncInfraLogs(true))
+		// o plano diz qual servico ligado tem config salva pra aplicar
+		return tea.Batch(m.stacksCmd(), m.setup.planCmd(), m.backupRefreshCmd(), m.syncInfraLogs(true))
 	}
 	if i == tabApps {
 		// bancos e buckets criados na Infra (ou pelo CLI) ja aparecem pra ligar

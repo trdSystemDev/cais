@@ -95,13 +95,6 @@ func (c *Client) PlanSetup(ctx context.Context) (p bootstrap.Plan, err error) {
 	return
 }
 
-// RunSetup bloqueia ate o Setup terminar (pode levar minutos); o progresso
-// chega pelo Subscribe. Se o cliente desistir, o Setup continua no daemon.
-func (c *Client) RunSetup(ctx context.Context) (st core.Setup, err error) {
-	err = c.call(ctx, MethodSetupRun, nil, &st)
-	return
-}
-
 // SetService bloqueia ate o Setup que aplica a mudanca terminar.
 func (c *Client) SetService(ctx context.Context, name string, on bool) (st core.Setup, err error) {
 	err = c.call(ctx, MethodServiceSet, serviceParams{Name: name, On: on}, &st)

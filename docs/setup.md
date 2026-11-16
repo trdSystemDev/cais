@@ -1,6 +1,6 @@
 # Setup e configuracao
 
-O Setup prepara a VPS: o proxy com HTTPS, os servicos opcionais (bancos e S3) e os avisos. Pode rodar de novo a qualquer momento.
+O Setup so guarda a configuracao da VPS (e-mail do Let's Encrypt, GitHub App, avisos, host do S3): salvar nao sobe nada. Os servicos (proxy, bancos, S3) se ligam na aba **Infra** ou com `cais service`.
 
 ## Comandos
 
@@ -13,32 +13,34 @@ cais daemon        # normalmente via systemd (o servico cais, do install.sh)
 cais               # abre a TUI
 cais state         # estado atual em JSON
 cais check         # checa o ambiente e imprime o resultado
-cais service postgres on # liga o Postgres e aplica a configuracao
+cais service proxy on    # liga o proxy (HTTPS dos apps)
+cais service postgres on # liga o Postgres
 cais service garage off  # desliga o S3 e preserva os volumes
 ```
 
 A aba **Setup** concentra o e-mail do Let's Encrypt, os certificados (Let's
 Encrypt, ou a CA local pra teste no PC), o GitHub App, os avisos por e-mail e
 o host do S3.
-A aba **Infra** mostra o estado das stacks fixas, os botoes Ligar/Desligar
-dos servicos opcionais, o passo em andamento e as instrucoes do S3.
+A aba **Infra** mostra cada servico com os botoes Ligar/Desligar, o passo em
+andamento e as instrucoes do S3. Quando a config salva muda um servico que ja
+esta ligado (ex: o e-mail do Let's Encrypt muda o proxy), o card mostra
+**Aplicar** (tecla `a`); pelo CLI, `cais service <nome> on` de novo.
 Os cards ficam a esquerda; a direita aparecem os logs do container selecionado
 (ultimas 200 linhas, atualizadas a cada 2 segundos). Clique num card ou use
 ↑/↓; ←/→ troca o container nas stacks com mais de um. PgUp/PgDown ou a roda
 do mouse rola os logs, e End volta a acompanhar as mensagens recentes.
-O plano e a aplicacao inicial tambem ficam disponiveis na TUI e pelo CLI.
-Pode rodar de novo a qualquer momento: nada que existe e regenerado e stacks sem mudanca nao sao recriadas.
-Um Setup disparado pelo CLI aparece ao vivo na TUI aberta, e vice-versa.
+Ligar e aplicar podem ser repetidos: nada que existe e regenerado e servico
+sem mudanca nao e recriado. O que for ligado pelo CLI aparece ao vivo na TUI
+aberta, e vice-versa.
 
 ```sh
 cais setup config --email voce@exemplo.com.br --github-app-id <id>
 cais setup secret github_app_key < chave.pem
-cais setup                               # plano: o que falta e o que muda
-cais setup run                           # gera secrets, grava os compose, sobe tudo
+cais setup                               # a config, o que falta e o que aplicar
+cais service proxy on                    # gera secrets, grava o compose, sobe
 ```
 
-O `run` sobe as stacks em ordem com `docker compose up -d --wait` (cada uma
-saudavel antes da proxima). O DNS de cada app (o dominio que o compose dele
+Ligar sobe com `docker compose up -d --wait` (saudavel antes de seguir). O DNS de cada app (o dominio que o compose dele
 usar) precisa apontar pra VPS, assim como o host do S3 quando o Garage estiver
 ativo.
 
@@ -79,14 +81,15 @@ Sem WAF no proxy, de proposito: pra apps proprios ele gera mais falso positivo
 que protecao. A protecao vem de TLS, login forte e bancos fora da rede publica.
 WAF e DDoS, se precisar, ficam melhor na borda (ex: Cloudflare).
 
-O proxy e fixo e sobe sempre. O campo `stacks` lista apenas os opcionais:
-Postgres, MySQL e Garage.
-Ative cada um pela aba **Infra** ou com `cais service <nome> on`; para desligar,
-use `off`. So os secrets dos servicos ativos sao gerados. Cada banco fica
+Nenhum servico sobe sem ser ligado. O campo `stacks` lista os ligados:
+proxy, Postgres, MySQL e Garage (o Garage precisa do proxy). Ligue cada um
+pela aba **Infra** ou com `cais service <nome> on`; para desligar, use `off`.
+Sem o proxy, app com dominio (labels do Traefik na `proxy_network`) e
+recusado no deploy, com o aviso pra ligar o proxy. So os secrets dos servicos ativos sao gerados. Cada banco fica
 na propria rede (`postgres_network`, `mysql_network`),
 entao um app so enxerga o banco que usa.
 
-Tirar um servico opcional da config nao apaga nada: o proximo `setup run` derruba os
+Desligar um servico nao apaga nada: a aplicacao derruba os
 containers dela (`docker compose down`, sem `-v`) e o compose vira
 `docker-compose.yml.desativada`, como registro. Os volumes, com os dados, ficam;
 religar a stack traz tudo de volta. Stacks de versoes antigas do cais sao

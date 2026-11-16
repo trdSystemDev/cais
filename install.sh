@@ -478,8 +478,7 @@ cat <<EOF
 Proximos passos (ou pela TUI: $OPEN, abas Setup e Infra):
   sudo cais setup config --email voce@exemplo.com.br --github-app-id <id>
   sudo cais setup secret github_app_key < chave-do-github-app.pem
-  sudo cais setup          # o plano: o que falta e o que muda
-  sudo cais setup run      # sobe o proxy e os servicos
+  sudo cais service proxy on   # sobe o proxy (HTTPS dos apps)
 
 Ajuda: cais help (e cais <comando> -h)
 EOF

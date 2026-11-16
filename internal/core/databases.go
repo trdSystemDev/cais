@@ -153,7 +153,7 @@ func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (Databas
 	pw := secrets.Password()
 	if err := databases.Provision(ctx, c.deps.ExecInput, e, name, pw, req.Extensions); err != nil {
 		if strings.Contains(err.Error(), "is not available") {
-			err = fmt.Errorf("%w\n\no Postgres no ar nao tem a extensao: a stack usa a imagem com PostGIS; aplique o Setup (cais setup run) pra trocar", err)
+			err = fmt.Errorf("%w\n\no Postgres no ar nao tem a extensao: a stack usa a imagem com PostGIS; aplique o postgres na aba Infra (ou cais service postgres on) pra trocar", err)
 		}
 		return DatabaseInfo{}, err
 	}

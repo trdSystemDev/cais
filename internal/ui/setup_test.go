@@ -45,7 +45,7 @@ func TestSetupNaoTemServicos(t *testing.T) {
 			t.Errorf("caixa de %s no Setup", name)
 		}
 	}
-	if !strings.Contains(screen(m), "aba Infra") {
+	if !strings.Contains(screen(m), "ligue o proxy") {
 		t.Errorf("Setup nao aponta pra aba Infra:\n%s", screen(m))
 	}
 }
@@ -55,7 +55,7 @@ func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {
 	fill(t, m, "trd.localhost")
 	click(t, m, "save")
 	waitFor(t, m, "Config salva.")
-	waitFor(t, m, "Pronto pra executar")
+	waitFor(t, m, "Nenhum servico ligado")
 
 	info, err := m.api.LoadConfig(context.Background())
 	if err != nil {
@@ -79,40 +79,23 @@ func TestSetupMostraErroDeValidacao(t *testing.T) {
 	}
 }
 
-func TestSetupExecutaPeloBotao(t *testing.T) {
+// Salvar so grava a config: nada sobe, nem o proxy, e nao ha botao de
+// executar; os servicos se ligam na aba Infra
+func TestSetupSalvarNaoSobeNada(t *testing.T) {
 	m, ups := openSetup(t)
 	fill(t, m, "trd.localhost")
 	click(t, m, "save")
-	waitFor(t, m, "Pronto pra executar")
-
-	click(t, m, "run")
-	waitFor(t, m, "Setup concluido.")
-	waitFor(t, m, "✓ Subir proxy")
-	if n := ups(); n != 1 {
-		t.Errorf("%d compose up, esperava 1 (proxy)", n)
+	waitFor(t, m, "Config salva.")
+	waitFor(t, m, "Nenhum servico ligado")
+	if n := ups(); n != 0 {
+		t.Fatalf("salvar subiu %d stacks", n)
 	}
-}
-
-func TestSetupSoExecutaComPlanoPronto(t *testing.T) {
-	m, ups := openSetup(t)
-	click(t, m, "run") // sem config
-	if ups() != 0 || m.setup.showRun {
-		t.Fatal("executou sem plano pronto")
+	if z := m.zones.Get("run"); z != nil && !z.IsZero() {
+		t.Fatal("a aba Setup ainda tem o botao de executar")
 	}
-}
-
-// um Setup disparado fora da TUI (CLI, MCP) aparece na aba aberta
-func TestSetupDisparadoPorForaApareceNaAba(t *testing.T) {
-	m, _ := openSetup(t)
-	fill(t, m, "trd.localhost")
-	click(t, m, "save")
-	waitFor(t, m, "Pronto pra executar")
-
-	if _, err := m.api.RunSetup(context.Background()); err != nil {
-		t.Fatal(err)
+	if strings.Contains(screen(m), "Executar") {
+		t.Fatalf("a aba Setup ainda fala em executar:\n%s", screen(m))
 	}
-	waitFor(t, m, "Execucao")
-	waitFor(t, m, "✓ Subir proxy")
 }
 
 func openSetupGitHub(t *testing.T) (*model, *githubtest.Server) {
@@ -222,7 +205,7 @@ func TestSetupSemDominio(t *testing.T) {
 	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
 	click(t, m, "save")
 	waitFor(t, m, "Config salva.")
-	waitFor(t, m, "Pronto pra executar")
+	waitFor(t, m, "Nenhum servico ligado")
 
 	click(t, m, "tls")
 	waitFor(t, m, "Dominio (teste)")

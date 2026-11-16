@@ -75,9 +75,9 @@ func (c *Core) PlanSetup(context.Context) (bootstrap.Plan, error) {
 	return bootstrap.MakePlan(c.setupDeps())
 }
 
-// RunSetup roda o Setup inteiro. O progresso vai pra State.Setup a cada
-// passo, entao qualquer interface acompanha ao vivo; o resultado final
-// tambem e devolvido. Um Setup que falha pode ser rodado de novo.
+// RunSetup aplica a config salva em todos os servicos ligados de uma vez.
+// As interfaces nao usam (ligam servico a servico, pelo SetService); fica
+// pros testes montarem uma VPS pronta. O progresso vai pra State.Setup.
 func (c *Core) RunSetup(ctx context.Context) (Setup, error) {
 	if !c.infra.TryLock() {
 		return Setup{}, ErrBusy
@@ -86,7 +86,7 @@ func (c *Core) RunSetup(ctx context.Context) (Setup, error) {
 	return c.runSetupLocked(ctx, "", false)
 }
 
-// SetService liga ou desliga um servico opcional (banco, storage) e aplica
+// SetService liga ou desliga um servico (proxy, banco, storage) e aplica
 // na hora: grava a config e roda o Setup, que sobe ou derruba so o que
 // mudou. O lock vem antes de gravar: com outra acao em andamento, nada muda.
 func (c *Core) SetService(ctx context.Context, name string, on bool) (Setup, error) {

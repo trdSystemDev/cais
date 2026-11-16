@@ -35,7 +35,7 @@ func TestCheckStacks(t *testing.T) {
 	})
 	cfg := config.Default()
 	cfg.Email = "a@exemplo.com.br"
-	cfg.Stacks, cfg.Hosts.S3 = []string{"postgres", "mysql", "garage"}, "s3.exemplo.com.br"
+	cfg.Stacks, cfg.Hosts.S3 = []string{"proxy", "postgres", "mysql", "garage"}, "s3.exemplo.com.br"
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}

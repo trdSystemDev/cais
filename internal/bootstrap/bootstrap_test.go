@@ -93,7 +93,7 @@ func writeConfig(t *testing.T, d Deps, mutate func(*config.Config)) config.Confi
 	t.Helper()
 	c := config.Default()
 	c.Email = "admin@exemplo.com.br"
-	c.Stacks = []string{"postgres", "mysql"}
+	c.Stacks = []string{"proxy", "postgres", "mysql"}
 	if mutate != nil {
 		mutate(&c)
 	}
@@ -256,8 +256,8 @@ func TestRunParaNoPrimeiroErro(t *testing.T) {
 	}
 }
 
-// sem nenhum servico opcional, as fixas sobem do mesmo jeito
-func TestFixasSobemSempre(t *testing.T) {
+// nada sobe sem ser ligado: so a config (o Setup) nao sobe nem o proxy
+func TestNadaSobeSemSerLigado(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
 	writeConfig(t, d, func(c *config.Config) { c.Stacks = nil })
@@ -265,8 +265,11 @@ func TestFixasSobemSempre(t *testing.T) {
 	if _, err := Run(context.Background(), d, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(f.ups, []string{"proxy"}) {
-		t.Errorf("subiu %v", f.ups)
+	if len(f.ups) != 0 {
+		t.Errorf("subiu %v sem nada ligado", f.ups)
+	}
+	if ok, _ := secrets.Exists(d.store(), "tls_cert"); ok {
+		t.Error("gerou secret do proxy desligado")
 	}
 	if ok, _ := secrets.Exists(d.store(), "postgres_password"); ok {
 		t.Error("gerou senha de banco desligado")
@@ -276,7 +279,7 @@ func TestFixasSobemSempre(t *testing.T) {
 func TestGarageLayoutSoNaPrimeiraVez(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
-	writeConfig(t, d, func(c *config.Config) { c.Stacks, c.Hosts.S3 = []string{"garage"}, "s3.exemplo.com.br" })
+	writeConfig(t, d, func(c *config.Config) { c.Stacks, c.Hosts.S3 = []string{"proxy", "garage"}, "s3.exemplo.com.br" })
 
 	steps, err := Run(context.Background(), d, nil)
 	if err != nil {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,9 +31,18 @@ func newSetupCore(t *testing.T, release <-chan struct{}) *Core {
 			}
 		},
 		ComposeDown: func(context.Context, string) error { return nil },
+		// nunca o docker de verdade: o Setup do Garage roda comandos nele
+		Exec: func(_ context.Context, _ string, args ...string) (string, error) {
+			if strings.Contains(strings.Join(args, " "), "layout show") {
+				return "Current cluster layout version: 1", nil
+			}
+			return "", nil
+		},
+		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 	})
 	cfg := config.Default()
 	cfg.Email = "admin@exemplo.com.br"
+	cfg.Stacks = []string{"proxy"}
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -123,10 +134,36 @@ func TestSetServiceLigaEDesligaEAplica(t *testing.T) {
 		t.Fatal("postgres continua ligado")
 	}
 
-	for _, bad := range []string{"proxy", "registry", "redis"} {
+	for _, bad := range []string{"registry", "redis"} {
 		if _, err := c.SetService(ctx, bad, false); err == nil {
 			t.Errorf("deixou mexer em %q", bad)
 		}
+	}
+
+	// o proxy tambem e um servico: desliga e liga como os outros
+	if _, err := c.SetService(ctx, "proxy", false); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ = c.LoadConfig(ctx); info.Config.HasStack("proxy") || !slices.Contains(stopped, "proxy") {
+		t.Fatalf("proxy nao desligou: %v %v", info.Config.Stacks, stopped)
+	}
+	// o Garage precisa do proxy: ligar sem ele e recusado, sem gravar nada
+	c.changeConfig(func(cfg *config.Config) { cfg.Hosts.S3 = "s3.exemplo.com.br" })
+	if _, err := c.SetService(ctx, "garage", true); err == nil || !strings.Contains(err.Error(), "ligue o proxy antes") {
+		t.Fatalf("garage sem proxy: %v", err)
+	}
+	if info, _ = c.LoadConfig(ctx); info.Config.HasStack("garage") {
+		t.Fatal("gravou o garage ligado mesmo recusando")
+	}
+	if _, err := c.SetService(ctx, "proxy", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SetService(ctx, "garage", true); err != nil {
+		t.Fatal(err)
+	}
+	// e desligar o proxy com o Garage ligado tambem
+	if _, err := c.SetService(ctx, "proxy", false); err == nil || !strings.Contains(err.Error(), "desligue o garage primeiro") {
+		t.Fatalf("desligar o proxy com o garage: %v", err)
 	}
 }
 

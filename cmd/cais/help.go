@@ -68,14 +68,16 @@ Exemplos:
   cais help app            comandos de app
   cais help app deploy     o mesmo que: cais app deploy -h`},
 	}},
-	{title: "Setup da VPS:", group: "setup", cmds: []command{
-		{name: "setup plan", usage: "setup", short: "mostra o plano: o que falta e o que vai mudar", long: `
-Nao muda nada. Mostra o que falta configurar e o que o "cais setup run" vai
-fazer (stacks a subir, secrets a gerar).`},
+	{title: "Setup da VPS (so configura; os servicos ligam com cais service):", group: "setup", cmds: []command{
+		{name: "setup plan", usage: "setup", short: "mostra a config, o que falta e o que aplicar", long: `
+Nao muda nada. Mostra a configuracao, o que falta informar e, dos servicos
+ligados, quais tem config salva ainda nao aplicada (aplique com
+"cais service <nome> on").`},
 		{name: "setup config", usage: "setup config [opcoes]", short: "grava o /etc/cais/config.yaml (so o que for passado)\n    --email --tls letsencrypt|selfsigned --test-domain --http-port --https-port\n    --github-app-id --host-s3 --notify-from --notify-to", long: `
-So o que for passado muda; o resto fica como esta no arquivo. Vale no
-proximo "cais setup run". Nao ha dominio da VPS: cada app traz o proprio
-dominio no compose, e o certificado do Let's Encrypt sai pra ele.
+So o que for passado muda; o resto fica como esta no arquivo. Gravar nao
+sobe nada: vale ao ligar um servico, ou ao aplicar num que ja esta ligado
+("cais service proxy on" de novo). Nao ha dominio da VPS: cada app traz o
+proprio dominio no compose, e o certificado do Let's Encrypt sai pra ele.
 
 Flags:
   --email e-mail          avisos do Let's Encrypt
@@ -106,18 +108,19 @@ Exemplo:
 Usa o remetente e os destinatarios da config (cais setup config
 --notify-from --notify-to) e a chave da Brevo (cais setup secret
 brevo_api_key). Se a Brevo recusar, o motivo aparece aqui.`},
-		{name: "setup run", usage: "setup run", short: "executa o Setup e mostra o progresso", long: `
-Gera os secrets que faltam, grava os compose das stacks e sobe cada uma em
-ordem (saudavel antes da proxima). Pode rodar de novo a qualquer momento:
-nada que existe e regenerado e stack sem mudanca nao e recriada. O
-progresso aparece tambem na TUI aberta.`},
 	}},
-	{title: "Servicos opcionais (o proxy sobe sempre):", cmds: []command{
-		{name: "service", usage: "service <nome> on|off", short: "liga ou desliga postgres, mysql ou garage e aplica", long: `
-Desligar derruba os containers e preserva os volumes (os dados); ligar de
-novo traz tudo de volta.
+	{title: "Servicos (nada sobe sem ser ligado):", cmds: []command{
+		{name: "service", usage: "service <nome> on|off", short: "liga ou desliga proxy, postgres, mysql ou garage e aplica", long: `
+Ligar gera os secrets que faltam, grava o compose e sobe o servico (e
+mostra o progresso, tambem na TUI aberta). "on" num servico ja ligado
+aplica nele a config salva no Setup. Desligar derruba os containers e
+preserva os volumes (os dados); ligar de novo traz tudo de volta.
+
+O proxy (Traefik) publica os apps com HTTPS: sem ele, app com dominio nao
+sobe. O Garage precisa do proxy ligado.
 
 Exemplos:
+  cais service proxy on
   cais service postgres on
   cais service garage off`},
 	}},
