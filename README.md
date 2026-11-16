@@ -7,6 +7,48 @@ compose de producao pronto, que o cais baixa, builda e sobe.
 
 Roda direto no host, pela sessao SSH: nao abre porta e nao tem login proprio.
 
+## Instalar numa VPS
+
+Precisa de Linux (amd64 ou arm64) com systemd e
+[Docker](https://docs.docker.com/engine/install/) com o Compose v2.
+
+1. **Token do GitHub** (o repositorio e privado): em
+   [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens),
+   crie um *fine-grained token* com acesso so ao repositorio `trdSystemDev/cais`
+   e a permissao **Contents: read**. Ele so e usado na instalacao; nao fica na VPS.
+
+2. **Na VPS**, logado com um usuario com sudo:
+
+   ```sh
+   read -s GH_TOKEN && export GH_TOKEN      # cola o token (sem eco, fora do historico)
+   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
+     https://api.github.com/repos/trdSystemDev/cais/contents/install.sh |
+     sudo --preserve-env=GH_TOKEN sh -s -- --ssh
+   ```
+
+   Instala o cais, sobe o servico e cria o usuario `cais` do ssh com as suas
+   chaves. Pra **atualizar**, rode o mesmo comando.
+
+3. **Do seu computador**, abra o painel e faca o Setup (e-mail do Let's
+   Encrypt e o GitHub App dos apps):
+
+   ```sh
+   ssh cais@ip-da-vps
+   ```
+
+4. **Opcional, o MCP** (deploy e status pelo Claude Code): do seu computador,
+   depois do passo 3 (que ja aceitou a chave do servidor no ssh):
+
+   ```sh
+   claude mcp add -s user cais -- ssh cais@ip-da-vps cais mcp
+   ```
+
+   Vai pelo mesmo ssh, com a sua chave: nenhuma porta nova abre. Com mais de
+   uma VPS, um nome pra cada (`cais-prod`, `cais-homolog`). O que a IA pode e
+   nao pode fazer esta em [MCP](#mcp-deploy-por-ia).
+
+Detalhes e opcoes em [Instalacao](#instalacao); o Setup em [Uso](#uso).
+
 ## Arquitetura
 
 O projeto e agnostico a interface. O `core` e o unico dono do estado e o
@@ -82,7 +124,7 @@ Regras:
 
 | Caminho | Conteudo |
 |---|---|
-| `/etc/cais/config.yaml` | configuracao: dominio base, e-mail, servicos opcionais ativos |
+| `/etc/cais/config.yaml` | configuracao: e-mail, servicos opcionais ativos, hosts, avisos |
 | `/var/lib/cais/stacks/<stack>/` | compose das stacks (proxy, postgres, mysql, garage) |
 | `/var/lib/cais/apps/<app>/` | `app.yaml`, `env` (variaveis), `secrets/` e o codigo: `src/` (no ar) e `src.prev` (anterior) |
 | `/var/lib/cais/secrets/` | secrets centrais (senhas das instancias de banco etc.) |
@@ -108,20 +150,27 @@ do GitHub App e a da Brevo (avisos por e-mail) sao informadas.
 `/etc/cais/config.yaml` guarda so o que um humano decide (secrets nunca):
 
 ```yaml
-domain: exemplo.com.br          # s3.<domain> e <app>.<domain> saem daqui
 email: admin@exemplo.com.br     # avisos do Let's Encrypt
 stacks: [postgres, mysql, garage] # opcionais: so os que usar
 proxy:
   http_port: 80                 # outra porta so numa migracao
   https_port: 443
-hosts:                          # opcional: troca o nome padrao
-  s3: arquivos.exemplo.com.br
+hosts:
+  s3: s3.exemplo.com.br         # endereco publico do S3; obrigatorio com o Garage
 github:
   app_id: 123456                # GitHub App do cais (baixa o codigo dos apps)
 notify:                         # avisos por e-mail pela Brevo; sem "to", desligados
   from: cais@exemplo.com.br     # remetente validado na conta da Brevo
   to: [ops@exemplo.com.br]
 ```
+
+Nao ha dominio da VPS: cada app traz o proprio dominio (a variavel `DOMINIO`
+nas labels do compose dele), e o certificado do Let's Encrypt e pedido pra
+esse nome. A VPS aparece pelo hostname no assunto dos avisos e no nome dos
+backups. So o modo de teste (`tls: selfsigned`) tem um dominio, o
+`test_domain`: a CA local so assina nomes dele. Config de versao antiga com
+`domain:` ainda abre: ele vira `test_domain` (no modo de teste) e
+`hosts.s3: s3.<domain>` (com o Garage ligado).
 
 Campo desconhecido e erro (pega erro de digitacao). Os compose das stacks sao
 gerados de `internal/stacks/templates/*/docker-compose.yml.tmpl` com esses
@@ -220,7 +269,7 @@ por `postgres:5432` (ou `mysql:3306`) e o database tem o nome do usuario;
 montar a URL de conexao e com o app. Senha nova no cais vale no proximo
 deploy.
 
-O Garage publica a API S3 em `https://s3.<domain>` (ou `hosts.s3`), com
+O Garage publica a API S3 em `https://<hosts.s3>`, com
 regiao `garage` e enderecamento por caminho (path-style). O Setup prepara
 o layout de no unico na primeira subida; execucoes seguintes preservam o
 layout. Os volumes `garage_meta` e `garage_data` persistem ao desligar.
@@ -253,9 +302,13 @@ o cliente MCP no seu computador chama pelo SSH: a autenticacao e a sua chave
 SSH e nenhuma porta nova abre.
 
 ```sh
-claude mcp add cais -- ssh cais@vps cais mcp          # instalado com --ssh
-claude mcp add cais -- ssh root@vps cais mcp          # sem o --ssh
+claude mcp add -s user cais -- ssh cais@vps cais mcp     # instalado com --ssh
+claude mcp add -s user cais -- ssh root@vps cais mcp     # sem o --ssh
 ```
+
+`-s user` deixa o cais disponivel em todos os projetos do Claude Code (sem
+ele, so no projeto atual). O ssh do MCP nao pergunta nada: entre uma vez com
+`ssh cais@vps` antes, pra aceitar a chave do servidor.
 
 As ferramentas chamam as mesmas acoes da TUI e do CLI, com as mesmas regras
 (o deploy recusa compose fora do formato e diz a correcao):
@@ -284,18 +337,31 @@ devolvidos (a IA ve so os nomes).
 
 ## Instalacao
 
-A VPS precisa de Linux com systemd, Docker com o Compose v2 e acesso de
-leitura a este repositorio (chave SSH). Nao precisa de Go: o `install.sh`
-compila o cais num container `golang`.
+A VPS precisa de Linux (amd64 ou arm64) com systemd e Docker com o Compose
+v2. Sem clone, sem Go: o `install.sh` baixa o binario do ultimo release.
+
+Enquanto o repositorio for privado, o download precisa de um token do GitHub
+so de leitura: em github.com/settings/personal-access-tokens, um
+*fine-grained token* com acesso so ao repositorio `trdSystemDev/cais` e a
+permissao **Contents: read**. Ele so e usado na hora e nao fica na VPS.
 
 ```sh
-git clone git@github.com:trdSystemDev/cais.git && cd cais
-sudo ./install.sh                 # compila, instala e sobe o daemon (systemd)
-git pull && sudo ./install.sh     # atualiza: so o daemon reinicia, os containers ficam
+read -s GH_TOKEN && export GH_TOKEN      # cola o token (sem eco, fora do historico)
+curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
+  https://api.github.com/repos/trdSystemDev/cais/contents/install.sh |
+  sudo --preserve-env=GH_TOKEN sh -s -- --ssh
 ```
 
-Instala `/usr/local/bin/cais` e o servico `cais` (unidade em
-`assets/systemd/cais.service`). Opcoes (`./install.sh -h`):
+O mesmo comando atualiza: baixa o release mais novo, confere o SHA-256 e
+reinicia so o daemon (os containers ficam). Na mesma versao, nao faz nada.
+`--version v0.3.0` instala uma versao especifica (inclusive mais velha, pra
+voltar).
+
+De um clone (ex: pra testar uma mudanca antes do release), `sudo ./install.sh`
+compila o clone num container `golang` e instala.
+
+Instala `/usr/local/bin/cais` e o servico `cais` (a unidade do systemd vai
+dentro do `install.sh`). Opcoes (`./install.sh -h`):
 
 - `--group cais`: libera o cais pra quem esta no grupo, sem sudo (cria o grupo
   e coloca nele quem rodou o sudo). Quem esta no grupo controla a VPS, como no
@@ -307,11 +373,23 @@ Instala `/usr/local/bin/cais` e o servico `cais` (unidade em
   `/etc/ssh/sshd_config.d/cais.conf`, conferida com `sshd -T` pra nao mudar o
   ssh dos outros usuarios). Implica `--group cais`.
 - `--dry-run`: mostra o que faria, sem mudar nada.
-- `--binary arquivo`: instala um binario pronto em vez de compilar.
+- `--version vX.Y.Z`: pelo release, essa versao em vez da mais nova.
+- `--binary arquivo`: instala um binario pronto (nem baixa nem compila).
 - `--uninstall`: remove o binario, o servico e o usuario `cais` do ssh;
   `/etc/cais`, `/var/lib/cais` e os containers ficam.
 
 Depois, o Setup (aba Setup da TUI, ou o CLI abaixo).
+
+### Releases
+
+Cada tag `v*` no GitHub vira um release pelo GitHub Actions
+(`.github/workflows/release.yml`): roda os testes, compila os binarios
+`cais-linux-amd64` e `cais-linux-arm64` e publica com o `SHA256SUMS` e o
+`install.sh`. Pra lancar uma versao, da `main` em dia com o GitHub:
+
+```sh
+make release V=v0.3.0
+```
 
 ## Uso
 
@@ -320,7 +398,7 @@ grupo (`cais app -h`, `cais db -h`) e `cais <grupo> <comando> -h` explica um
 comando com as flags e exemplos (`cais app deploy -h`).
 
 ```sh
-cais daemon        # normalmente via systemd (assets/systemd/cais.service)
+cais daemon        # normalmente via systemd (o servico cais, do install.sh)
 cais               # abre a TUI
 cais state         # estado atual em JSON
 cais check         # checa o ambiente e imprime o resultado
@@ -341,7 +419,7 @@ Pode rodar de novo a qualquer momento: nada que existe e regenerado e stacks sem
 Um Setup disparado pelo CLI aparece ao vivo na TUI aberta, e vice-versa.
 
 ```sh
-cais setup config --domain exemplo.com.br --email voce@exemplo.com.br --github-app-id <id>
+cais setup config --email voce@exemplo.com.br --github-app-id <id>
 cais setup secret github_app_key < chave.pem
 cais setup                               # plano: o que falta e o que muda
 cais setup run                           # gera secrets, grava os compose, sobe tudo
@@ -371,13 +449,14 @@ desliga os avisos. Na TUI, os mesmos campos ficam na aba **Setup**, com o
 botao **Testar e-mail**.
 
 O `run` sobe as stacks em ordem com `docker compose up -d --wait` (cada uma
-saudavel antes da proxima). O DNS de cada app (`<app>.<dominio>` ou o que o
-compose dele usar) precisa apontar pra VPS, assim como `s3.<dominio>` quando o
-Garage estiver ativo.
+saudavel antes da proxima). O DNS de cada app (o dominio que o compose dele
+usar) precisa apontar pra VPS, assim como o host do S3 quando o Garage estiver
+ativo.
 
-Pra testar num PC, sem DNS publico: use um dominio `.localhost` (o
-systemd-resolved e os navegadores ja resolvem `*.localhost` pra 127.0.0.1; `.local`
-e recusado porque e do mDNS) e `--tls selfsigned`. O cais cria uma CA local
+Pra testar num PC, sem DNS publico: `--tls selfsigned --test-domain
+trd.localhost` (o systemd-resolved e os navegadores ja resolvem `*.localhost`
+pra 127.0.0.1; `.local` e recusado porque e do mDNS), e os apps em
+`<app>.trd.localhost`. O cais cria uma CA local
 restrita ao dominio do teste (name constraints: nao assina nada fora dele) e um
 certificado com SAN pra todos os nomes; o `setup run` termina mostrando como
 confiar nela (`trust anchor`). Use `CAIS_SOCKET`, `CAIS_CONFIG` e `CAIS_DATA_DIR` numa pasta
@@ -660,9 +739,10 @@ lembram, e o deploy avisa (sem bloquear) quando o compose do app declara
 volumes. Dado que nao pode se perder vai no banco da infra, ou precisa de um
 backup proprio do app.
 
-O arquivo (`cais-<dominio>-<data>.tar.gz.age`) e criptografado com
+O arquivo (`cais-<hostname>-<data>.tar.gz.age`) e criptografado com
 [age](https://age-encryption.org) pra uma chave publica e sobe pra uma pasta
-`cais-backups-<dominio>` no seu Google Drive. A chave privada aparece uma vez
+`cais-backups-<hostname>` no seu Google Drive (o cais guarda o id da pasta:
+trocar o hostname depois nao separa os backups). A chave privada aparece uma vez
 quando e gerada e **nao fica na VPS**: quem invade a VPS nao abre os backups
 que ja estao no Drive. Guarde num gerenciador de senhas; sem ela nenhum
 backup abre. Os mais velhos que a retencao (padrao 30 dias) saem do Drive; o

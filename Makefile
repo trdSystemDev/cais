@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build build-amd64 build-arm64 test test-docker clean dev daemon tui cais
+.PHONY: build build-amd64 build-arm64 test test-docker release clean dev daemon tui cais
 
 # Ambiente de teste no PC: socket, config e dados fora de /run, /etc e /var/lib
 DEV_DIR ?= $(HOME)/.local/share/cais-teste
@@ -50,6 +50,19 @@ build-arm64:
 
 test:
 	go test ./...
+
+# release: cria a tag e manda pro GitHub; o GitHub Actions
+# (.github/workflows/release.yml) testa, compila e publica o release, de onde
+# o install.sh pelo curl baixa. Uso: make release V=v0.3.0
+release:
+	@case "$(V)" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "uso: make release V=v0.3.0" >&2; exit 1 ;; esac
+	@test -z "$$(git status --porcelain)" || { echo "ha mudancas sem commit" >&2; exit 1; }
+	@test "$$(git rev-parse --abbrev-ref HEAD)" = main || { echo "faca o release da main" >&2; exit 1; }
+	git fetch -q origin main
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" || { echo "a main local difere da origin/main: de push (ou pull) antes" >&2; exit 1; }
+	git tag -a $(V) -m "cais $(V)"
+	git push origin $(V)
+	@echo "Acompanhe em https://github.com/trdSystemDev/cais/actions"
 
 # test-docker: os testes que sobem bancos de verdade no docker (importacao
 # de banco). Lento; containers e rede com sufixo aleatorio, apagados no fim.

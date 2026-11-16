@@ -1,0 +1,39 @@
+# Release do cais: a cada tag v* (git tag v0.3.0 && git push origin v0.3.0,
+# ou make release V=v0.3.0) roda os testes, compila os binarios linux
+# amd64/arm64 e publica o release com eles, o SHA256SUMS e o install.sh.
+# O install.sh pelo curl baixa daqui (o mais novo, ou --version vX.Y.Z).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Testes
+        run: go test ./...
+
+      - name: Binarios
+        run: |
+          make build VERSION="$GITHUB_REF_NAME"
+          ./dist/cais-linux-amd64 version
+          cd dist && sha256sum cais-linux-amd64 cais-linux-arm64 > SHA256SUMS && cat SHA256SUMS
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/cais-linux-amd64 dist/cais-linux-arm64 dist/SHA256SUMS install.sh \
+            --title "cais $GITHUB_REF_NAME" --generate-notes --verify-tag

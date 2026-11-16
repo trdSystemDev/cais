@@ -1,16 +1,25 @@
 #!/bin/sh
-# Instala (ou atualiza) o cais nesta VPS a partir deste clone do repositorio.
+# Instala (ou atualiza) o cais nesta VPS. Sem clone, pelo release do GitHub
+# (o repositorio e privado: precisa de um token so de leitura, GH_TOKEN):
 #
-#   git clone git@github.com:trdSystemDev/cais.git && cd cais
-#   sudo ./install.sh                 # instala e sobe o daemon
-#   git pull && sudo ./install.sh     # atualiza
-#   sudo ./install.sh --ssh           # e o usuario cais: ssh cais@vps abre a TUI
+#   read -s GH_TOKEN && export GH_TOKEN
+#   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
+#     https://api.github.com/repos/trdSystemDev/cais/contents/install.sh |
+#     sudo --preserve-env=GH_TOKEN sh -s -- --ssh
 #
-# Compila o binario num container golang (nao precisa de Go na VPS, so do
-# Docker que o cais ja exige), instala em /usr/local/bin/cais, instala a
-# unidade do systemd e sobe (ou reinicia) o daemon. Os containers das stacks
-# e dos apps nao param: so o daemon reinicia.
+# O mesmo comando atualiza. De dentro de um clone, compila o que esta nele:
+#
+#   sudo ./install.sh [--ssh]
+#
+# Baixa o binario (ou compila num container golang: nao precisa de Go na
+# VPS, so do Docker que o cais ja exige), instala em /usr/local/bin/cais,
+# instala a unidade do systemd e sobe (ou reinicia) o daemon. Os containers
+# das stacks e dos apps nao param: so o daemon reinicia.
 set -eu
+
+REPO=trdSystemDev/cais
+# CAIS_RELEASE_API troca a API (testes, espelho)
+API=${CAIS_RELEASE_API:-https://api.github.com/repos/$REPO}
 
 GO_IMAGE=golang:1.25-alpine
 BIN=/usr/local/bin/cais
@@ -24,8 +33,11 @@ SSHD_DROPIN=/etc/ssh/sshd_config.d/cais.conf
 usage() {
 	cat <<EOF
 Uso: sudo ./install.sh [opcoes]
+     curl ... | sudo --preserve-env=GH_TOKEN sh -s -- [opcoes]
 
-Instala ou atualiza o cais a partir deste clone (compila num container golang).
+Instala ou atualiza o cais. Pelo curl, baixa o binario do release do GitHub
+(GH_TOKEN: token so de leitura do repositorio $REPO, enquanto ele for
+privado). De dentro de um clone, compila o clone num container golang.
 
 Opcoes:
   --group NOME      libera o cais pra quem esta no grupo NOME, sem sudo (cria o
@@ -37,7 +49,8 @@ Opcoes:
                     sudo (authorized_keys); implica --group cais.
   --ssh-key ARQUIVO chave publica (.pub ou authorized_keys) pro usuario cais,
                     no lugar das suas
-  --binary ARQUIVO  instala esse binario em vez de compilar
+  --version vX.Y.Z  pelo release: essa versao em vez da mais nova
+  --binary ARQUIVO  instala esse binario (nem baixa nem compila)
   --dry-run         mostra o que faria, sem mudar nada (compila mesmo assim)
   --uninstall       remove o binario, o servico e o usuario cais do ssh;
                     /etc/cais, /var/lib/cais e os containers ficam
@@ -64,6 +77,7 @@ run() {
 
 GROUP=
 BINARY=
+WANT=
 UNINSTALL=
 SSH=
 SSH_KEY=
@@ -72,6 +86,11 @@ while [ $# -gt 0 ]; do
 	--group)
 		[ $# -ge 2 ] || die "--group precisa do nome do grupo"
 		GROUP=$2
+		shift 2
+		;;
+	--version)
+		[ $# -ge 2 ] || die "--version precisa da versao (ex: v0.3.0)"
+		WANT=$2
 		shift 2
 		;;
 	--binary)
@@ -108,7 +127,131 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-SRC=$(cd "$(dirname "$0")" && pwd)
+# de onde vem o binario: o clone em que o script esta (compila), o --binary,
+# ou o release do GitHub (rodando pelo curl, o $0 e o proprio sh)
+SRC=
+if [ -f "$0" ] && [ -f "$(dirname "$0")/go.mod" ] && [ -d "$(dirname "$0")/cmd/cais" ]; then
+	SRC=$(cd "$(dirname "$0")" && pwd)
+fi
+
+# write_unit grava a unidade do systemd. Fica aqui (e nao num arquivo do
+# repositorio) pra instalacao pelo curl, sem clone, ter tudo.
+write_unit() {
+	if [ -n "$DRY_RUN" ]; then
+		echo "    + grava $UNIT"
+		return
+	fi
+	cat >"$UNIT.new" <<'UNITFILE'
+# Daemon do cais: dono do estado e das acoes. A TUI e o CLI sao clientes
+# dele pelo socket /run/cais/cais.sock.
+#
+# Instalado pelo install.sh do cais. Nao edite aqui: a proxima instalacao
+# sobrescreve. O --group (liberar o cais pra um grupo sem sudo) vai num
+# drop-in, cais.service.d/group.conf.
+[Unit]
+Description=cais daemon
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cais daemon
+Restart=on-failure
+RestartSec=2
+# parar/reiniciar espera os deploys e backups em andamento terminarem (o
+# daemon recusa acao nova e sai quando nao sobra nenhuma). mixed manda o
+# SIGTERM so pro daemon: os docker compose que ele roda nao sao cortados.
+# Passado o limite, o systemd mata tudo e o daemon seguinte volta a versao
+# anterior de um deploy que ficou no meio. 45min cobre o limite de um
+# deploy (--deploy-timeout, 30min) mais a volta da versao anterior (10min).
+KillMode=mixed
+TimeoutStopSec=45min
+# cria /run/cais (e apaga ao parar) com permissao so pro root
+RuntimeDirectory=cais
+RuntimeDirectoryMode=0755
+# /etc/cais: config.yaml, editavel pelo admin
+ConfigurationDirectory=cais
+ConfigurationDirectoryMode=0755
+# /var/lib/cais: stacks, apps, secrets e backups -- so o daemon mexe
+StateDirectory=cais
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
+UNITFILE
+	chmod 0644 "$UNIT.new"
+	mv -f "$UNIT.new" "$UNIT"
+}
+
+# asset_url acha, na resposta JSON de um release, a URL da API do asset
+# chamado $1. Sem jq nem python (a VPS pode nao ter): le o JSON caractere a
+# caractere e guarda o "url" e o "name" de cada objeto do segundo nivel (os
+# assets), em qualquer ordem; o "url" do uploader, mais fundo, nao conta.
+asset_url() {
+	awk -v want="$1" '
+		{ s = s $0 "\n" }
+		END {
+			n = length(s); depth = 0; instr = 0; val = 0
+			for (i = 1; i <= n; i++) {
+				c = substr(s, i, 1)
+				if (instr) {
+					if (c == "\\") { tok = tok substr(s, i + 1, 1); i++; continue }
+					if (c != "\"") { tok = tok c; continue }
+					instr = 0
+					if (!val) { key = tok; continue }
+					val = 0
+					if (depth == 2 && key == "url") url = tok
+					if (depth == 2 && key == "name") name = tok
+					continue
+				}
+				if (c == "\"") { instr = 1; tok = "" }
+				else if (c == ":") val = 1
+				else if (c == "," || c == "[") val = 0
+				else if (c == "{") { depth++; val = 0; if (depth == 2) { url = ""; name = "" } }
+				else if (c == "}") {
+					if (depth == 2 && name == want && url ~ /\/releases\/assets\/[0-9]+$/) { print url; exit }
+					depth--
+				}
+			}
+		}
+	'
+}
+
+# gh_get baixa da API do GitHub (com o token, se houver) pro arquivo $2.
+gh_get() {
+	if [ -n "${GH_TOKEN:-}" ]; then
+		curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: $3" -o "$2" "$1"
+	else
+		curl -fsSL --retry 3 -H "Accept: $3" -o "$2" "$1"
+	fi
+}
+
+# download baixa o binario desta arquitetura do release (WANT ou o mais
+# novo) e confere o SHA-256 contra o SHA256SUMS do mesmo release.
+download() {
+	case $(uname -m) in
+	x86_64 | amd64) arch=amd64 ;;
+	aarch64 | arm64) arch=arm64 ;;
+	*) die "arquitetura $(uname -m) sem binario do cais (so amd64 e arm64)" ;;
+	esac
+	command -v curl >/dev/null 2>&1 || die "curl nao encontrado"
+	command -v sha256sum >/dev/null 2>&1 || die "sha256sum nao encontrado"
+	rel=$API/releases/latest
+	[ -n "$WANT" ] && rel=$API/releases/tags/$WANT
+	say "Baixando o cais ${WANT:-mais novo} ($arch) do release do GitHub"
+	gh_get "$rel" "$OUT/release.json" application/vnd.github+json ||
+		die "nao consegui ler o release ${WANT:-mais novo} de $REPO: confira o GH_TOKEN (token com Contents: read nesse repositorio) e se ha release publicado"
+	name=cais-linux-$arch
+	bin_url=$(asset_url "$name" <"$OUT/release.json")
+	sums_url=$(asset_url SHA256SUMS <"$OUT/release.json")
+	[ -n "$bin_url" ] && [ -n "$sums_url" ] || die "o release nao tem $name e SHA256SUMS"
+	gh_get "$bin_url" "$OUT/$name" application/octet-stream || die "falhou o download de $name"
+	gh_get "$sums_url" "$OUT/SHA256SUMS" application/octet-stream || die "falhou o download do SHA256SUMS"
+	(cd "$OUT" && grep " $name\$" SHA256SUMS | sha256sum -c - >/dev/null) ||
+		die "o SHA-256 de $name nao confere com o SHA256SUMS do release: download corrompido, nada foi instalado"
+	mv "$OUT/$name" "$OUT/cais"
+	chmod 0755 "$OUT/cais"
+}
 
 reload_sshd() {
 	run systemctl reload ssh 2>/dev/null || run systemctl reload sshd
@@ -243,7 +386,7 @@ Pronto. Ficaram, de proposito:
   /var/lib/cais    stacks, apps, secrets e backups (os dados)
   os containers das stacks e dos apps, que continuam no ar
 
-Reinstalar com sudo ./install.sh retoma tudo como estava.
+Reinstalar (o mesmo comando da instalacao) retoma tudo como estava.
 EOF
 	exit 0
 fi
@@ -251,9 +394,6 @@ fi
 command -v docker >/dev/null 2>&1 || die "Docker nao encontrado: instale o Docker antes (https://docs.docker.com/engine/install/)"
 docker info >/dev/null 2>&1 || die "o Docker nao respondeu (o servico esta no ar? rode como root)"
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 nao encontrado (o plugin docker compose)"
-if [ ! -f "$SRC/go.mod" ] || [ ! -f "$SRC/assets/systemd/cais.service" ]; then
-	die "rode o install.sh de dentro do clone do cais"
-fi
 
 # --- binario -----------------------------------------------------------------
 
@@ -264,6 +404,8 @@ if [ -n "$BINARY" ]; then
 	[ -f "$BINARY" ] || die "binario $BINARY nao existe"
 	cp "$BINARY" "$OUT/cais"
 	chmod 0755 "$OUT/cais"
+elif [ -z "$SRC" ]; then
+	download
 else
 	# o clone e do usuario: git como root recusa a pasta sem o safe.directory
 	VERSION=$(git -c safe.directory="$SRC" -C "$SRC" describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -284,6 +426,12 @@ NEW=$("$OUT/cais" version)
 
 OLD=
 [ -x "$BIN" ] && OLD=$("$BIN" version 2>/dev/null || true)
+# mesma versao, sem opcao nova e no ar: nada a fazer (nao reinicia a toa)
+if [ -n "$OLD" ] && [ "$OLD" = "$NEW" ] && [ -z "$GROUP$SSH$DRY_RUN" ] && [ -z "$SRC" ] &&
+	systemctl is-active --quiet cais; then
+	say "$NEW ja esta instalado e no ar"
+	exit 0
+fi
 if [ -n "$OLD" ]; then
 	say "Atualizando: $OLD -> $NEW"
 else
@@ -293,7 +441,7 @@ fi
 # troca atomica: um cais rodando nunca ve o binario pela metade
 run install -m 0755 "$OUT/cais" "$BIN.new"
 run mv -f "$BIN.new" "$BIN"
-run install -m 0644 "$SRC/assets/systemd/cais.service" "$UNIT"
+write_unit
 
 # --ssh: o usuario cais entra pelo grupo do daemon (o da instalacao anterior,
 # se houver; senao cais)
@@ -357,7 +505,7 @@ if [ -f "$SSHD_DROPIN" ]; then
 	echo "Do seu computador:"
 	echo "  ssh $SSH_USER@<esta-vps>                abre a TUI"
 	echo "  ssh $SSH_USER@<esta-vps> apps           um comando do cais"
-	echo "  claude mcp add cais -- ssh $SSH_USER@<esta-vps> cais mcp"
+	echo "  claude mcp add -s user cais -- ssh $SSH_USER@<esta-vps> cais mcp"
 fi
 if [ -n "$OLD" ]; then
 	echo
@@ -367,7 +515,7 @@ fi
 cat <<EOF
 
 Proximos passos (ou faca tudo pela aba Setup: $OPEN):
-  sudo cais setup config --domain exemplo.com.br --email voce@exemplo.com.br --github-app-id <id>
+  sudo cais setup config --email voce@exemplo.com.br --github-app-id <id>
   sudo cais setup secret github_app_key < chave-do-github-app.pem
   sudo cais setup          # o plano: o que falta e o que muda
   sudo cais setup run      # sobe o proxy e os servicos
