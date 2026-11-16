@@ -137,6 +137,10 @@ func (c *Core) AutoDeployOnce(ctx context.Context) (started []string, done <-cha
 					}
 				}
 				log.Printf("deploy automatico de %s falhou%s: %v", name, retry, err)
+				// falha passageira com nova tentativa marcada ainda nao e aviso
+				if retry == "" {
+					c.notifyAutoDeploy(name, head, err)
+				}
 			}
 			c.CheckApps(ctx)
 		}(a.Name)

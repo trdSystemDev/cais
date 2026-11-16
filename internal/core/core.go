@@ -16,6 +16,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/inflight"
+	"github.com/trdSystemDev/cais/internal/notify"
 )
 
 // Deps sao as dependencias externas do Core. Campos vazios recebem a
@@ -45,6 +46,9 @@ type Deps struct {
 	ExecStream     func(ctx context.Context, container string, stdin io.Reader, stdout io.Writer, args ...string) error
 	// PruneBuildCache e a limpeza diaria do cache de build.
 	PruneBuildCache func(ctx context.Context) error
+
+	// BrevoURL troca a API de e-mail da Brevo (testes); vazio e a Brevo.
+	BrevoURL string
 
 	// GitHubURL troca a API do GitHub (testes); vazio e o GitHub.
 	GitHubURL string
@@ -160,6 +164,9 @@ func New(d Deps) *Core {
 	}
 	if d.PruneBuildCache == nil {
 		d.PruneBuildCache = docker.PruneBuildCache
+	}
+	if d.BrevoURL == "" {
+		d.BrevoURL = notify.BrevoAPI
 	}
 	if d.AppsDir == "" {
 		d.AppsDir = filepath.Join(config.DataDir(), "apps")

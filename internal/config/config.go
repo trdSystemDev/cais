@@ -40,6 +40,7 @@ type Config struct {
 	Hosts  Hosts    `yaml:"hosts,omitempty" json:"hosts"`
 	GitHub GitHub   `yaml:"github,omitempty" json:"github"`
 	Backup Backup   `yaml:"backup,omitempty" json:"backup"`
+	Notify Notify   `yaml:"notify,omitempty" json:"notify"`
 
 	// campos de versoes antigas (CI e registry saíram): aceitos na leitura
 	// pra config velha continuar valendo, e descartados ao gravar
@@ -81,6 +82,18 @@ type Backup struct {
 	// backups. A privada fica fora da VPS: sem ela nenhum backup abre.
 	Recipient string `yaml:"recipient,omitempty" json:"recipient,omitempty"`
 }
+
+// Notify e pra quem vao os e-mails de falha (deploy automatico e backup),
+// enviados pela API da Brevo. A chave da API fica no secret brevo_api_key.
+type Notify struct {
+	// From e o remetente, um e-mail ja validado na conta da Brevo.
+	From string `yaml:"from,omitempty" json:"from,omitempty"`
+	// To sao os destinatarios; vazio desliga os avisos.
+	To []string `yaml:"to,omitempty" json:"to,omitempty"`
+}
+
+// On diz se os avisos por e-mail estao ligados.
+func (n Notify) On() bool { return len(n.To) > 0 }
 
 // DefaultRetentionDays e a retencao quando a config nao diz.
 const DefaultRetentionDays = 30
@@ -206,6 +219,16 @@ func (c Config) Validate() error {
 	}
 	if r := c.Backup.Recipient; r != "" && !strings.HasPrefix(r, "age1") {
 		errs = append(errs, fmt.Errorf("backup.recipient: %q nao e uma chave publica age (age1...)", r))
+	}
+	if n := c.Notify; n.On() || n.From != "" {
+		if err := validEmail(n.From); err != nil {
+			errs = append(errs, fmt.Errorf("notify.from: %w", err))
+		}
+		for _, to := range n.To {
+			if err := validEmail(to); err != nil {
+				errs = append(errs, fmt.Errorf("notify.to: %w", err))
+			}
+		}
 	}
 	if c.GitHub.AppID < 0 {
 		errs = append(errs, fmt.Errorf("github.app_id: id invalido %d", c.GitHub.AppID))

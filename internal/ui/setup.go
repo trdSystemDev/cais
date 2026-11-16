@@ -36,6 +36,7 @@ type item struct {
 var setupSections = []struct{ title, hint string }{
 	{"Geral", "o dominio de onde saem os nomes dos servicos"},
 	{"GitHub App do cais", "baixa o codigo dos repositorios privados no deploy"},
+	{"Avisos por e-mail", "pela Brevo: deploy automatico ou backup que falhou"},
 	{"Hosts", "opcional: vazio usa o padrao"},
 }
 
@@ -88,11 +89,12 @@ type (
 		err  error
 	}
 	savedMsg struct {
-		cfg config.Config
-		err error
-		key bool // gravou a chave do GitHub App
+		cfg  config.Config
+		err  error
+		keys []string // chaves gravadas junto (GitHub App, Brevo)
 	}
-	runDoneMsg struct{ err error }
+	runDoneMsg    struct{ err error }
+	notifyTestMsg struct{ err error }
 )
 
 func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
@@ -116,10 +118,18 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	p.get("ghKey").input.CharLimit = 16384 // o .pem inteiro colado
 
 	section = 2
+	input("notifyFrom", "Remetente", "validado na Brevo")
+	input("notifyTo", "Destinatarios", "a@x.com, b@x.com")
+	p.get("notifyTo").input.CharLimit = 1024
+	input("brevoKey", "Chave da Brevo", "xkeysib-...")
+	p.get("brevoKey").input.EchoMode = textinput.EchoPassword
+
+	section = 3
 	input("hostS3", "S3", "")
 	p.items = append(p.items,
 		&item{id: "save", label: "Salvar", kind: kindButton, section: section},
-		&item{id: "run", label: "Executar setup", kind: kindButton, section: section})
+		&item{id: "run", label: "Executar setup", kind: kindButton, section: section},
+		&item{id: "notifyTest", label: "Testar e-mail", kind: kindButton, section: section})
 	p.setTheme(th)
 	p.setFocus(0)
 	return p
@@ -205,12 +215,19 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		p.saveErr = ""
 		p.cfg = msg.cfg
 		p.get("ghKey").input.SetValue("")
-		if msg.key {
-			p.setStatus("ok", "Config salva e chave do GitHub App gravada.")
+		p.get("brevoKey").input.SetValue("")
+		if len(msg.keys) > 0 {
+			p.setStatus("ok", "Config salva e "+strings.Join(msg.keys, " e ")+" gravada.")
 		} else {
 			p.setStatus("ok", "Config salva.")
 		}
 		return p.planCmd()
+	case notifyTestMsg:
+		if msg.err != nil {
+			p.setStatus("danger", "E-mail de teste nao saiu: "+firstLine(msg.err.Error()))
+		} else {
+			p.setStatus("ok", "E-mail de teste enviado.")
+		}
 	case runDoneMsg:
 		p.running = false
 		if msg.err != nil {
@@ -237,6 +254,8 @@ func (p *setupPage) fill(c config.Config) {
 		p.get("ghAppID").input.SetValue(strconv.FormatInt(c.GitHub.AppID, 10))
 	}
 	p.get("hostS3").input.SetValue(c.Hosts.S3)
+	p.get("notifyFrom").input.SetValue(c.Notify.From)
+	p.get("notifyTo").input.SetValue(strings.Join(c.Notify.To, ", "))
 }
 
 // formConfig monta a config do formulario, mantendo o que ele nao mostra
@@ -256,6 +275,11 @@ func (p *setupPage) formConfig() config.Config {
 		c.GitHub.AppID = -1 // a validacao da config explica
 	}
 	c.Hosts.S3 = val("hostS3")
+	c.Notify.From = val("notifyFrom")
+	c.Notify.To = nil
+	for _, to := range strings.FieldsFunc(val("notifyTo"), func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+		c.Notify.To = append(c.Notify.To, to)
+	}
 	return c
 }
 
@@ -270,14 +294,32 @@ func (p *setupPage) save() tea.Cmd {
 			return nil
 		}
 	}
+	brevo := strings.TrimSpace(p.get("brevoKey").input.Value())
 	p.setStatus("warn", "Salvando...")
 	return func() tea.Msg {
 		ctx := context.Background()
+		var keys []string
 		err := p.api.SaveConfig(ctx, c)
 		if err == nil && key != nil {
-			err = p.api.SetSecret(ctx, "github_app_key", string(key))
+			if err = p.api.SetSecret(ctx, "github_app_key", string(key)); err == nil {
+				keys = append(keys, "chave do GitHub App")
+			}
 		}
-		return savedMsg{c, err, err == nil && key != nil}
+		if err == nil && brevo != "" {
+			if err = p.api.SetSecret(ctx, "brevo_api_key", brevo); err == nil {
+				keys = append(keys, "chave da Brevo")
+			}
+		}
+		return savedMsg{c, err, keys}
+	}
+}
+
+// notifyTest manda o e-mail de teste com o que esta salvo (nao o que esta
+// no formulario sem salvar).
+func (p *setupPage) notifyTest() tea.Cmd {
+	p.setStatus("warn", "Mandando o e-mail de teste...")
+	return func() tea.Msg {
+		return notifyTestMsg{p.api.TestNotify(context.Background())}
 	}
 }
 
@@ -323,6 +365,8 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		return p.save()
 	case it.id == "run":
 		return p.run()
+	case it.id == "notifyTest":
+		return p.notifyTest()
 	}
 	return nil
 }

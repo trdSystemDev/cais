@@ -445,10 +445,13 @@ func (c *Core) RunBackups(ctx context.Context, every time.Duration) {
 		if !c.work.Begin() {
 			return
 		}
-		_, err := c.runBackup(context.WithoutCancel(ctx), true)
+		run, err := c.runBackup(context.WithoutCancel(ctx), true)
 		c.work.End()
 		if err != nil && !errors.Is(err, ErrBusy) {
 			log.Printf("backup automatico: %v", err)
+		}
+		if !errors.Is(err, ErrBusy) {
+			c.notifyBackup(st.Last, run, err)
 		}
 	}
 }

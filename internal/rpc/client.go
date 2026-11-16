@@ -86,6 +86,10 @@ func (c *Client) SetSecret(ctx context.Context, name, value string) error {
 	return c.call(ctx, MethodSecretSet, secretParams{Name: name, Value: value}, nil)
 }
 
+func (c *Client) TestNotify(ctx context.Context) error {
+	return c.call(ctx, MethodNotifyTest, nil, nil)
+}
+
 func (c *Client) PlanSetup(ctx context.Context) (p bootstrap.Plan, err error) {
 	err = c.call(ctx, MethodSetupPlan, nil, &p)
 	return

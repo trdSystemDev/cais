@@ -101,7 +101,7 @@ cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
 
 O cais gera sozinho os secrets das stacks (senhas root dos bancos, RPC
 secret e token de admin do Garage) e nunca troca um que ja existe; so a chave
-do GitHub App e informada.
+do GitHub App e a da Brevo (avisos por e-mail) sao informadas.
 
 ## Configuracao
 
@@ -118,6 +118,9 @@ hosts:                          # opcional: troca o nome padrao
   s3: arquivos.exemplo.com.br
 github:
   app_id: 123456                # GitHub App do cais (baixa o codigo dos apps)
+notify:                         # avisos por e-mail pela Brevo; sem "to", desligados
+  from: cais@exemplo.com.br     # remetente validado na conta da Brevo
+  to: [ops@exemplo.com.br]
 ```
 
 Campo desconhecido e erro (pega erro de digitacao). Os compose das stacks sao
@@ -291,7 +294,8 @@ cais service postgres on # liga o Postgres e aplica a configuracao
 cais service garage off  # desliga o S3 e preserva os volumes
 ```
 
-A aba **Setup** concentra dominio, e-mail, certificados, o GitHub App e hosts.
+A aba **Setup** concentra dominio, e-mail, certificados, o GitHub App, os
+avisos por e-mail e hosts.
 A aba **Infra** mostra o estado das stacks fixas, os botoes Ligar/Desligar
 dos servicos opcionais, o passo em andamento e as instrucoes do S3.
 Os cards ficam a esquerda; a direita aparecem os logs do container selecionado
@@ -308,6 +312,29 @@ cais setup secret github_app_key < chave.pem
 cais setup                               # plano: o que falta e o que muda
 cais setup run                           # gera secrets, grava os compose, sobe tudo
 ```
+
+### Avisos por e-mail
+
+O cais manda e-mail pela API da [Brevo](https://www.brevo.com) quando:
+
+- um **deploy automatico falha de vez**: falha passageira com nova tentativa
+  marcada (2, 10 e 30 min) ainda nao avisa; a ultima, sim;
+- o **backup automatico nao da certo**: nao chegou no Drive (um aviso por
+  sequencia de falhas, nao um por tentativa de hora em hora) ou subiu sem
+  algum database.
+
+Deploy e backup manuais nao avisam: quem disparou ja ve o resultado. Falha
+no envio vai so pro log do daemon.
+
+```sh
+cais setup config --notify-from cais@exemplo.com.br --notify-to ops@exemplo.com.br,dev@exemplo.com.br
+cais setup secret brevo_api_key          # cola a chave xkeysib-... (sem eco)
+cais setup notify-test                   # manda um e-mail de teste agora
+```
+
+O remetente precisa estar validado na Brevo (Senders, Domains). `--notify-to ""`
+desliga os avisos. Na TUI, os mesmos campos ficam na aba **Setup**, com o
+botao **Testar e-mail**.
 
 O `run` sobe as stacks em ordem com `docker compose up -d --wait` (cada uma
 saudavel antes da proxima). O DNS de cada app (`<app>.<dominio>` ou o que o

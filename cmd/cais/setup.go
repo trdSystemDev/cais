@@ -37,6 +37,8 @@ func runSetup(args []string) error {
 		return setupSecret(args)
 	case "run":
 		return setupRun(args)
+	case "notify-test":
+		return setupNotifyTest(args)
 	default:
 		return groupError("setup", sub)
 	}
@@ -83,6 +85,11 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 		fmt.Fprintf(w, "  tls\tautoassinado (so pra teste)\n")
 	}
 	fmt.Fprintf(w, "  portas\t%d (http), %d (https)\n", cfg.Proxy.HTTPPort, cfg.Proxy.HTTPSPort)
+	if cfg.Notify.On() {
+		fmt.Fprintf(w, "  avisos\t%s (de %s, pela Brevo)\n", strings.Join(cfg.Notify.To, ", "), cfg.Notify.From)
+	} else {
+		fmt.Fprintf(w, "  avisos\tdesligados (cais setup config --notify-to)\n")
+	}
 	w.Flush()
 
 	if len(p.Stacks) > 0 {
@@ -161,6 +168,8 @@ func setupConfig(args []string) error {
 	httpsPort := fs.Int("https-port", 0, "porta https do proxy no host")
 	ghAppID := fs.Int64("github-app-id", 0, "App ID do GitHub App do cais (baixa o codigo dos repositorios privados)")
 	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (padrao s3.<dominio>)")
+	notifyFrom := fs.String("notify-from", "", "remetente dos avisos por e-mail (validado na Brevo)")
+	notifyTo := fs.String("notify-to", "", "destinatarios dos avisos, separados por virgula (vazio desliga)")
 	fs.Parse(args)
 
 	c, err := connect(*socket)
@@ -192,6 +201,10 @@ func setupConfig(args []string) error {
 			cfg.GitHub.AppID = *ghAppID
 		case "host-s3":
 			cfg.Hosts.S3 = *hostS3
+		case "notify-from":
+			cfg.Notify.From = *notifyFrom
+		case "notify-to":
+			cfg.Notify.To = splitList(*notifyTo)
 		}
 	})
 	if err := c.SaveConfig(ctx, cfg); err != nil {
@@ -258,6 +271,21 @@ func readSecret(prompt string) (string, error) {
 	}
 	b, err := io.ReadAll(os.Stdin)
 	return strings.TrimRight(string(b), "\r\n"), err
+}
+
+func setupNotifyTest(args []string) error {
+	fs, socket := newFlags("setup notify-test")
+	fs.Parse(args)
+	c, err := connect(*socket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if err := c.TestNotify(context.Background()); err != nil {
+		return err
+	}
+	fmt.Println("E-mail de teste enviado.")
+	return nil
 }
 
 func setupRun(args []string) error {

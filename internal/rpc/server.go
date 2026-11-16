@@ -427,6 +427,9 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodSetupRun:
 		return wrap(s.api.RunSetup(s.work))
 
+	case MethodNotifyTest:
+		return ok(s.api.TestNotify(s.work))
+
 	case MethodServiceSet:
 		var p serviceParams
 		if err := params(m, &p); err != nil {

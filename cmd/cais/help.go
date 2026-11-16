@@ -72,7 +72,7 @@ Exemplos:
 		{name: "setup plan", usage: "setup", short: "mostra o plano: o que falta e o que vai mudar", long: `
 Nao muda nada. Mostra o que falta configurar e o que o "cais setup run" vai
 fazer (stacks a subir, secrets a gerar).`},
-		{name: "setup config", usage: "setup config [opcoes]", short: "grava o /etc/cais/config.yaml (so o que for passado)\n    --domain --email --tls letsencrypt|selfsigned --http-port --https-port\n    --github-app-id --host-s3", long: `
+		{name: "setup config", usage: "setup config [opcoes]", short: "grava o /etc/cais/config.yaml (so o que for passado)\n    --domain --email --tls letsencrypt|selfsigned --http-port --https-port\n    --github-app-id --host-s3 --notify-from --notify-to", long: `
 So o que for passado muda; o resto fica como esta no arquivo. Vale no
 proximo "cais setup run".
 
@@ -84,6 +84,12 @@ Flags:
   --https-port porta      porta https do proxy no host (padrao 443)
   --github-app-id id      App ID do GitHub App do cais (baixa o codigo dos apps)
   --host-s3 host          endpoint S3 do Garage (padrao s3.<dominio>)
+  --notify-from e-mail    remetente dos avisos (um remetente validado na Brevo)
+  --notify-to e-mails     destinatarios dos avisos, separados por virgula;
+                          vazio desliga. A chave fica no secret brevo_api_key
+
+Os avisos sao e-mails pela Brevo quando um deploy automatico falha de vez
+(sem nova tentativa marcada) ou quando o backup automatico nao da certo.
 
 Exemplos:
   cais setup config --domain exemplo.com.br --email voce@exemplo.com.br
@@ -92,7 +98,12 @@ Exemplos:
 No terminal le sem eco; com stdin redirecionado, le o arquivo.
 
 Exemplo:
-  cais setup secret github_app_key < chave.pem`},
+  cais setup secret github_app_key < chave.pem
+  cais setup secret brevo_api_key            # cola a chave xkeysib-...`},
+		{name: "setup notify-test", usage: "setup notify-test", short: "manda um e-mail de teste pros destinatarios dos avisos", long: `
+Usa o remetente e os destinatarios da config (cais setup config
+--notify-from --notify-to) e a chave da Brevo (cais setup secret
+brevo_api_key). Se a Brevo recusar, o motivo aparece aqui.`},
 		{name: "setup run", usage: "setup run", short: "executa o Setup e mostra o progresso", long: `
 Gera os secrets que faltam, grava os compose das stacks e sobe cada uma em
 ordem (saudavel antes da proxima). Pode rodar de novo a qualquer momento:

@@ -40,6 +40,10 @@ type API interface {
 	// GitHub App). Secrets gerados pelo cais nao podem ser sobrescritos.
 	SetSecret(ctx context.Context, name, value string) error
 
+	// TestNotify manda agora um e-mail de teste pros destinatarios dos
+	// avisos (config notify, chave no secret brevo_api_key).
+	TestNotify(ctx context.Context) error
+
 	// PlanSetup diz o que o Setup faria agora, sem mudar nada.
 	PlanSetup(ctx context.Context) (bootstrap.Plan, error)
 	// RunSetup executa o Setup, publicando o progresso em State.Setup.

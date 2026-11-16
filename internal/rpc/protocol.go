@@ -24,6 +24,7 @@ const (
 	MethodSecretSet        = "secret.set"  // params: secretParams
 	MethodSetupPlan        = "setup.plan"
 	MethodSetupRun         = "setup.run"
+	MethodNotifyTest       = "notify.test"
 	MethodServiceSet       = "service.set" // params: serviceParams
 	MethodAppsCheck        = "apps.check"
 	MethodAppCreate        = "app.create"        // params: apps.App

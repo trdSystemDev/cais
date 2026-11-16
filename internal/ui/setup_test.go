@@ -182,3 +182,25 @@ func TestSetupRecusaChaveInvalida(t *testing.T) {
 		t.Fatal("gravou a config com a chave invalida")
 	}
 }
+
+// os avisos por e-mail: remetente, destinatarios e a chave da Brevo saem
+// do mesmo Salvar; a chave some do campo depois de gravada
+func TestSetupAvisosPorEmail(t *testing.T) {
+	m, _ := openSetup(t)
+	fill(t, m, "trd.localhost")
+	m.setup.get("notifyFrom").input.SetValue("cais@exemplo.com.br")
+	m.setup.get("notifyTo").input.SetValue("a@exemplo.com.br, b@exemplo.com.br")
+	m.setup.get("brevoKey").input.SetValue("xkeysib-teste")
+	click(t, m, "save")
+	waitFor(t, m, "Config salva e chave da Brevo gravada.")
+	if !strings.Contains(screen(m), "Testar e-mail") {
+		t.Errorf("sem o botao de teste:\n%s", screen(m))
+	}
+	if v := m.setup.get("brevoKey").input.Value(); v != "" {
+		t.Errorf("chave ficou no campo: %q", v)
+	}
+	info, _ := m.api.LoadConfig(context.Background())
+	if n := info.Config.Notify; n.From != "cais@exemplo.com.br" || len(n.To) != 2 || n.To[1] != "b@exemplo.com.br" {
+		t.Fatalf("avisos gravados: %+v", n)
+	}
+}
