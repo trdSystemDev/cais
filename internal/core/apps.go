@@ -278,7 +278,13 @@ func (c *Core) AppGuide(_ context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	in := apps.GuideInput{App: a.Name, Host: a.Name + "." + cfg.Domain, Networks: infraNetworks(cfg)}
+	// so um exemplo: o dominio do app vem da variavel DOMINIO dele. No modo
+	// de teste, um nome que a CA local assina
+	host := a.Name + ".exemplo.com.br"
+	if !cfg.LetsEncrypt() && cfg.TestDomain != "" {
+		host = a.Name + "." + cfg.TestDomain
+	}
+	in := apps.GuideInput{App: a.Name, Host: host, Networks: infraNetworks(cfg)}
 	env, err := m.Env(name)
 	if err != nil {
 		return "", err

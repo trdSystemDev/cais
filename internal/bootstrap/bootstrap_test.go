@@ -92,7 +92,6 @@ func newDeps(t *testing.T, f *fakeDocker) Deps {
 func writeConfig(t *testing.T, d Deps, mutate func(*config.Config)) config.Config {
 	t.Helper()
 	c := config.Default()
-	c.Domain = "exemplo.com.br"
 	c.Email = "admin@exemplo.com.br"
 	c.Stacks = []string{"postgres", "mysql"}
 	if mutate != nil {
@@ -277,7 +276,7 @@ func TestFixasSobemSempre(t *testing.T) {
 func TestGarageLayoutSoNaPrimeiraVez(t *testing.T) {
 	f := &fakeDocker{}
 	d := newDeps(t, f)
-	writeConfig(t, d, func(c *config.Config) { c.Stacks = []string{"garage"} })
+	writeConfig(t, d, func(c *config.Config) { c.Stacks, c.Hosts.S3 = []string{"garage"}, "s3.exemplo.com.br" })
 
 	steps, err := Run(context.Background(), d, nil)
 	if err != nil {

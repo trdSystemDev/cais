@@ -55,6 +55,7 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 		},
 		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 		Exec:      fakeGarage,
+		Hostname:  func() (string, error) { return "vps-teste", nil },
 		// importacao de banco: o dump escreve um SQL curto, o restore engole
 		ExecStream: func(_ context.Context, _ string, stdin io.Reader, stdout io.Writer, args ...string) error {
 			if strings.Contains(strings.Join(args, " "), "_dump") {
@@ -314,12 +315,12 @@ func TestNumeroNoCampoNaoTrocaDeAba(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	press(t, m, "4")
-	click(t, m, "domain")
+	click(t, m, "email")
 	press(t, m, "4")
 	if m.tab != tabSetup {
 		t.Fatalf("trocou pra aba %d digitando no campo", m.tab)
 	}
-	if v := m.setup.get("domain").input.Value(); !strings.HasSuffix(v, "4") {
+	if v := m.setup.get("email").input.Value(); !strings.HasSuffix(v, "4") {
 		t.Fatalf("campo = %q, o 4 tinha que entrar nele", v)
 	}
 }
@@ -342,8 +343,8 @@ func setupDone(t *testing.T, c *core.Core, services ...string) {
 	ctx := context.Background()
 	info, _ := c.LoadConfig(ctx)
 	cfg := info.Config
-	cfg.Domain, cfg.Email, cfg.TLS = "trd.localhost", "a@exemplo.com.br", "selfsigned"
-	cfg.Stacks = services
+	cfg.TestDomain, cfg.Email, cfg.TLS = "trd.localhost", "a@exemplo.com.br", "selfsigned"
+	cfg.Stacks, cfg.Hosts.S3 = services, "s3.trd.localhost"
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}

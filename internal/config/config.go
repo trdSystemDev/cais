@@ -24,15 +24,19 @@ var ErrNotFound = errors.New("config.yaml nao encontrado (rode o Setup)")
 // Config e o conteudo de /etc/cais/config.yaml. So guarda o que um humano
 // decide; secrets nunca entram aqui (ficam em SecretsDir).
 type Config struct {
-	// Domain e o dominio base da VPS. Os subdominios das stacks saem dele
-	// (s3.<domain>) se Hosts nao disser outra coisa.
-	Domain string `yaml:"domain" json:"domain"`
+	// Nao ha dominio da VPS: cada app usa o proprio dominio (labels do
+	// compose), e o certificado do Let's Encrypt sai pra esse nome.
+
 	// Email recebe os avisos do Let's Encrypt.
 	Email string `yaml:"email" json:"email"`
 	// TLS e de onde vem o certificado dos sites: TLSLetsEncrypt (padrao,
 	// precisa de DNS publico) ou TLSSelfSigned (teste local, ex: dominio
 	// .localhost, que nao tem como ter certificado publico).
 	TLS string `yaml:"tls,omitempty" json:"tls,omitempty"`
+	// TestDomain e o dominio do modo de teste (TLSSelfSigned), obrigatorio
+	// nele: a CA local so assina nomes dele (ex: trd.localhost, e os apps
+	// em <app>.trd.localhost). Fora do modo de teste nao vale.
+	TestDomain string `yaml:"test_domain,omitempty" json:"test_domain,omitempty"`
 	// Stacks sao os servicos opcionais ligados (postgres, mysql, garage).
 	// As stacks fixas (CoreStacks) sobem sempre e nao precisam estar aqui.
 	Stacks []string `yaml:"stacks,omitempty" json:"stacks,omitempty"`
@@ -45,6 +49,9 @@ type Config struct {
 	// campos de versoes antigas (CI e registry saíram): aceitos na leitura
 	// pra config velha continuar valendo, e descartados ao gravar
 	OldWoodpecker any `yaml:"woodpecker,omitempty" json:"-"`
+	// OldDomain e o dominio base, que saiu: na leitura vira TestDomain (modo
+	// de teste) e Hosts.S3 (s3.<dominio>, com o Garage ligado)
+	OldDomain string `yaml:"domain,omitempty" json:"-"`
 }
 
 // Proxy sao as portas do host publicadas pelo Traefik. Fora de 80/443 so
@@ -159,12 +166,7 @@ func Default() Config {
 }
 
 // S3Host e o endpoint publico do Garage (API S3).
-func (c Config) S3Host() string {
-	if c.Hosts.S3 != "" {
-		return c.Hosts.S3
-	}
-	return "s3." + c.Domain
-}
+func (c Config) S3Host() string { return c.Hosts.S3 }
 
 // HasStack diz se a stack esta ativa: as fixas sempre estao.
 func (c Config) HasStack(name string) bool {
@@ -186,8 +188,15 @@ var hostLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 // restrito a caracteres seguros.
 func (c Config) Validate() error {
 	var errs []error
-	if err := validHost(c.Domain); err != nil {
-		errs = append(errs, fmt.Errorf("domain: %w", err))
+	if c.TestDomain != "" {
+		if err := validHost(c.TestDomain); err != nil {
+			errs = append(errs, fmt.Errorf("test_domain: %w", err))
+		}
+	} else if c.TLS == TLSSelfSigned {
+		errs = append(errs, errors.New("test_domain: o modo de teste (tls selfsigned) precisa do dominio do teste (ex: trd.localhost): a CA local so assina nomes dele"))
+	}
+	if c.HasStack("garage") && c.Hosts.S3 == "" {
+		errs = append(errs, errors.New("hosts.s3: o Garage precisa do endereco publico do S3 (ex: s3.exemplo.com.br)"))
 	}
 	if err := validEmail(c.Email); err != nil {
 		errs = append(errs, fmt.Errorf("email: %w", err))
@@ -298,6 +307,16 @@ func Load(path string) (Config, error) {
 	}
 	// stacks de versoes antigas (o CI e o registry sairam)
 	c.Stacks = slices.DeleteFunc(c.Stacks, func(s string) bool { return s == "registry" || s == "woodpecker" })
+	// o dominio base saiu: o que ele fazia passa pros campos de agora
+	if d := c.OldDomain; d != "" {
+		if c.TLS == TLSSelfSigned && c.TestDomain == "" {
+			c.TestDomain = d
+		}
+		if c.HasStack("garage") && c.Hosts.S3 == "" {
+			c.Hosts.S3 = "s3." + d
+		}
+		c.OldDomain = ""
+	}
 	if err := c.Validate(); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
@@ -311,7 +330,7 @@ func Save(path string, c Config) error {
 		return err
 	}
 	// campos de versoes antigas nao voltam pro arquivo
-	c.OldWoodpecker, c.Hosts.OldCI, c.Hosts.OldRegistry = nil, "", ""
+	c.OldWoodpecker, c.Hosts.OldCI, c.Hosts.OldRegistry, c.OldDomain = nil, "", "", ""
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err

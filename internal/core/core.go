@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +51,9 @@ type Deps struct {
 
 	// BrevoURL troca a API de e-mail da Brevo (testes); vazio e a Brevo.
 	BrevoURL string
+	// Hostname e o nome da maquina, que identifica a VPS (backups,
+	// avisos). Padrao: os.Hostname.
+	Hostname func() (string, error)
 
 	// GitHubURL troca a API do GitHub (testes); vazio e o GitHub.
 	GitHubURL string
@@ -110,6 +115,15 @@ type Core struct {
 	work inflight.Group
 }
 
+// vpsName e o nome que identifica a VPS nos backups e nos avisos: o
+// hostname da maquina.
+func (c *Core) vpsName() string {
+	if h, err := c.deps.Hostname(); err == nil && h != "" {
+		return strings.ToLower(h)
+	}
+	return "vps"
+}
+
 // Close desliga o trabalho de fundo: nada novo comeca, e espera o deploy
 // automatico, o backup e a recuperacao em andamento terminarem. Cortar um
 // deploy no meio deixaria o app metade numa versao, metade na outra.
@@ -164,6 +178,9 @@ func New(d Deps) *Core {
 	}
 	if d.PruneBuildCache == nil {
 		d.PruneBuildCache = docker.PruneBuildCache
+	}
+	if d.Hostname == nil {
+		d.Hostname = os.Hostname
 	}
 	if d.BrevoURL == "" {
 		d.BrevoURL = notify.BrevoAPI

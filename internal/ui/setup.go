@@ -34,10 +34,10 @@ type item struct {
 
 // setupSections separam o formulario: o que cada grupo de campos configura.
 var setupSections = []struct{ title, hint string }{
-	{"Geral", "o dominio de onde saem os nomes dos servicos"},
+	{"Geral", "cada app traz o proprio dominio no compose"},
 	{"GitHub App do cais", "baixa o codigo dos repositorios privados no deploy"},
 	{"Avisos por e-mail", "pela Brevo: deploy automatico ou backup que falhou"},
-	{"Hosts", "opcional: vazio usa o padrao"},
+	{"Hosts", "S3: obrigatorio com o Garage ligado"},
 }
 
 const (
@@ -107,9 +107,10 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 		ti.SetWidth(28)
 		p.items = append(p.items, &item{id: id, label: label, kind: kindInput, input: &ti, section: section})
 	}
-	input("domain", "Dominio", "exemplo.com.br")
 	input("email", "E-mail", "avisos do Let's Encrypt")
 	p.items = append(p.items, &item{id: "tls", label: "Certificados", kind: kindSelect})
+	// so no modo de teste (CA local): os nomes que ela assina
+	input("testDomain", "Dominio (teste)", "ex: trd.localhost")
 
 	section = 1
 	input("ghAppID", "App ID", "numero na pagina do app")
@@ -243,7 +244,7 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 
 func (p *setupPage) fill(c config.Config) {
 	p.cfg = c
-	p.get("domain").input.SetValue(c.Domain)
+	p.get("testDomain").input.SetValue(c.TestDomain)
 	p.get("email").input.SetValue(c.Email)
 	p.tls = 0
 	if !c.LetsEncrypt() {
@@ -263,10 +264,10 @@ func (p *setupPage) fill(c config.Config) {
 func (p *setupPage) formConfig() config.Config {
 	c := p.cfg
 	val := func(id string) string { return strings.TrimSpace(p.get(id).input.Value()) }
-	c.Domain, c.Email = val("domain"), val("email")
-	c.TLS = ""
+	c.Email = val("email")
+	c.TLS, c.TestDomain = "", ""
 	if p.tls == 1 {
-		c.TLS = config.TLSSelfSigned
+		c.TLS, c.TestDomain = config.TLSSelfSigned, val("testDomain")
 	}
 	c.GitHub.AppID = 0
 	if id, err := strconv.ParseInt(val("ghAppID"), 10, 64); err == nil {
@@ -339,9 +340,20 @@ func (p *setupPage) run() tea.Cmd {
 
 func (p *setupPage) setStatus(kind, msg string) { p.statusC, p.status = kind, msg }
 
+// hidden diz se o item esta fora do formulario agora: o dominio do teste
+// so existe com a CA local.
+func (p *setupPage) hidden(it *item) bool { return it.id == "testDomain" && p.tls == 0 }
+
 func (p *setupPage) setFocus(i int) tea.Cmd {
 	n := len(p.items)
+	step := 1
+	if i < p.focus {
+		step = -1
+	}
 	p.focus = ((i % n) + n) % n
+	for p.hidden(p.items[p.focus]) {
+		p.focus = ((p.focus+step)%n + n) % n
+	}
 	var cmd tea.Cmd
 	for j, it := range p.items {
 		if it.input == nil {
@@ -439,15 +451,14 @@ func (p *setupPage) viewForm() string {
 	field := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(30)
 
 	// o padrao dos hosts aparece no campo vazio, ja com o dominio digitado
-	domain := strings.TrimSpace(p.get("domain").input.Value())
-	if domain == "" {
-		domain = "<dominio>"
-	}
-	p.get("hostS3").input.Placeholder = "s3." + domain
+	p.get("hostS3").input.Placeholder = "ex: s3.exemplo.com.br"
 
 	var rows, buttons []string
 	last := -1
 	for i, it := range p.items {
+		if p.hidden(it) {
+			continue
+		}
 		if it.kind == kindButton {
 			k := btnNormal
 			if it.id == "run" && !p.canRun() {
@@ -499,7 +510,9 @@ func (p *setupPage) viewPlan(w int) string {
 	}
 	if !pl.Configured {
 		b.WriteString("\n" + t.fg(t.warn).Bold(true).Render("Ainda sem configuracao.") + "\n\n")
-		b.WriteString(wrap.Render("Preencha dominio, e-mail e o OAuth app do GitHub (o CI sobe sempre) e salve (ctrl+s). Bancos e storage voce liga depois, na aba Infra.") + "\n")
+		b.WriteString(wrap.Render("Preencha o e-mail (avisos do Let's Encrypt) e o GitHub App e salve (ctrl+s). "+
+			"Nao ha dominio da VPS: cada app traz o proprio dominio no compose, e o certificado sai pra ele. "+
+			"Bancos e storage voce liga depois, na aba Infra.") + "\n")
 		return b.String()
 	}
 

@@ -11,7 +11,6 @@ import (
 
 func validConfig() Config {
 	c := Default()
-	c.Domain = "exemplo.com.br"
 	c.Email = "admin@exemplo.com.br"
 	return c
 }
@@ -29,7 +28,7 @@ func TestSaveLoadIdaEVolta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Domain != want.Domain || got.Email != want.Email || got.Hosts != want.Hosts ||
+	if got.Email != want.Email || got.Hosts != want.Hosts ||
 		got.Proxy != want.Proxy || got.GitHub != want.GitHub ||
 		strings.Join(got.Stacks, ",") != strings.Join(want.Stacks, ",") {
 		t.Fatalf("lido diferente do gravado:\n got %+v\nwant %+v", got, want)
@@ -58,7 +57,7 @@ func TestLoadSemArquivo(t *testing.T) {
 
 func TestLoadAplicaPadroes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	os.WriteFile(path, []byte("domain: exemplo.com\nemail: a@exemplo.com\nstacks: [proxy, postgres]\n"), 0o644)
+	os.WriteFile(path, []byte("email: a@exemplo.com\nstacks: [proxy, postgres]\n"), 0o644)
 
 	c, err := Load(path)
 	if err != nil {
@@ -69,9 +68,6 @@ func TestLoadAplicaPadroes(t *testing.T) {
 	}
 	if strings.Join(c.Stacks, ",") != "proxy,postgres" {
 		t.Errorf("a lista do arquivo tem que substituir a padrao, veio %v", c.Stacks)
-	}
-	if c.S3Host() != "s3.exemplo.com" {
-		t.Errorf("host padrao errado: %s", c.S3Host())
 	}
 }
 
@@ -99,26 +95,27 @@ func TestLoadConfigAntiga(t *testing.T) {
 
 func TestLoadRecusaCampoDesconhecido(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	os.WriteFile(path, []byte("domain: exemplo.com\nemail: a@exemplo.com\ndomian: x\n"), 0o644)
+	os.WriteFile(path, []byte("email: a@exemplo.com\nemial: x\n"), 0o644)
 
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "domian") {
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "emial") {
 		t.Fatalf("esperava erro citando o campo errado, veio %v", err)
 	}
 }
 
 func TestValidateRecusa(t *testing.T) {
 	cases := map[string]func(*Config){
-		"dominio vazio":          func(c *Config) { c.Domain = "" },
-		"dominio sem ponto":      func(c *Config) { c.Domain = "localhost" },
-		"dominio maiusculo":      func(c *Config) { c.Domain = "Exemplo.com" },
-		"dominio com aspas":      func(c *Config) { c.Domain = `x".com` },
-		"dominio com espaco":     func(c *Config) { c.Domain = "a b.com" },
-		"label com hifen final":  func(c *Config) { c.Domain = "a-.com" },
+		"selfsigned sem dominio": func(c *Config) { c.TLS = TLSSelfSigned },
+		"garage sem host do s3":  func(c *Config) { c.Stacks = []string{"garage"} },
+		"dominio sem ponto":      func(c *Config) { c.TestDomain = "localhost" },
+		"dominio maiusculo":      func(c *Config) { c.TestDomain = "Exemplo.com" },
+		"dominio com aspas":      func(c *Config) { c.TestDomain = `x".com` },
+		"dominio com espaco":     func(c *Config) { c.Hosts.S3 = "a b.com" },
+		"label com hifen final":  func(c *Config) { c.Hosts.S3 = "a-.com" },
 		"email sem arroba":       func(c *Config) { c.Email = "admin.exemplo.com" },
 		"email dominio invalido": func(c *Config) { c.Email = "a@b" },
 		"email com aspas":        func(c *Config) { c.Email = `a"b@exemplo.com` },
 		"host s3 invalido":       func(c *Config) { c.Hosts.S3 = "s3_x.exemplo.com" },
-		"dominio .local":         func(c *Config) { c.Domain = "trd.local" },
+		"dominio .local":         func(c *Config) { c.TestDomain, c.TLS = "trd.local", TLSSelfSigned },
 		"tls desconhecido":       func(c *Config) { c.TLS = "acme" },
 		"porta zero":             func(c *Config) { c.Proxy.HTTPPort = 0 },
 		"porta alta":             func(c *Config) { c.Proxy.HTTPSPort = 70000 },
@@ -137,7 +134,7 @@ func TestValidateRecusa(t *testing.T) {
 		t.Fatalf("recusou config valida: %v", err)
 	}
 	local := validConfig()
-	local.Domain, local.TLS = "trd.localhost", TLSSelfSigned
+	local.TestDomain, local.TLS = "trd.localhost", TLSSelfSigned
 	if err := local.Validate(); err != nil {
 		t.Fatalf("recusou config de teste local: %v", err)
 	}
@@ -146,7 +143,7 @@ func TestValidateRecusa(t *testing.T) {
 func TestSaveRecusaConfigInvalida(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := Save(path, Default()); err == nil {
-		t.Fatal("gravou config sem dominio")
+		t.Fatal("gravou config sem e-mail")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("arquivo criado mesmo com config invalida")
@@ -155,7 +152,7 @@ func TestSaveRecusaConfigInvalida(t *testing.T) {
 
 func TestBackupHorarioERetencao(t *testing.T) {
 	c := Default()
-	c.Domain, c.Email = "exemplo.com.br", "a@exemplo.com.br"
+	c.Email = "a@exemplo.com.br"
 	for _, bad := range []Backup{{Time: "3:00"}, {Time: "24:00"}, {Time: "03:60"}, {RetentionDays: -1}, {Recipient: "ssh-ed25519 AAAA"}} {
 		c.Backup = bad
 		if c.Validate() == nil {
@@ -175,5 +172,51 @@ func TestBackupHorarioERetencao(t *testing.T) {
 	}
 	if _, ok := (Backup{}).At(day); ok {
 		t.Error("sem horario devolveu horario")
+	}
+}
+
+// nao ha dominio da VPS: a config so com o e-mail vale, o Garage precisa
+// do host do S3 e o modo de teste do dominio do teste
+func TestSemDominio(t *testing.T) {
+	c := validConfig()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("recusou config so com o e-mail: %v", err)
+	}
+	c.Stacks, c.Hosts.S3 = []string{"garage", "postgres"}, "arquivos.exemplo.com.br"
+	if err := c.Validate(); err != nil || c.S3Host() != "arquivos.exemplo.com.br" {
+		t.Fatalf("garage com host: %v (%q)", err, c.S3Host())
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := Save(path, validConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); strings.Contains(string(b), "domain") {
+		t.Errorf("gravou dominio:\n%s", b)
+	}
+}
+
+// config de quando havia o dominio base: o que ele fazia vai pros campos
+// de agora (dominio do teste e host do S3), e o Save tira o campo
+func TestLoadConfigComDominio(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("domain: trd.localhost\nemail: a@exemplo.com\ntls: selfsigned\nstacks: [postgres, garage]\n"), 0o644)
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TestDomain != "trd.localhost" || c.S3Host() != "s3.trd.localhost" {
+		t.Errorf("migracao: dominio do teste %q, s3 %q", c.TestDomain, c.S3Host())
+	}
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); strings.Contains(string(b), "\ndomain:") || !strings.Contains(string(b), "test_domain: trd.localhost") {
+		t.Errorf("gravado:\n%s", b)
+	}
+
+	// em producao (Let's Encrypt) e sem Garage o dominio so some
+	os.WriteFile(path, []byte("domain: exemplo.com.br\nemail: a@exemplo.com\n"), 0o644)
+	if c, err := Load(path); err != nil || c.TestDomain != "" || c.Hosts.S3 != "" {
+		t.Fatalf("producao: %+v %v", c, err)
 	}
 }

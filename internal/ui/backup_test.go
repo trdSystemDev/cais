@@ -26,6 +26,7 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 		DataDir: data, SecretsDir: filepath.Join(data, "secrets"), BackupsDir: filepath.Join(data, "backups"),
 		AppsDir: filepath.Join(data, "apps"), StackDir: func(n string) string { return filepath.Join(data, "stacks", n) },
 		GoogleEndpoint: s.Endpoint(), DriveAPI: s.API(), DriveUpload: s.Upload(),
+		Hostname:  func() (string, error) { return "vps-teste", nil },
 		ComposePS: func(context.Context, string) ([]docker.Container, error) { return nil, nil },
 		ExecStream: func(_ context.Context, _ string, _ io.Reader, w io.Writer, args ...string) error {
 			_, err := io.WriteString(w, "-- dump "+args[len(args)-1])
@@ -34,7 +35,7 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	})
 	os.MkdirAll(filepath.Join(root, "etc"), 0o755)
 	cfg := config.Default()
-	cfg.Domain, cfg.Email = "trd.localhost", "a@exemplo.com.br"
+	cfg.Email = "a@exemplo.com.br"
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	click(t, m, "bk-run")
 	waitFor(t, m, "no Drive (")
 	waitFor(t, m, "ok · ")
-	if len(s.Names()) != 1 || !strings.HasPrefix(s.Names()[0], "cais-trd.localhost-") {
+	if len(s.Names()) != 1 || !strings.HasPrefix(s.Names()[0], "cais-vps-teste-") {
 		t.Errorf("no Drive: %v", s.Names())
 	}
 }

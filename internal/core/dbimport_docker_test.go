@@ -85,7 +85,7 @@ func TestImportarBancoDocker(t *testing.T) {
 		},
 	})
 	cfg := config.Default()
-	cfg.Domain, cfg.Email, cfg.Stacks = "exemplo.com.br", "a@exemplo.com.br", []string{"postgres", "mysql"}
+	cfg.Email, cfg.Stacks = "a@exemplo.com.br", []string{"postgres", "mysql"}
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}

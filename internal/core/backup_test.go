@@ -70,10 +70,11 @@ func newBackupCore(t *testing.T) (*Core, *drivetest.Server, *fakeDBs, string) {
 		DriveUpload:    s.Upload(),
 		ExecStream:     dbs.stream,
 		ExecInput:      dbs.execInput,
+		Hostname:       func() (string, error) { return "vps-teste", nil },
 	})
 	os.MkdirAll(filepath.Join(root, "etc"), 0o755)
 	cfg := config.Default()
-	cfg.Domain, cfg.Email = "exemplo.com.br", "a@exemplo.com.br"
+	cfg.Email = "a@exemplo.com.br"
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestBackupDoLoginAoRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.File != "cais-exemplo.com.br-2026-11-13_0300.tar.gz.age" || run.Databases != 2 || run.Size == 0 {
+	if run.File != "cais-vps-teste-2026-11-13_0300.tar.gz.age" || run.Databases != 2 || run.Size == 0 {
 		t.Errorf("backup %+v", run)
 	}
 	if names := s.Names(); !slices.Equal(names, []string{run.File}) {

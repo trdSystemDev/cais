@@ -37,11 +37,11 @@ func (c *Core) mail(msg notify.Message) (m notify.Mail, key string, ok bool, err
 	if err != nil {
 		return m, "", false, err
 	}
-	msg.Server = cfg.Domain
+	msg.Server = c.vpsName()
 	m = notify.Mail{
 		From:    cfg.Notify.From,
 		To:      cfg.Notify.To,
-		Subject: "[cais " + cfg.Domain + "] " + msg.Title,
+		Subject: "[cais " + msg.Server + "] " + msg.Title,
 		Text:    msg.Text(),
 		HTML:    msg.HTML(),
 	}

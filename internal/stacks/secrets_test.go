@@ -14,7 +14,7 @@ import (
 // todo secret que um template usa precisa saber de onde vem
 func TestTodoSecretTemOrigem(t *testing.T) {
 	local := validConfig()
-	local.Domain, local.TLS = "trd.localhost", config.TLSSelfSigned
+	local.TestDomain, local.TLS = "trd.localhost", config.TLSSelfSigned
 	special := []string{secrets.TLSCert, secrets.TLSKey}
 	for _, c := range []config.Config{validConfig(), local} {
 		for _, st := range All {
@@ -36,7 +36,7 @@ func TestTodoSecretTemOrigem(t *testing.T) {
 func TestEnsureSecretsGeraCertificadoLocal(t *testing.T) {
 	s := secrets.FileStore{Dir: filepath.Join(t.TempDir(), "secrets")}
 	c := validConfig()
-	c.Domain, c.TLS = "trd.localhost", config.TLSSelfSigned
+	c.TestDomain, c.TLS = "trd.localhost", config.TLSSelfSigned
 	c.Stacks = []string{"postgres"}
 	c.Stacks = []string{"postgres", "garage"}
 	c.Hosts.S3 = "arquivos.outro.localhost"
@@ -135,7 +135,7 @@ func TestEnsureSecretsSoDasStacksAtivas(t *testing.T) {
 		t.Errorf("o proxy com Let's Encrypt nao precisa de secret: %v", res.Created)
 	}
 
-	c.Stacks = []string{"garage"}
+	c.Stacks, c.Hosts.S3 = []string{"garage"}, "s3.exemplo.com.br"
 	res, _ = EnsureSecrets(s, c)
 	rpc, _ := s.Get("garage_rpc_secret")
 	if !slices.Contains(res.Created, "garage_rpc_secret") || len(rpc) != 64 {

@@ -104,12 +104,13 @@ func newAppsCore(t *testing.T) (*Core, *appDocker, *githubtest.Server) {
 		AppDocker:   d,
 		AppSettle:   -1,
 		GitHubURL:   gh.URL,
+		Hostname:    func() (string, error) { return "vps-teste", nil },
 		ContainerLogs: func(_ context.Context, name string) (string, error) {
 			return "log de " + name, nil
 		},
 	})
 	cfg := config.Default()
-	cfg.Domain, cfg.Email = "exemplo.com.br", "a@exemplo.com.br"
+	cfg.Email = "a@exemplo.com.br"
 	cfg.GitHub.AppID = gh.AppID
 	cfg.Stacks = []string{"postgres"}
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
@@ -403,7 +404,7 @@ func TestCreateBucket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Stacks = append(cfg.Stacks, "garage")
+	cfg.Stacks, cfg.Hosts.S3 = append(cfg.Stacks, "garage"), "s3.exemplo.com.br"
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +459,7 @@ func TestDeleteDatabaseEBucket(t *testing.T) {
 		return "", nil
 	}
 	cfg, _ := config.Load(c.deps.ConfigPath)
-	cfg.Stacks = append(cfg.Stacks, "garage")
+	cfg.Stacks, cfg.Hosts.S3 = append(cfg.Stacks, "garage"), "s3.exemplo.com.br"
 	c.SaveConfig(ctx, cfg)
 	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"})
 	c.CreateDatabase(ctx, DatabaseRequest{Engine: "postgres", Name: "loja"})

@@ -312,13 +312,12 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 		t.Fatalf("sem config: %+v, %v", info, err)
 	}
 	cfg := info.Config
-	cfg.Domain = "exemplo.com.br"
 	cfg.Email = "admin@exemplo.com.br"
 	cfg.Stacks = []string{"postgres"}
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if info, _ = c.LoadConfig(ctx); !info.Exists || info.Config.Domain != "exemplo.com.br" {
+	if info, _ = c.LoadConfig(ctx); !info.Exists || info.Config.Email != "admin@exemplo.com.br" {
 		t.Fatalf("config nao gravou: %+v", info)
 	}
 
@@ -367,10 +366,10 @@ func TestConfigInvalidaVoltaComoErro(t *testing.T) {
 	d, _ := startSetupDaemon(t)
 	c := dial(t, d.path)
 	cfg := config.Default()
-	cfg.Domain = "sem-ponto"
+	cfg.Email = "sem-arroba"
 	err := c.SaveConfig(context.Background(), cfg)
-	if err == nil || !strings.Contains(err.Error(), "domain") {
-		t.Fatalf("esperava erro de dominio, veio %v", err)
+	if err == nil || !strings.Contains(err.Error(), "email") {
+		t.Fatalf("esperava erro de e-mail, veio %v", err)
 	}
 }
 

@@ -85,7 +85,7 @@ func TestTestNotify(t *testing.T) {
 	if err := c.TestNotify(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.wait(t, 1); !strings.HasPrefix(got[0], "[cais exemplo.com.br] Os avisos do cais estao chegando") {
+	if got := f.wait(t, 1); !strings.HasPrefix(got[0], "[cais vps-teste] Os avisos do cais estao chegando") {
 		t.Errorf("assunto: %q", got[0])
 	}
 
@@ -97,7 +97,7 @@ func TestTestNotify(t *testing.T) {
 
 func TestNotifyFromObrigatorio(t *testing.T) {
 	cfg := config.Default()
-	cfg.Domain, cfg.Email = "exemplo.com.br", "a@exemplo.com.br"
+	cfg.Email = "a@exemplo.com.br"
 	cfg.Notify.To = []string{"ops@exemplo.com.br"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "notify.from") {
 		t.Fatalf("sem remetente: %v", err)
@@ -244,5 +244,32 @@ func TestAvisoSemConfiguracao(t *testing.T) {
 	}
 	if err := c.TestNotify(context.Background()); err == nil || !strings.Contains(err.Error(), "cais setup secret brevo_api_key") {
 		t.Errorf("e-mail de teste sem chave: %v", err)
+	}
+}
+
+// a VPS aparece pelo hostname nos avisos e nos backups, e o guia do
+// compose usa um dominio de exemplo (o do app vem da variavel DOMINIO)
+func TestVPSPeloHostname(t *testing.T) {
+	c, _, _ := newAppsCore(t)
+	c.deps.Hostname = func() (string, error) { return "VPS-Contabo-01", nil }
+	f := withBrevo(t, c)
+	if got := c.vpsName(); got != "vps-contabo-01" {
+		t.Errorf("nome da VPS: %q", got)
+	}
+	if err := c.TestNotify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.wait(t, 1); !strings.HasPrefix(got[0], "[cais vps-contabo-01] ") {
+		t.Errorf("assunto: %q", got[0])
+	}
+	c.CreateApp(context.Background(), apps.App{Name: "loja", Repo: "trdSystemDev/meu-app"})
+	g, err := c.AppGuide(context.Background(), "loja")
+	if err != nil || !strings.Contains(g, "loja.exemplo.com.br") {
+		t.Errorf("guia sem dominio: %v\n%s", err, g)
+	}
+
+	c.deps.Hostname = func() (string, error) { return "", errors.New("sem hostname") }
+	if got := c.vpsName(); got != "vps" {
+		t.Errorf("sem hostname: %q", got)
 	}
 }

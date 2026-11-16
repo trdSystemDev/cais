@@ -24,15 +24,15 @@ func openSetup(t *testing.T) (*model, func() int32) {
 	return m, ups.Load
 }
 
-// fill preenche o formulario do Setup como o usuario faria: dominio,
-// e-mail e CA local (dispensa DNS).
+// fill preenche o formulario do Setup como o usuario faria: e-mail e CA
+// local (dispensa DNS) com o dominio do teste.
 func fill(t *testing.T, m *model, domain string) {
 	t.Helper()
-	m.setup.get("domain").input.SetValue(domain)
 	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
 	if m.setup.tls == 0 {
 		click(t, m, "tls")
 	}
+	m.setup.get("testDomain").input.SetValue(domain)
 }
 
 // o Setup so tem configuracoes: quais servicos ligar fica na aba Infra
@@ -61,7 +61,7 @@ func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.Exists || info.Config.Domain != "trd.localhost" || info.Config.LetsEncrypt() {
+	if !info.Exists || info.Config.TestDomain != "trd.localhost" || info.Config.LetsEncrypt() {
 		t.Fatalf("config gravada: %+v", info)
 	}
 	if len(info.Config.Stacks) != 0 {
@@ -203,4 +203,29 @@ func TestSetupAvisosPorEmail(t *testing.T) {
 	if n := info.Config.Notify; n.From != "cais@exemplo.com.br" || len(n.To) != 2 || n.To[1] != "b@exemplo.com.br" {
 		t.Fatalf("avisos gravados: %+v", n)
 	}
+}
+
+// nao ha dominio da VPS: com Let's Encrypt so o e-mail basta, e o dominio
+// do teste so aparece (e so conta no Tab) com a CA local
+func TestSetupSemDominio(t *testing.T) {
+	m, _ := openSetup(t)
+	if strings.Contains(screen(m), "Dominio (teste)") {
+		t.Fatal("dominio do teste aparece com Let's Encrypt")
+	}
+	m.setup.setFocus(0)
+	for range len(m.setup.items) {
+		if m.setup.items[m.setup.focus].id == "testDomain" {
+			t.Fatal("o Tab passa pelo dominio do teste escondido")
+		}
+		m.setup.setFocus(m.setup.focus + 1)
+	}
+	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
+	click(t, m, "save")
+	waitFor(t, m, "Config salva.")
+	waitFor(t, m, "Pronto pra executar")
+
+	click(t, m, "tls")
+	waitFor(t, m, "Dominio (teste)")
+	click(t, m, "save")
+	waitFor(t, m, "precisa do dominio do")
 }

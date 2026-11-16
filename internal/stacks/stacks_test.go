@@ -20,7 +20,6 @@ const secretsDir = "/var/lib/cais/secrets"
 
 func validConfig() config.Config {
 	c := config.Default()
-	c.Domain = "exemplo.com.br"
 	c.Email = "admin@exemplo.com.br"
 	c.Stacks = []string{"postgres", "mysql"}
 	return c
@@ -210,7 +209,7 @@ func TestSoOBancoEscolhido(t *testing.T) {
 
 func TestTLSAutoassinadoParaTesteLocal(t *testing.T) {
 	c := validConfig()
-	c.Domain, c.TLS = "trd.localhost", config.TLSSelfSigned
+	c.TestDomain, c.TLS = "trd.localhost", config.TLSSelfSigned
 	r, cf := render(t, "proxy", c)
 	text := string(r.Compose)
 
@@ -285,7 +284,7 @@ func TestFixasSempreAtivas(t *testing.T) {
 
 func TestGaragePublicadoEmS3(t *testing.T) {
 	c := validConfig()
-	c.Stacks = []string{"garage"}
+	c.Stacks, c.Hosts.S3 = []string{"garage"}, "s3.exemplo.com.br"
 	r, cf := render(t, "garage", c)
 	labels := labelsOf(t, cf, "garage")
 	if labels["traefik.http.routers.garage.rule"] != "Host(`s3.exemplo.com.br`)" {
@@ -301,7 +300,7 @@ func TestGaragePublicadoEmS3(t *testing.T) {
 
 func TestEnabledDevolveNaOrdemDeSubida(t *testing.T) {
 	c := validConfig()
-	c.Stacks = []string{"garage", "mysql", "postgres", "proxy"}
+	c.Stacks, c.Hosts.S3 = []string{"garage", "mysql", "postgres", "proxy"}, "s3.exemplo.com.br"
 	got, err := Enabled(c)
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +342,7 @@ func TestDockerComposeAceita(t *testing.T) {
 	// os dois modos de TLS geram compose diferentes (o local usa configs
 	// com content inline)
 	local := validConfig()
-	local.Domain, local.TLS = "trd.localhost", config.TLSSelfSigned
+	local.TestDomain, local.TLS = "trd.localhost", config.TLSSelfSigned
 	modes := map[string]config.Config{"letsencrypt": validConfig(), "selfsigned": local}
 
 	for mode, c := range modes {

@@ -183,7 +183,7 @@ func ensureOne(s secrets.Store, name string, c config.Config, res *SecretsResult
 // TLSHosts sao os nomes do certificado da CA local: o dominio, o curinga
 // dele e os nomes das stacks publicadas (que podem estar fora do dominio).
 func TLSHosts(c config.Config) []string {
-	hosts := []string{c.Domain, "*." + c.Domain}
+	hosts := []string{c.TestDomain, "*." + c.TestDomain}
 	add := func(h string) {
 		if !slices.Contains(hosts, h) {
 			hosts = append(hosts, h)
@@ -198,9 +198,9 @@ func TLSHosts(c config.Config) []string {
 // TLSDomains sao os dominios que a CA local pode assinar: o dominio base e
 // cada host fora dele. Nada alem disso.
 func TLSDomains(c config.Config) []string {
-	domains := []string{c.Domain}
+	domains := []string{c.TestDomain}
 	for _, h := range TLSHosts(c) {
-		if h == c.Domain || strings.HasSuffix(h, "."+c.Domain) || slices.Contains(domains, h) {
+		if h == c.TestDomain || strings.HasSuffix(h, "."+c.TestDomain) || slices.Contains(domains, h) {
 			continue
 		}
 		domains = append(domains, h)

@@ -83,8 +83,8 @@ func connect(t *testing.T) *mcp.ClientSession {
 		},
 	})
 	cfg := config.Default()
-	cfg.Domain, cfg.Email, cfg.TLS = "trd.localhost", "a@trd.localhost", config.TLSSelfSigned
-	cfg.Stacks = []string{"postgres", "garage"}
+	cfg.TestDomain, cfg.Email, cfg.TLS = "trd.localhost", "a@trd.localhost", config.TLSSelfSigned
+	cfg.Stacks, cfg.Hosts.S3 = []string{"postgres", "garage"}, "s3.trd.localhost"
 	cfg.GitHub.AppID = gh.AppID
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)

@@ -70,19 +70,18 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 	if !info.Exists {
 		fmt.Fprintf(out, "Ainda sem configuracao (%s).\n\n", info.Path)
 		fmt.Fprintln(out, "Comece com:")
-		fmt.Fprintln(out, "  cais setup config --domain exemplo.com.br --email voce@exemplo.com.br")
+		fmt.Fprintln(out, "  cais setup config --email voce@exemplo.com.br --github-app-id <id>")
 		return
 	}
 
 	cfg := p.Config
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(out, "Config: %s\n", info.Path)
-	fmt.Fprintf(w, "  dominio\t%s\n", cfg.Domain)
 	fmt.Fprintf(w, "  e-mail\t%s\n", cfg.Email)
 	if cfg.LetsEncrypt() {
 		fmt.Fprintf(w, "  tls\tLet's Encrypt\n")
 	} else {
-		fmt.Fprintf(w, "  tls\tautoassinado (so pra teste)\n")
+		fmt.Fprintf(w, "  tls\tCA local, so pra teste (nomes de %s)\n", cfg.TestDomain)
 	}
 	fmt.Fprintf(w, "  portas\t%d (http), %d (https)\n", cfg.Proxy.HTTPPort, cfg.Proxy.HTTPSPort)
 	if cfg.Notify.On() {
@@ -161,13 +160,13 @@ func printTrust(out io.Writer, p bootstrap.Plan) {
 
 func setupConfig(args []string) error {
 	fs, socket := newFlags("setup config")
-	domain := fs.String("domain", "", "dominio base")
+	testDomain := fs.String("test-domain", "", "dominio do modo de teste (--tls selfsigned), ex: trd.localhost")
 	email := fs.String("email", "", "e-mail do Let's Encrypt")
 	tls := fs.String("tls", "", "letsencrypt (padrao) ou selfsigned (teste local)")
 	httpPort := fs.Int("http-port", 0, "porta http do proxy no host")
 	httpsPort := fs.Int("https-port", 0, "porta https do proxy no host")
 	ghAppID := fs.Int64("github-app-id", 0, "App ID do GitHub App do cais (baixa o codigo dos repositorios privados)")
-	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (padrao s3.<dominio>)")
+	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (obrigatorio com o Garage ligado)")
 	notifyFrom := fs.String("notify-from", "", "remetente dos avisos por e-mail (validado na Brevo)")
 	notifyTo := fs.String("notify-to", "", "destinatarios dos avisos, separados por virgula (vazio desliga)")
 	fs.Parse(args)
@@ -187,8 +186,8 @@ func setupConfig(args []string) error {
 	// so o que foi passado muda; o resto fica como esta no arquivo
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "domain":
-			cfg.Domain = *domain
+		case "test-domain":
+			cfg.TestDomain = *testDomain
 		case "email":
 			cfg.Email = *email
 		case "tls":

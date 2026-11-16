@@ -101,8 +101,8 @@ func appsCore(t *testing.T) (*core.Core, *fakeApps, *githubtest.Server) {
 		Exec:          fakeGarage,
 	})
 	cfg := config.Default()
-	cfg.Domain, cfg.Email, cfg.TLS = "trd.localhost", "a@trd.localhost", config.TLSSelfSigned
-	cfg.Stacks = []string{"postgres", "garage"}
+	cfg.TestDomain, cfg.Email, cfg.TLS = "trd.localhost", "a@trd.localhost", config.TLSSelfSigned
+	cfg.Stacks, cfg.Hosts.S3 = []string{"postgres", "garage"}, "s3.trd.localhost"
 	cfg.GitHub.AppID = gh.AppID
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)

@@ -512,7 +512,7 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 		return run, err
 	}
 	run.Databases = len(dbs)
-	run.File = backup.FileName(cfg.Domain, start)
+	run.File = backup.FileName(c.vpsName(), start)
 	local := filepath.Join(c.deps.BackupsDir, run.File)
 	f, err := os.OpenFile(local+".part", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -544,7 +544,7 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 
 	c.backupStep("enviando pro Google Drive")
 	disk := c.loadBackupDisk()
-	folder, err := d.Folder(ctx, disk.Folder, "cais-backups-"+cfg.Domain)
+	folder, err := d.Folder(ctx, disk.Folder, "cais-backups-"+c.vpsName())
 	if err == nil && folder != disk.Folder {
 		err = c.changeBackupDisk(func(d *backupDisk) { d.Folder = folder })
 	}

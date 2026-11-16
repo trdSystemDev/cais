@@ -31,7 +31,6 @@ func newSetupCore(t *testing.T, release <-chan struct{}) *Core {
 		ComposeDown: func(context.Context, string) error { return nil },
 	})
 	cfg := config.Default()
-	cfg.Domain = "exemplo.com.br"
 	cfg.Email = "admin@exemplo.com.br"
 	if err := c.SaveConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)

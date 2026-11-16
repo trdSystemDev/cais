@@ -48,6 +48,7 @@ func TestAvisoEImportacaoPeloSocket(t *testing.T) {
 		SecretsDir:  filepath.Join(root, "secrets"),
 		StackDir:    func(n string) string { return filepath.Join(root, "stacks", n) },
 		BrevoURL:    brevo.URL,
+		Hostname:    func() (string, error) { return "vps-teste", nil },
 		ExecInput:   func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 		ExecStream: func(_ context.Context, _ string, stdin io.Reader, stdout io.Writer, args ...string) error {
 			if strings.Contains(strings.Join(args, " "), "pg_dump") {
@@ -70,7 +71,7 @@ func TestAvisoEImportacaoPeloSocket(t *testing.T) {
 	ctx := context.Background()
 
 	cfg := config.Default()
-	cfg.Domain, cfg.Email, cfg.Stacks = "exemplo.com.br", "a@exemplo.com.br", []string{"postgres"}
+	cfg.Email, cfg.Stacks = "a@exemplo.com.br", []string{"postgres"}
 	cfg.Notify = config.Notify{From: "cais@exemplo.com.br", To: []string{"ops@exemplo.com.br"}}
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
@@ -82,7 +83,7 @@ func TestAvisoEImportacaoPeloSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	mu.Lock()
-	if len(mails) != 1 || !strings.Contains(mails[0], "[cais exemplo.com.br]") {
+	if len(mails) != 1 || !strings.Contains(mails[0], "[cais vps-teste]") {
 		t.Errorf("e-mails: %q", mails)
 	}
 	mu.Unlock()
