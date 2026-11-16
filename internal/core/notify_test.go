@@ -192,3 +192,57 @@ func TestAvisoBackupUmaVezPorSequencia(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	f.wait(t, 1)
 }
+
+// backup que chega no Drive sem algum database: avisa toda vez (nao repete
+// no dia); o que nao chegou no Drive so avisa no comeco da sequencia
+func TestAvisoBackupIncompleto(t *testing.T) {
+	c, _, _ := newAppsCore(t)
+	f := withBrevo(t, c)
+	wait := func() {
+		for c.work.Count() > 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	partial := BackupRun{Databases: 5, Errors: []string{"postgres/estoque", "mysql/portal"}}
+	c.notifyBackup(&BackupRun{}, partial, nil)
+	c.notifyBackup(&partial, partial, nil) // de novo no dia seguinte
+	wait()
+	got := f.wait(t, 2)
+	for _, want := range []string{"Backup incompleto", "estes databases", "postgres/estoque", "mysql/portal", "5 databases"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("e-mail sem %q:\n%s", want, got[0])
+		}
+	}
+	one := BackupRun{Databases: 1, Errors: []string{"postgres/estoque"}}
+	c.notifyBackup(nil, one, nil)
+	wait()
+	if got := f.wait(t, 3); !strings.Contains(got[2], "sem este database:") {
+		t.Errorf("singular:\n%s", got[2])
+	}
+
+	// backup que deu certo nao avisa; falha de envio depois de outra falha
+	// de envio tambem nao
+	c.notifyBackup(nil, BackupRun{Databases: 5}, nil)
+	c.notifyBackup(&BackupRun{Error: "drive fora"}, BackupRun{Error: "drive fora"}, errors.New("drive fora"))
+	wait()
+	f.wait(t, 3)
+}
+
+// avisos desligados (sem destinatarios) ou sem a chave da Brevo: nada sai
+// e nada trava
+func TestAvisoSemConfiguracao(t *testing.T) {
+	c, _, _ := newAppsCore(t)
+	c.notifyAutoDeploy("loja", "abc1234", errors.New("quebrou"))
+	if c.work.Count() != 0 {
+		t.Fatal("tentou mandar com os avisos desligados")
+	}
+	f := withBrevo(t, c)
+	c.secretStore().Delete(secretBrevoKey)
+	c.notifyAutoDeploy("loja", "abc1234", errors.New("quebrou"))
+	if c.work.Count() != 0 || len(f.list()) != 0 {
+		t.Fatal("tentou mandar sem a chave")
+	}
+	if err := c.TestNotify(context.Background()); err == nil || !strings.Contains(err.Error(), "cais setup secret brevo_api_key") {
+		t.Errorf("e-mail de teste sem chave: %v", err)
+	}
+}

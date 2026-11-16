@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build build-amd64 build-arm64 test clean dev daemon tui cais
+.PHONY: build build-amd64 build-arm64 test test-docker clean dev daemon tui cais
 
 # Ambiente de teste no PC: socket, config e dados fora de /run, /etc e /var/lib
 DEV_DIR ?= $(HOME)/.local/share/cais-teste
@@ -50,6 +50,11 @@ build-arm64:
 
 test:
 	go test ./...
+
+# test-docker: os testes que sobem bancos de verdade no docker (importacao
+# de banco). Lento; containers e rede com sufixo aleatorio, apagados no fim.
+test-docker:
+	CAIS_DOCKER_TEST=1 go test ./internal/core -run Docker -v
 
 clean:
 	rm -rf dist

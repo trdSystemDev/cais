@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/trdSystemDev/cais/internal/config"
 )
 
 // fakeImport finge o container do Postgres numa importacao: o dump le a
@@ -37,6 +39,14 @@ func (f *fakeImport) execInput(_ context.Context, container string, input []byte
 
 func (f *fakeImport) stream(ctx context.Context, container string, stdin io.Reader, stdout io.Writer, args ...string) error {
 	all := strings.Join(args, " ")
+	if strings.Contains(all, "mysqldump") {
+		line, _ := bufio.NewReader(stdin).ReadString('\n')
+		f.mu.Lock()
+		f.password = strings.TrimSuffix(line, "\n")
+		f.mu.Unlock()
+		_, err := io.WriteString(stdout, mysqlDump)
+		return err
+	}
 	if strings.Contains(all, "pg_dump") {
 		line, _ := bufio.NewReader(stdin).ReadString('\n')
 		f.mu.Lock()
@@ -158,5 +168,40 @@ func TestImportarBancoRecusaNomeQueJaExiste(t *testing.T) {
 		if strings.Contains(s, "CREATE ROLE") || strings.Contains(s, "DROP DATABASE") {
 			t.Errorf("mexeu no database que ja existia: %s", s)
 		}
+	}
+}
+
+const mysqlDump = "CREATE TABLE `produtos` (`id` int);\n" +
+	"INSERT INTO `produtos` VALUES (1),(2);\n" +
+	"/*!50013 DEFINER=`legacy`@`%` SQL SECURITY DEFINER */\n" +
+	"/*!50003 CREATE*/ /*!50017 DEFINER=`legacy`@`%`*/ /*!50003 TRIGGER t BEFORE UPDATE ON produtos */;\n"
+
+// MySQL: o DEFINER da origem sai no caminho, e nao ha passagem de dono
+// (no MySQL a permissao e por GRANT, que o cais ja deu)
+func TestImportarBancoMySQL(t *testing.T) {
+	c, f := importCore(t)
+	ctx := context.Background()
+	if err := c.changeConfig(func(cfg *config.Config) { cfg.Stacks = append(cfg.Stacks, "mysql") }); err != nil {
+		t.Fatal(err)
+	}
+	info, err := c.CreateDatabase(ctx, DatabaseRequest{Engine: "mysql", Name: "blog", Source: "mysql://legacy:p@ss:w/rd@db.antigo.com/blog"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Imported != "legacy@db.antigo.com:3306/blog" || info.ImportedBytes != int64(len(mysqlDump)) {
+		t.Errorf("info %+v", info)
+	}
+	if f.password != "p@ss:w/rd" {
+		t.Errorf("senha que chegou no dump: %q", f.password)
+	}
+	want := "CREATE TABLE `produtos` (`id` int);\n" +
+		"INSERT INTO `produtos` VALUES (1),(2);\n" +
+		"/*!50013  SQL SECURITY DEFINER */\n" +
+		"/*!50003 CREATE*/ /*!50017 */ /*!50003 TRIGGER t BEFORE UPDATE ON produtos */;\n"
+	if f.restored != want {
+		t.Errorf("restore recebeu:\n%s", f.restored)
+	}
+	if strings.Contains(strings.Join(f.sql, "\n"), "OWNER TO") {
+		t.Error("passagem de dono do Postgres rodou no MySQL")
 	}
 }
