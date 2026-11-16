@@ -170,7 +170,11 @@ func printBackupStatus(st core.BackupStatus) {
 	}
 	fmt.Printf("Horario:       %s, retencao de %d dias\n", when, st.RetentionDays)
 	if !st.Next.IsZero() {
-		fmt.Printf("Proximo:       %s\n", st.Next.Local().Format("02/01/2006 15:04"))
+		retry := ""
+		if st.Retry {
+			retry = " (nova tentativa: o ultimo nao chegou no Drive)"
+		}
+		fmt.Printf("Proximo:       %s%s\n", st.Next.Local().Format("02/01/2006 15:04"), retry)
 	}
 	if l := st.Last; l != nil {
 		state := "ok"

@@ -599,7 +599,11 @@ Configuracao (TUI: Infra -> Backups; ou o CLI):
    o codigo (funciona pelo SSH, nada volta colado).
 4. `cais backup key`: guarde a chave privada que aparece.
 5. `cais backup schedule 03:00 -days 30` (fuso da VPS). Se a VPS estava
-   desligada na hora, o backup sai assim que o daemon subir.
+   desligada na hora, o backup sai assim que o daemon subir. Um backup que
+   nao chega no Drive (Drive fora do ar, rede, disco) e tentado de novo a
+   cada hora ate subir, sem esperar o dia seguinte; o "Proximo" mostra a
+   nova tentativa. Backup que subiu sem algum database nao repete (o
+   database quebrado falharia de novo): o erro fica no ultimo backup.
 
 Restaurar:
 

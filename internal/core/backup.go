@@ -50,7 +50,10 @@ type BackupStatus struct {
 	Time          string `json:"time,omitempty"`
 	RetentionDays int    `json:"retention_days"`
 	// Next e o proximo backup automatico (zero: desligado ou incompleto).
-	Next    time.Time  `json:"next,omitzero"`
+	Next time.Time `json:"next,omitzero"`
+	// Retry diz que o Next e a nova tentativa de um backup que nao chegou
+	// no Drive (e nao o horario do dia).
+	Retry   bool       `json:"retry,omitempty"`
 	Running bool       `json:"running,omitempty"`
 	Step    string     `json:"step,omitempty"`
 	Last    *BackupRun `json:"last,omitempty"`
@@ -207,7 +210,7 @@ func (c *Core) readBackup() BackupStatus {
 	}
 	st.Last = disk.Last
 	if st.Ready() {
-		st.Next = nextBackup(b, disk.Last, c.deps.Now())
+		st.Next, st.Retry = nextBackup(b, disk.Last, c.deps.Now())
 	}
 	return st
 }
@@ -219,20 +222,42 @@ func cmpOr(a, b string) string {
 	return b
 }
 
+// backupRetry e a espera pra tentar de novo um backup que nao chegou no
+// Drive (Drive fora do ar, rede, disco).
+var backupRetry = time.Hour
+
 // nextBackup e o proximo horario do backup automatico. Se o de hoje ja
-// passou sem backup (VPS desligada as 03:00), e agora.
-func nextBackup(b config.Backup, last *BackupRun, now time.Time) time.Time {
+// passou sem backup (VPS desligada as 03:00), e agora. Se o ultimo nao
+// chegou no Drive, tenta de novo backupRetry depois dele (retry), sem
+// esperar o horario do dia seguinte. Backup que subiu sem algum database
+// nao repete: o database quebrado falharia de novo, e cada tentativa sobe
+// um arquivo inteiro.
+func nextBackup(b config.Backup, last *BackupRun, now time.Time) (next time.Time, retry bool) {
 	at, ok := b.At(now)
 	if !ok {
-		return time.Time{}
+		return time.Time{}, false
 	}
-	if !now.Before(at) && (last == nil || last.At.Before(at)) {
-		return now
+	switch {
+	case now.Before(at):
+		next = at
+	case last == nil || last.At.Before(at):
+		next = now
+	default:
+		next = at.AddDate(0, 0, 1)
 	}
-	if !now.Before(at) {
-		at = at.AddDate(0, 0, 1)
+	if last != nil && last.Error != "" {
+		if r := last.At.Add(backupRetry); r.Before(next) {
+			return later(r, now), true
+		}
 	}
-	return at
+	return next, false
+}
+
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // SetBackupClient grava o OAuth client do Google (tipo "TVs e dispositivos
@@ -407,7 +432,7 @@ func (c *Core) RunBackups(ctx context.Context, every time.Duration) {
 		}
 		st := c.readBackup()
 		if st.Next.IsZero() || c.deps.Now().Before(st.Next) {
-			c.update(func(s *State) { s.Backup.Next = st.Next })
+			c.update(func(s *State) { s.Backup.Next, s.Backup.Retry = st.Next, st.Retry })
 			continue
 		}
 		// o backup nao ve o desligamento do daemon (o Close espera): um

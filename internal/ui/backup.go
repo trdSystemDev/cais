@@ -474,7 +474,11 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int) string {
 	}
 	b.WriteString("\n")
 	if !st.Next.IsZero() {
-		b.WriteString(muted.Render("Proximo: "+st.Next.Local().Format("02/01 15:04")) + "\n")
+		next := "Proximo: " + st.Next.Local().Format("02/01 15:04")
+		if st.Retry {
+			next += " (nova tentativa: o ultimo nao chegou no Drive)"
+		}
+		b.WriteString(muted.Render(next) + "\n")
 	}
 	if l := st.Last; l != nil {
 		color, text := t.ok, fmt.Sprintf("Ultimo: %s · %s · %d databases", l.At.Local().Format("02/01 15:04"), databases.HumanSize(l.Size), l.Databases)

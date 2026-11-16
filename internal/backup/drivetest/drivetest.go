@@ -31,6 +31,17 @@ type Server struct {
 	// Fail faz a proxima requisicao que casar com o prefixo (ex: "PUT")
 	// devolver 500.
 	Fail string
+	// down faz toda requisicao que casar com o prefixo falhar (Drive fora
+	// do ar) ate SetDown("").
+	down string
+}
+
+// SetDown faz toda requisicao que casar com o prefixo (ex: "POST /upload")
+// devolver 503 ate SetDown(""): o Drive fora do ar.
+func (s *Server) SetDown(prefix string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.down = prefix
 }
 
 type file struct {
@@ -115,6 +126,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if s.Fail != "" && strings.HasPrefix(r.Method+" "+r.URL.Path, s.Fail) {
 		s.Fail = ""
 		http.Error(w, `{"error":{"message":"falha de teste"}}`, 500)
+		return
+	}
+	if s.down != "" && strings.HasPrefix(r.Method+" "+r.URL.Path, s.down) {
+		http.Error(w, `{"error":{"message":"fora do ar"}}`, 503)
 		return
 	}
 	js := func(v any) { w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(v) }

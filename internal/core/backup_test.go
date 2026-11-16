@@ -289,12 +289,38 @@ func TestProximoBackup(t *testing.T) {
 		{at(10, 0), &BackupRun{At: at(3, 1)}, at(3, 0).AddDate(0, 0, 1)},   // ja fez hoje: amanha
 	}
 	for i, tc := range cases {
-		if got := nextBackup(b, tc.last, tc.now); !got.Equal(tc.want) {
-			t.Errorf("%d: %v, esperava %v", i, got, tc.want)
+		if got, retry := nextBackup(b, tc.last, tc.now); !got.Equal(tc.want) || retry {
+			t.Errorf("%d: %v (retry %v), esperava %v", i, got, retry, tc.want)
 		}
 	}
-	if !nextBackup(config.Backup{}, nil, at(1, 0)).IsZero() {
+	if next, _ := nextBackup(config.Backup{}, nil, at(1, 0)); !next.IsZero() {
 		t.Error("sem horario agendou")
+	}
+}
+
+func TestBackupQueNaoChegouNoDriveTentaDeNovo(t *testing.T) {
+	b := config.Backup{Time: "03:00"}
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 13, h, m, 0, 0, time.UTC) }
+	failed := &BackupRun{At: at(3, 0), Error: "enviando pro Drive: 503"}
+	cases := []struct {
+		name  string
+		now   time.Time
+		last  *BackupRun
+		want  time.Time
+		retry bool
+	}{
+		{"uma hora depois da falha", at(3, 5), failed, at(4, 0), true},
+		{"a hora ja passou (daemon fora do ar): agora", at(6, 30), failed, at(6, 30), true},
+		{"falhou as 23:30: tenta 00:30", at(23, 40), &BackupRun{At: at(23, 30), Error: "x"}, at(0, 30).AddDate(0, 0, 1), true},
+		{"falhou as 02:30: o das 03:00 vem antes", at(2, 40), &BackupRun{At: at(2, 30), Error: "x"}, at(3, 0), false},
+		{"subiu sem um database: so amanha", at(3, 5), &BackupRun{At: at(3, 0), Errors: []string{"postgres/x: erro"}}, at(3, 0).AddDate(0, 0, 1), false},
+		{"falha manual antes do horario: tenta antes das 03:00", at(1, 10), &BackupRun{At: at(1, 0), Error: "x"}, at(2, 0), true},
+	}
+	for _, tc := range cases {
+		got, retry := nextBackup(b, tc.last, tc.now)
+		if !got.Equal(tc.want) || retry != tc.retry {
+			t.Errorf("%s: %v (retry %v), esperava %v (retry %v)", tc.name, got, retry, tc.want, tc.retry)
+		}
 	}
 }
 
@@ -319,4 +345,61 @@ func keys(m map[string]string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// o laco do daemon: o backup das 03:00 nao chega no Drive (fora do ar), a
+// nova tentativa sai uma hora depois sem esperar o dia seguinte, e com o
+// Drive de volta o proximo e o das 03:00 de amanha
+func TestBackupAutomaticoTentaDeNovoDepoisDeUmaHora(t *testing.T) {
+	c, s, _, _ := newBackupCore(t)
+	setupBackup(t, c, s)
+	uploadRetryDelay = 0
+	defer func() { uploadRetryDelay = 5 * time.Second }()
+	if err := c.SetBackupSchedule(context.Background(), "03:00", 30); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	now := time.Date(2026, 11, 13, 3, 0, 0, 0, time.Local)
+	clock := func(d time.Time) { mu.Lock(); now = d; mu.Unlock() }
+	c.deps.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	s.SetDown("PUT /upload")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.RunBackups(ctx, 5*time.Millisecond)
+
+	last := func(ok func(*BackupRun) bool) BackupStatus {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			st, _ := c.Snapshot(context.Background())
+			if b := st.Backup; b.Last != nil && !b.Running && ok(b.Last) {
+				return b
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("backup esperado nao aconteceu: %+v", st.Backup)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	at3 := now
+	st := last(func(r *BackupRun) bool { return r.Error != "" })
+	if !st.Retry || !st.Next.Equal(at3.Add(time.Hour)) {
+		t.Fatalf("depois da falha: next %v retry %v", st.Next, st.Retry)
+	}
+
+	// antes da hora nao tenta (cada tentativa e um arquivo inteiro)
+	clock(at3.Add(30 * time.Minute))
+	time.Sleep(50 * time.Millisecond)
+	if st, _ := c.Snapshot(context.Background()); !st.Backup.Last.At.Equal(at3) {
+		t.Fatalf("tentou antes da hora: %+v", st.Backup.Last)
+	}
+
+	s.SetDown("")
+	clock(at3.Add(time.Hour))
+	st = last(func(r *BackupRun) bool { return r.OK() })
+	if !st.Last.At.Equal(at3.Add(time.Hour)) || st.Retry || !st.Next.Equal(at3.AddDate(0, 0, 1)) {
+		t.Fatalf("depois da nova tentativa: last %v next %v retry %v", st.Last.At, st.Next, st.Retry)
+	}
 }
