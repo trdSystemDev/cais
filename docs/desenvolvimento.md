@@ -73,7 +73,7 @@ Regras:
 | `internal/apps` | apps em `/var/lib/cais/apps/<app>`: deploy, `.env`, secrets, avisos e ajuda do compose |
 | `internal/github` | GitHub App: token por repositorio, commit e tarball do codigo |
 | `internal/config` | `/etc/cais/config.yaml` e os caminhos no disco |
-| `install.sh` | instalador: baixa o release (ou compila o clone) e traz a unidade do systemd |
+| `install.sh` | instalador: baixa o release e traz a unidade do systemd |
 | `.github/workflows/` | release a cada tag `v*` |
 | `docs/` | esta documentacao |
 
@@ -136,6 +136,14 @@ Cada tag `v*` no GitHub vira um release pelo GitHub Actions
 make release V=v0.3.0
 ```
 
+Pra testar numa VPS antes de lancar, uma tag com `-` vira pre-release: o
+GitHub nao a entrega como a mais nova, entao so instala quem pedir.
+
+```sh
+make release V=v0.3.0-rc1
+# na VPS: o comando de instalacao com --version v0.3.0-rc1
+```
+
 ## Roadmap
 
 1. Esqueleto: TUI com abas clicaveis, checagem de Docker/Compose
@@ -144,7 +152,7 @@ make release V=v0.3.0
 4. Bancos: database e usuario por app no Postgres/MySQL compartilhado
 5. Deploy automatico (feito: consulta ao GitHub a cada minuto, sem webhook nem porta) e homologacao com promocao
 6. Backups (feito: bancos e estado do cais, criptografados com age, pro Google Drive)
-7. `install.sh` (feito: por curl, do release do GitHub; ou compilando um clone)
+7. `install.sh` (feito: por curl, do release do GitHub)
 8. MCP (feito: `cais mcp` pelo SSH, sem exclusoes nem Setup)
 
 ---

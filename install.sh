@@ -1,27 +1,22 @@
 #!/bin/sh
-# Instala (ou atualiza) o cais nesta VPS. Sem clone, pelo release do GitHub
-# (o repositorio e privado: precisa de um token so de leitura, GH_TOKEN):
+# Instala (ou atualiza) o cais nesta VPS, pelo release do GitHub (o
+# repositorio e privado: precisa de um token so de leitura, GH_TOKEN):
 #
 #   read -s GH_TOKEN && export GH_TOKEN
 #   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
 #     https://api.github.com/repos/trdSystemDev/cais/contents/install.sh |
 #     sudo --preserve-env=GH_TOKEN sh -s -- --ssh
 #
-# O mesmo comando atualiza. De dentro de um clone, compila o que esta nele:
-#
-#   sudo ./install.sh [--ssh]
-#
-# Baixa o binario (ou compila num container golang: nao precisa de Go na
-# VPS, so do Docker que o cais ja exige), instala em /usr/local/bin/cais,
-# instala a unidade do systemd e sobe (ou reinicia) o daemon. Os containers
-# das stacks e dos apps nao param: so o daemon reinicia.
+# O mesmo comando atualiza. Baixa o binario desta arquitetura, confere o
+# SHA-256, instala em /usr/local/bin/cais, instala a unidade do systemd e
+# sobe (ou reinicia) o daemon. Os containers das stacks e dos apps nao
+# param: so o daemon reinicia.
 set -eu
 
 REPO=trdSystemDev/cais
 # CAIS_RELEASE_API troca a API (testes, espelho)
 API=${CAIS_RELEASE_API:-https://api.github.com/repos/$REPO}
 
-GO_IMAGE=golang:1.25-alpine
 BIN=/usr/local/bin/cais
 UNIT=/etc/systemd/system/cais.service
 DROPIN=/etc/systemd/system/cais.service.d/group.conf
@@ -32,12 +27,10 @@ SSHD_DROPIN=/etc/ssh/sshd_config.d/cais.conf
 
 usage() {
 	cat <<EOF
-Uso: sudo ./install.sh [opcoes]
-     curl ... | sudo --preserve-env=GH_TOKEN sh -s -- [opcoes]
+Uso: curl ... | sudo --preserve-env=GH_TOKEN sh -s -- [opcoes]
 
-Instala ou atualiza o cais. Pelo curl, baixa o binario do release do GitHub
-(GH_TOKEN: token so de leitura do repositorio $REPO, enquanto ele for
-privado). De dentro de um clone, compila o clone num container golang.
+Instala ou atualiza o cais pelo release do GitHub (GH_TOKEN: token so de
+leitura do repositorio $REPO, enquanto ele for privado).
 
 Opcoes:
   --group NOME      libera o cais pra quem esta no grupo NOME, sem sudo (cria o
@@ -50,8 +43,7 @@ Opcoes:
   --ssh-key ARQUIVO chave publica (.pub ou authorized_keys) pro usuario cais,
                     no lugar das suas
   --version vX.Y.Z  pelo release: essa versao em vez da mais nova
-  --binary ARQUIVO  instala esse binario (nem baixa nem compila)
-  --dry-run         mostra o que faria, sem mudar nada (compila mesmo assim)
+  --dry-run         mostra o que faria, sem mudar nada (baixa mesmo assim)
   --uninstall       remove o binario, o servico e o usuario cais do ssh;
                     /etc/cais, /var/lib/cais e os containers ficam
   -h, --help        esta ajuda
@@ -76,7 +68,6 @@ run() {
 }
 
 GROUP=
-BINARY=
 WANT=
 UNINSTALL=
 SSH=
@@ -91,11 +82,6 @@ while [ $# -gt 0 ]; do
 	--version)
 		[ $# -ge 2 ] || die "--version precisa da versao (ex: v0.3.0)"
 		WANT=$2
-		shift 2
-		;;
-	--binary)
-		[ $# -ge 2 ] || die "--binary precisa do arquivo"
-		BINARY=$2
 		shift 2
 		;;
 	--ssh)
@@ -127,15 +113,8 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-# de onde vem o binario: o clone em que o script esta (compila), o --binary,
-# ou o release do GitHub (rodando pelo curl, o $0 e o proprio sh)
-SRC=
-if [ -f "$0" ] && [ -f "$(dirname "$0")/go.mod" ] && [ -d "$(dirname "$0")/cmd/cais" ]; then
-	SRC=$(cd "$(dirname "$0")" && pwd)
-fi
-
 # write_unit grava a unidade do systemd. Fica aqui (e nao num arquivo do
-# repositorio) pra instalacao pelo curl, sem clone, ter tudo.
+# repositorio) pra instalacao pelo curl ter tudo.
 write_unit() {
 	if [ -n "$DRY_RUN" ]; then
 		echo "    + grava $UNIT"
@@ -358,7 +337,7 @@ undo_ssh() {
 
 [ "$(uname -s)" = Linux ] || die "o cais roda em Linux"
 if [ -z "$DRY_RUN" ] && [ "$(id -u)" -ne 0 ]; then
-	die "rode como root: sudo ./install.sh"
+	die "rode como root: ... | sudo --preserve-env=GH_TOKEN sh"
 fi
 command -v systemctl >/dev/null 2>&1 || die "systemd nao encontrado (o cais roda como servico do systemd)"
 
@@ -400,25 +379,7 @@ docker compose version >/dev/null 2>&1 || die "Docker Compose v2 nao encontrado 
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 
-if [ -n "$BINARY" ]; then
-	[ -f "$BINARY" ] || die "binario $BINARY nao existe"
-	cp "$BINARY" "$OUT/cais"
-	chmod 0755 "$OUT/cais"
-elif [ -z "$SRC" ]; then
-	download
-else
-	# o clone e do usuario: git como root recusa a pasta sem o safe.directory
-	VERSION=$(git -c safe.directory="$SRC" -C "$SRC" describe --tags --always --dirty 2>/dev/null || echo dev)
-	say "Compilando o cais $VERSION ($GO_IMAGE)"
-	# a saida vai pra uma pasta temporaria: nada do root fica no clone; o
-	# volume cais-gocache guarda os modulos e o cache entre atualizacoes
-	docker run --rm \
-		-v "$SRC":/src:ro -v "$OUT":/out -v cais-gocache:/cache \
-		-e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod -e CGO_ENABLED=0 \
-		-w /src "$GO_IMAGE" \
-		go build -buildvcs=false -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/cais ./cmd/cais ||
-		die "a compilacao falhou"
-fi
+download
 "$OUT/cais" version >/dev/null 2>&1 || die "o binario nao roda nesta maquina (arquitetura errada?)"
 NEW=$("$OUT/cais" version)
 
@@ -427,7 +388,7 @@ NEW=$("$OUT/cais" version)
 OLD=
 [ -x "$BIN" ] && OLD=$("$BIN" version 2>/dev/null || true)
 # mesma versao, sem opcao nova e no ar: nada a fazer (nao reinicia a toa)
-if [ -n "$OLD" ] && [ "$OLD" = "$NEW" ] && [ -z "$GROUP$SSH$DRY_RUN" ] && [ -z "$SRC" ] &&
+if [ -n "$OLD" ] && [ "$OLD" = "$NEW" ] && [ -z "$GROUP$SSH$DRY_RUN" ] &&
 	systemctl is-active --quiet cais; then
 	say "$NEW ja esta instalado e no ar"
 	exit 0
@@ -484,7 +445,7 @@ fi
 
 if [ -n "$DRY_RUN" ]; then
 	echo
-	echo "(--dry-run: nada foi mudado; o binario compilado e o $NEW)"
+	echo "(--dry-run: nada foi mudado; o binario baixado e o $NEW)"
 	exit 0
 fi
 
@@ -514,7 +475,7 @@ if [ -n "$OLD" ]; then
 fi
 cat <<EOF
 
-Proximos passos (ou faca tudo pela aba Setup: $OPEN):
+Proximos passos (ou pela TUI: $OPEN, abas Setup e Infra):
   sudo cais setup config --email voce@exemplo.com.br --github-app-id <id>
   sudo cais setup secret github_app_key < chave-do-github-app.pem
   sudo cais setup          # o plano: o que falta e o que muda
