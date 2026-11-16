@@ -57,10 +57,18 @@ type Deps struct {
 	// AppSettle e quanto o deploy observa os containers depois do up
 	// (padrao 15s; negativo nao observa).
 	AppSettle time.Duration
-	Exec      func(ctx context.Context, container string, args ...string) (string, error)
+	// DeployTimeout e o limite de um deploy (padrao 30min; negativo nao
+	// limita): build ou download travado prenderia o app pra sempre.
+	DeployTimeout time.Duration
+	Exec          func(ctx context.Context, container string, args ...string) (string, error)
 	// ExecInput e o Exec com stdin: SQL com senha nunca vai na linha de comando.
 	ExecInput func(ctx context.Context, container string, input []byte, args ...string) (string, error)
 }
+
+// DefaultDeployTimeout e o limite padrao de um deploy. Junto com a volta da
+// versao anterior (apps.RollbackTimeout) cabe no TimeoutStopSec da unidade
+// do systemd, que espera os deploys em andamento.
+const DefaultDeployTimeout = 30 * time.Minute
 
 // Core guarda o estado e executa as acoes. E seguro pra uso concorrente:
 // a TUI e o MCP podem chamar acoes ao mesmo tempo.
@@ -158,6 +166,9 @@ func New(d Deps) *Core {
 	}
 	if d.AppSettle == 0 {
 		d.AppSettle = 15 * time.Second
+	}
+	if d.DeployTimeout == 0 {
+		d.DeployTimeout = DefaultDeployTimeout
 	}
 	if d.AppDocker == nil {
 		d.AppDocker = docker.CLI{}

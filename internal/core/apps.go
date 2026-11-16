@@ -19,7 +19,7 @@ func (c *Core) appManager() apps.Manager {
 	if src == nil {
 		src = githubSource{c}
 	}
-	m := apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now, Settle: c.deps.AppSettle,
+	m := apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now, Settle: c.deps.AppSettle, Timeout: c.deps.DeployTimeout,
 		DBCredentials: c.dbCredentials, BucketCredentials: c.bucketCredentials}
 	if cfg, err := config.Load(c.deps.ConfigPath); err == nil {
 		m.Networks = infraNetworks(cfg)

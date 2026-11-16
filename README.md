@@ -43,7 +43,8 @@ Regras:
   fecha o socket pra acao nova e espera as em andamento (deploy manual ou
   automatico, backup, restore) terminarem e responderem; so entao o daemon
   sai. A unidade usa `KillMode=mixed` (os `docker compose` que ele roda nao
-  levam o sinal) e `TimeoutStopSec=30min`; um segundo sinal encerra na hora.
+  levam o sinal) e `TimeoutStopSec=45min` (o limite de um deploy mais a volta
+  da versao anterior); um segundo sinal encerra na hora.
 - **Daemon unico.** `Listen` recusa um segundo daemon no mesmo socket e remove
   socket orfao de um daemon que morreu.
 
@@ -366,6 +367,13 @@ O deploy:
    unhealthy conta como falha (sem healthcheck, "running" na hora do `up` nao
    garante que o app fica de pe);
 8. se falhar, volta o commit anterior (`src.prev`) e sobe ele de novo.
+
+O deploy inteiro (download, build, troca e observacao) tem limite de 30
+minutos (`cais daemon --deploy-timeout`): download ou build travado prenderia
+o app pra sempre (nenhum deploy, nem o automatico, passa da trava). Passou do
+limite, o deploy e cancelado, a versao anterior volta (com prazo proprio de 10
+minutos, normalmente pelas imagens guardadas) e a falha conta como passageira
+pro deploy automatico.
 
 Se o daemon morre no meio da troca (queda, kill, reboot, o limite do
 `TimeoutStopSec`), a marca `deploy.yaml` na pasta do app fica. Na subida, o

@@ -29,7 +29,7 @@ const socketNote = "O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SO
 var sections = []section{
 	{title: "Uso:", cmds: []command{
 		{name: "tui", usage: "[--socket caminho]", short: "abre a interface (TUI)"},
-		{name: "daemon", usage: "daemon [--socket] [--group] [--auto-every 1m]", short: "roda o daemon (dono do estado e das acoes)", long: `
+		{name: "daemon", usage: "daemon [--socket] [--group] [--auto-every 1m] [--deploy-timeout 30m]", short: "roda o daemon (dono do estado e das acoes)", long: `
 Normalmente roda pelo systemd (assets/systemd/cais.service). A TUI e o CLI
 sao clientes dele pelo socket, que nasce com permissao 0660: so o root, ou o
 grupo de --group, usa o cais. Quem acessa o socket controla a VPS.
@@ -37,9 +37,15 @@ grupo de --group, usa o cais. Quem acessa o socket controla a VPS.
 O daemon tambem faz o deploy automatico dos apps marcados: consulta o
 GitHub a cada --auto-every e sobe o commit novo da branch.
 
+Um deploy (download, build, troca) que passa de --deploy-timeout e
+cancelado e a versao anterior volta. Ao parar (SIGTERM), o daemon espera os
+deploys e backups em andamento; a unidade do systemd espera ate 45min.
+
 Flags:
-  --group grupo        grupo que tambem pode usar o cais, alem do root
-  --auto-every tempo   intervalo da consulta do deploy automatico (padrao 1m)`},
+  --group grupo            grupo que tambem pode usar o cais, alem do root
+  --auto-every tempo       intervalo da consulta do deploy automatico (padrao 1m)
+  --deploy-timeout tempo   limite de um deploy (padrao 30m; 0 usa o padrao,
+                           negativo nao limita)`},
 		{name: "state", usage: "state [--socket]", short: "imprime o estado atual em JSON"},
 		{name: "check", usage: "check [--socket]", short: "checa o ambiente e imprime o resultado em JSON", long: `
 Confere Docker e Docker Compose (instalados, versao, daemon no ar).`},

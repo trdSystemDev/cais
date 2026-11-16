@@ -178,12 +178,30 @@ var transientMarks = []string{
 	"failed to do request", "failed to resolve source metadata",
 }
 
+// TimeoutError e o deploy cancelado por passar do Manager.Timeout.
+type TimeoutError struct {
+	Limit time.Duration
+	Err   error // o que o comando cancelado devolveu
+}
+
+func (e *TimeoutError) Error() string {
+	return fmt.Sprintf("o deploy passou do limite de %s e foi cancelado (download ou build travado? o limite e o --deploy-timeout do daemon): %v", e.Limit, e.Err)
+}
+
+func (e *TimeoutError) Unwrap() error { return e.Err }
+
 // transient diz se o erro do deploy parece passageiro. Compose fora do
-// formato nunca e: o commit e que tem que mudar.
+// formato nunca e: o commit e que tem que mudar. Passar do limite e (rede
+// ou registry travado); um build que sempre passa desiste depois das
+// tentativas do AutoRetryAfter.
 func transient(err error) bool {
 	var ce *ComposeError
-	if err == nil || errors.As(err, &ce) {
+	var te *TimeoutError
+	switch {
+	case err == nil || errors.As(err, &ce):
 		return false
+	case errors.As(err, &te):
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	for _, m := range transientMarks {
@@ -269,7 +287,17 @@ type Manager struct {
 	// sem healthcheck, "running" na hora do up nao garante que o app fica
 	// de pe (migracao que falha, crash na subida). Zero nao observa.
 	Settle time.Duration
+	// Timeout e o limite de um deploy (download, build, troca e
+	// observacao): download ou build travado prenderia o app pra sempre
+	// (nenhum deploy, nem o automatico, passa da trava). Zero nao limita.
+	// A volta da versao anterior roda depois do limite, com RollbackTimeout.
+	Timeout time.Duration
 }
+
+// RollbackTimeout e o limite da volta da versao anterior quando um deploy
+// falha (inclusive por passar do Timeout): normalmente sobe as imagens
+// guardadas, sem build.
+var RollbackTimeout = 10 * time.Minute
 
 var (
 	appName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
@@ -483,6 +511,22 @@ func (m Manager) AutoDeploy(ctx context.Context, name, commit string) (DeployRes
 // deploy faz o Deploy; tag tem o que o registro do deploy leva alem do
 // resultado (origem da promocao, automatico).
 func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (DeployResult, error) {
+	// back e o ctx do que roda mesmo depois do limite do deploy: a volta da
+	// versao anterior e a limpeza das imagens
+	back := context.WithoutCancel(ctx)
+	if m.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, m.Timeout)
+		defer cancel()
+	}
+	// expired diz o motivo de um erro que veio do limite (o docker morto
+	// pelo ctx so diz "signal: killed")
+	expired := func(err error) error {
+		if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return &TimeoutError{Limit: m.Timeout, Err: err}
+		}
+		return err
+	}
 	a, err := m.Get(name)
 	if err != nil {
 		return DeployResult{}, err
@@ -504,7 +548,7 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	}
 	commit, err := m.Source.Resolve(ctx, a.Repo, ref)
 	if err != nil {
-		return DeployResult{}, err
+		return DeployResult{}, expired(err)
 	}
 	res := DeployResult{App: name, Commit: commit}
 
@@ -514,9 +558,11 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	next := NextDir
 	os.RemoveAll(filepath.Join(dir, next))
 	if err := m.Source.Download(ctx, a.Repo, commit, filepath.Join(dir, next)); err != nil {
-		return res, err
+		os.RemoveAll(filepath.Join(dir, next))
+		return res, expired(err)
 	}
 	fail := func(err error) (DeployResult, error) {
+		err = expired(err)
 		os.RemoveAll(filepath.Join(dir, next))
 		m.record(a, Deploy{At: m.Now(), Commit: commit, Error: err.Error(), Warnings: res.Warnings, Problems: res.Problems,
 			PromotedFrom: tag.PromotedFrom, Auto: tag.Auto, Rollback: tag.Rollback, Transient: transient(err)})
@@ -591,9 +637,14 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	}
 	last.At = m.Now()
 	if upErr != nil {
+		upErr = expired(upErr)
 		last.Error, last.Transient = upErr.Error(), transient(upErr)
 		if hadPrev {
-			if rerr := m.rollback(ctx, a); rerr != nil {
+			// a volta roda mesmo com o limite do deploy estourado
+			rctx, cancel := context.WithTimeout(back, RollbackTimeout)
+			rerr := m.rollback(rctx, a)
+			cancel()
+			if rerr != nil {
 				upErr = fmt.Errorf("%w\n\ne a volta pra versao anterior tambem falhou: %v", upErr, rerr)
 			} else {
 				last.RolledBack = true
@@ -608,8 +659,8 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	// as imagens deste commit ficam guardadas (rollback sem build) e as de
 	// deploys velhos saem; o que sobrar sem tag e lixo. Falhar aqui nao
 	// desfaz um deploy que deu certo.
-	m.keepImages(ctx, name, built, commit)
-	m.Docker.PruneImages(ctx, p.Name)
+	m.keepImages(back, name, built, commit)
+	m.Docker.PruneImages(back, p.Name)
 	return res, nil
 }
 

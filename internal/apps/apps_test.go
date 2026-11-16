@@ -117,10 +117,15 @@ type fakeDocker struct {
 	failUp map[string]bool // compose (conteudo) cujo up falha
 	// compose (conteudo) cujo rollout falha
 	failRollout map[string]bool
-	failBuild   map[string]error              // compose (conteudo) cujo build falha
-	images      map[string]string             // tag -> id da imagem
-	envSeen     map[string]string             // .env lido no Config
-	ps          map[string][]docker.Container // compose -> containers depois do up
+	failBuild   map[string]error // compose (conteudo) cujo build falha
+	// hang trava a chamada ("build v2", "up v2") ate o ctx acabar, como o
+	// docker morto pelo ctx; canceled sao as chamadas que ja chegaram com o
+	// ctx cancelado
+	hang     map[string]bool
+	canceled []string
+	images   map[string]string             // tag -> id da imagem
+	envSeen  map[string]string             // .env lido no Config
+	ps       map[string][]docker.Container // compose -> containers depois do up
 }
 
 func (f *fakeDocker) compose(p docker.Project) string {
@@ -139,9 +144,25 @@ func (f *fakeDocker) Config(_ context.Context, p docker.Project) ([]byte, error)
 	return []byte(strings.ReplaceAll(f.config, "{{src}}", filepath.Dir(p.Files[0]))), nil
 }
 
-func (f *fakeDocker) Build(_ context.Context, p docker.Project) error {
+// wait trava a chamada se ela esta no hang e registra se o ctx dela ja
+// chegou cancelado.
+func (f *fakeDocker) wait(ctx context.Context, call string) error {
+	if ctx.Err() != nil {
+		f.canceled = append(f.canceled, call)
+	}
+	if f.hang[call] {
+		<-ctx.Done()
+		return errors.New("signal: killed")
+	}
+	return nil
+}
+
+func (f *fakeDocker) Build(ctx context.Context, p docker.Project) error {
 	c := f.compose(p)
 	f.calls = append(f.calls, "build "+c)
+	if err := f.wait(ctx, "build "+c); err != nil {
+		return err
+	}
 	if err := f.failBuild[c]; err != nil {
 		return err
 	}
@@ -152,9 +173,12 @@ func (f *fakeDocker) Build(_ context.Context, p docker.Project) error {
 	return nil
 }
 
-func (f *fakeDocker) Up(_ context.Context, p docker.Project) error {
+func (f *fakeDocker) Up(ctx context.Context, p docker.Project) error {
 	c := f.compose(p)
 	f.calls = append(f.calls, "up "+c)
+	if err := f.wait(ctx, "up "+c); err != nil {
+		return err
+	}
 	if f.failUp[c] {
 		return errors.New("container web is unhealthy")
 	}
@@ -1235,5 +1259,65 @@ func TestAutoRetryAtEsperaCadaVezMais(t *testing.T) {
 	a := app(pass(0), ok)
 	if !a.Tried("c2", t0.Add(time.Minute)) || a.Tried("c2", t0.Add(2*time.Minute)) {
 		t.Error("Tried nao respeita a espera")
+	}
+}
+
+// build travado: o limite cancela, o motivo e claro, a versao no ar nem foi
+// tocada (o build roda antes da troca) e a falha conta como passageira
+func TestDeployComBuildTravadoPassaDoLimite(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	m.Timeout = 50 * time.Millisecond
+	d.hang = map[string]bool{"build v2": true}
+	d.calls = nil
+
+	_, err := m.Deploy(context.Background(), "web", "c2")
+	var te *TimeoutError
+	if !errors.As(err, &te) || !strings.Contains(err.Error(), "passou do limite de 50ms") {
+		t.Fatalf("erro %v", err)
+	}
+	if !slices.Equal(d.calls, []string{"config v2", "build v2"}) {
+		t.Errorf("chamadas %v", d.calls)
+	}
+	a, _ := m.Get("web")
+	if a.Commit != "c1" || !a.Last.Transient || a.Last.RolledBack {
+		t.Errorf("registro %+v", a.Last)
+	}
+	if data, _ := os.ReadFile(filepath.Join(m.Root, "web", SrcDir, DefaultCompose)); string(data) != "v1" {
+		t.Errorf("src mudou pra %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(m.Root, "web", NextDir)); !os.IsNotExist(err) {
+		t.Error("src.next ficou")
+	}
+}
+
+// up travado depois da troca: o limite cancela e a volta da versao anterior
+// roda com um ctx proprio (nao o que ja acabou)
+func TestDeployComUpTravadoVoltaAAnteriorDepoisDoLimite(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	m.Timeout = 50 * time.Millisecond
+	d.hang = map[string]bool{"up v2": true}
+	d.calls = nil
+
+	_, err := m.Deploy(context.Background(), "web", "c2")
+	if err == nil || !strings.Contains(err.Error(), "passou do limite") || !strings.Contains(err.Error(), "(c1) foi restaurada") {
+		t.Fatalf("erro %v", err)
+	}
+	if !slices.Equal(d.calls, []string{"config v2", "build v2", "up v2", "config v1", "build v1", "up v1"}) {
+		t.Errorf("chamadas %v", d.calls)
+	}
+	if len(d.canceled) > 0 {
+		t.Errorf("a volta rodou com o ctx cancelado: %v", d.canceled)
+	}
+	a, _ := m.Get("web")
+	if a.Commit != "c1" || !a.Last.RolledBack || !a.Last.Transient {
+		t.Errorf("registro %+v", a.Last)
 	}
 }

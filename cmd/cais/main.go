@@ -83,6 +83,7 @@ func runDaemon(args []string) error {
 	fs, socket := newFlags("daemon")
 	group := fs.String("group", "", "grupo que pode usar o cais (alem do root)")
 	autoEvery := fs.Duration("auto-every", time.Minute, "intervalo da consulta do deploy automatico ao GitHub")
+	deployTimeout := fs.Duration("deploy-timeout", core.DefaultDeployTimeout, "limite de um deploy (download, build e troca); passou, cancela e volta a versao anterior")
 	fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -99,7 +100,7 @@ func runDaemon(args []string) error {
 		stop()
 	}()
 
-	c := core.New(core.Deps{})
+	c := core.New(core.Deps{DeployTimeout: *deployTimeout})
 	go c.CheckEnvironment(ctx)
 	// deploy que o daemon anterior nao terminou (queda, kill, reboot): volta
 	// a versao que estava no ar

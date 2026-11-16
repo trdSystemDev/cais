@@ -18,9 +18,10 @@ RestartSec=2
 # daemon recusa acao nova e sai quando nao sobra nenhuma). mixed manda o
 # SIGTERM so pro daemon: os docker compose que ele roda nao sao cortados.
 # Passado o limite, o systemd mata tudo e o daemon seguinte volta a versao
-# anterior de um deploy que ficou no meio.
+# anterior de um deploy que ficou no meio. 45min cobre o limite de um
+# deploy (--deploy-timeout, 30min) mais a volta da versao anterior (10min).
 KillMode=mixed
-TimeoutStopSec=30min
+TimeoutStopSec=45min
 # cria /run/cais (e apaga ao parar) com permissao so pro root
 RuntimeDirectory=cais
 RuntimeDirectoryMode=0755
