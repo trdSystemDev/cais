@@ -136,6 +136,9 @@ Cria o bucket (privado) e uma chave com leitura, escrita e dono so nele. A
 chave fica guardada no cais e chega no app pelos secrets ao ligar o bucket
 (cais app bucket). Nome: 3 a 63 letras minusculas, numeros e -.
 
+Os arquivos dos buckets nao entram no backup do cais (so os databases e o
+estado do cais entram).
+
 Exemplos:
   cais bucket create portal-fotos
   cais app bucket portal portal-fotos     # liga ao app`},
@@ -149,7 +152,10 @@ Flags:
   -yes   nao pede confirmacao`},
 	}},
 	{title: "Backup (bancos e estado do cais, criptografado, pro Google Drive):", group: "backup", cmds: []command{
-		{name: "backup status", usage: "backup status", short: "configuracao, proximo e ultimo backup"},
+		{name: "backup status", usage: "backup status", short: "configuracao, proximo e ultimo backup", long: `
+Mostra a configuracao, o proximo e o ultimo backup, e o que fica de fora:
+os arquivos do Garage (buckets S3) e os volumes dos apps nao entram no
+backup do cais.`},
 		{name: "backup client", usage: "backup client <client-id>", short: "grava o OAuth client do Google", long: `
 O client e do seu projeto no Google Cloud: ative a Google Drive API, crie
 em Credenciais -> ID do cliente OAuth do tipo "TVs e dispositivos de entrada

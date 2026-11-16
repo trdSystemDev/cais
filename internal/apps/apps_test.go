@@ -594,8 +594,9 @@ func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
 	if len(problems) != 0 {
 		t.Fatalf("recusou o formato do cais: %v", problems)
 	}
-	// bind com escrita no codigo: os dados somem no proximo deploy
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "some no proximo deploy") {
+	// bind com escrita no codigo: os dados somem no proximo deploy; o volume
+	// dados nao entra no backup
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "some no proximo deploy") || !strings.Contains(warnings[1], "dados nao entram no backup") {
 		t.Errorf("avisos %v", warnings)
 	}
 }
@@ -1319,5 +1320,25 @@ func TestDeployComUpTravadoVoltaAAnteriorDepoisDoLimite(t *testing.T) {
 	a, _ := m.Get("web")
 	if a.Commit != "c1" || !a.Last.RolledBack || !a.Last.Transient {
 		t.Errorf("registro %+v", a.Last)
+	}
+}
+
+// volume do app nao entra no backup: o deploy avisa (sem bloquear), com os
+// nomes; compose sem volume nao ganha o aviso
+func TestCheckComposeAvisaVolumeForaDoBackup(t *testing.T) {
+	r := Rules{App: "web", Src: "/x"}
+	logging := `"logging": {"driver": "json-file", "options": {"max-size": "20m"}}`
+	with := []byte(`{"services": {"web": {` + logging + `, "volumes": [{"type": "volume", "source": "uploads", "target": "/data"}]}},
+		"volumes": {"uploads": {"name": "web_uploads"}, "cache": {"name": "web_cache"}}}`)
+	problems, w := CheckCompose(with, r)
+	if len(problems) != 0 {
+		t.Fatalf("problemas %v", problems)
+	}
+	if len(w) != 1 || !strings.Contains(w[0], "cache, uploads nao entram no backup") {
+		t.Errorf("avisos %v", w)
+	}
+	without := []byte(`{"services": {"web": {` + logging + `}}}`)
+	if _, w := CheckCompose(without, r); len(w) != 0 {
+		t.Errorf("aviso sem volume: %v", w)
 	}
 }

@@ -320,6 +320,7 @@ func (m *model) viewInfraLogs(w, h int) string {
 	}
 	if st.Name == "garage" && st.Enabled {
 		b.WriteString(t.fg(t.muted).Render(ansi.Truncate("S3: https://"+m.setup.plan.Config.S3Host()+" · regiao garage", w-6, "…")) + "\n")
+		b.WriteString(t.fg(t.warn).Render(ansi.Truncate("Os arquivos dos buckets nao entram no backup do cais.", w-6, "…")) + "\n")
 	}
 	if m.infraMsg != "" && m.infraMsgStack == st.Name {
 		color := t.warn

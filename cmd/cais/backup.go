@@ -169,6 +169,8 @@ func printBackupStatus(st core.BackupStatus) {
 		when = "todo dia as " + st.Time
 	}
 	fmt.Printf("Horario:       %s, retencao de %d dias\n", when, st.RetentionDays)
+	fmt.Printf("Entra:         os databases criados pelo cais e o estado do cais\n")
+	fmt.Printf("Atencao:       %s\n", core.BackupGap)
 	if !st.Next.IsZero() {
 		retry := ""
 		if st.Retry {

@@ -473,7 +473,8 @@ a lista em `problems`):
   que nao comeca pelo nome do app (um app nao pode pisar na rota de outro).
 
 Avisos (nao bloqueiam): `.env` fora do `.dockerignore`, bind com escrita
-dentro do codigo (some no proximo deploy).
+dentro do codigo (some no proximo deploy), volumes do app (nao entram no
+backup).
 
 Variaveis vao no `.env` (`env_file: .env` ou `${VAR}` no compose) e valem no
 proximo deploy. Secret em arquivo e opcional, pra quem nao quer o valor no
@@ -590,6 +591,13 @@ arquivo so com:
 - o estado do cais: `/etc/cais` e `/var/lib/cais` (apps, variaveis, secrets,
   senhas dos bancos), sem o codigo dos apps (volta no deploy) e sem os
   proprios backups.
+
+**Fora do backup, por enquanto:** os arquivos do Garage (buckets S3) e os
+volumes nomeados dos apps. Perder a VPS (ou o disco) perde esses dados. O
+painel e o `cais backup status` dizem isso, o card do Garage e o `cais bucket`
+lembram, e o deploy avisa (sem bloquear) quando o compose do app declara
+volumes. Dado que nao pode se perder vai no banco da infra, ou precisa de um
+backup proprio do app.
 
 O arquivo (`cais-<dominio>-<data>.tar.gz.age`) e criptografado com
 [age](https://age-encryption.org) pra uma chave publica e sobe pra uma pasta

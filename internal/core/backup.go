@@ -101,6 +101,11 @@ type backupDisk struct {
 	Last   *BackupRun `json:"last,omitempty"`
 }
 
+// BackupGap e o que o backup nao cobre, de proposito por enquanto: aparece
+// no painel do backup, no CLI, no card do Garage e nos buckets, pra ninguem
+// achar que esta coberto.
+const BackupGap = "Fora do backup: os arquivos do Garage (buckets S3) e os volumes dos apps. Perder a VPS (ou o disco) perde esses dados."
+
 // uploadRetryDelay e a espera entre tentativas de envio pro Drive.
 var uploadRetryDelay = 5 * time.Second
 

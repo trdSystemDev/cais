@@ -543,6 +543,7 @@ func runBucket(args []string) error {
 		}
 		fmt.Printf("Bucket %s criado (endpoint %s, regiao %s, path-style, rede %s).\n", info.Name, info.Endpoint, info.Region, info.Network)
 		fmt.Printf("Ligue ao app com: cais app bucket <app> %s (o app recebe os secrets %s).\n", info.Name, strings.Join(info.Secrets, " e "))
+		fmt.Println("Atencao: os arquivos dos buckets nao entram no backup do cais.")
 	case "delete":
 		if len(pos) != 1 {
 			return errors.New("uso: cais bucket delete <nome> [-yes]")
@@ -569,6 +570,7 @@ func runBucket(args []string) error {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, strings.Join(b.Secrets, ", "), cmpOr(b.Size, "?"), cmpOr(strings.Join(b.Apps, ", "), "-"))
 		}
 		w.Flush()
+		fmt.Println("\nAtencao: os arquivos dos buckets nao entram no backup do cais.")
 	}
 	return nil
 }

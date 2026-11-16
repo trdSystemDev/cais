@@ -319,6 +319,16 @@ func CheckCompose(configJSON []byte, r Rules) (problems, warnings []string) {
 			bad("", "a rede %q (name: %s) e de fora do projeto: entraria na rede de outro app. Tire o name: da rede", key, name)
 		}
 	}
+	// so os volumes do proprio app (os externos sao recusados abaixo)
+	var own []string
+	for _, key := range sortedKeys(c.Volumes) {
+		if !c.Volumes[key].External {
+			own = append(own, key)
+		}
+	}
+	if len(own) > 0 {
+		warnings = append(warnings, fmt.Sprintf("volumes: %s nao entram no backup do cais (so os databases do Postgres/MySQL da infra e o estado do cais entram). Dado que nao pode se perder vai no banco, ou precisa de backup proprio do app", strings.Join(own, ", ")))
+	}
 	for _, key := range sortedKeys(c.Volumes) {
 		v := c.Volumes[key]
 		switch {

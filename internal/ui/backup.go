@@ -494,6 +494,7 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int) string {
 	if p.done != "" {
 		b.WriteString("\n" + wrap.Foreground(t.ok).Render(p.done) + "\n")
 	}
+	b.WriteString("\n" + wrap.Foreground(t.warn).Render(core.BackupGap) + "\n")
 	b.WriteString("\n" + wrap.Inherit(muted).Render("Restaurar: cais backup files e cais backup restore <arquivo> -key <arquivo> postgres/<db> (na VPS).") + "\n")
 	return t.panel(p.active, w-2, h).MaxHeight(h + 2).Render(b.String())
 }
