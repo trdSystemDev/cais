@@ -13,6 +13,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/github"
 )
 
 // Deps sao as dependencias externas do Core. Campos vazios recebem a
@@ -85,6 +86,8 @@ type Core struct {
 	// autoErrs e o ultimo erro da consulta do deploy automatico por app
 	// (pra registrar no log so quando muda); protegido por mu
 	autoErrs map[string]string
+	// gh guarda as sessoes do GitHub App por repositorio e o limite da API
+	gh github.Sessions
 
 	backup backupRuntime
 }

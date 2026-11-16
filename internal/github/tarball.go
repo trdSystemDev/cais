@@ -26,18 +26,49 @@ func (s *Session) Resolve(ctx context.Context, ref string) (string, error) {
 	if ref == "" {
 		ref = s.DefaultBranch
 	}
-	out, err := s.call(ctx, http.MethodGet, s.repoPath("/commits/"+url.PathEscape(ref)), "application/vnd.github.sha", nil, nil)
-	if IsNotFound(err) {
+	// com o ETag da ultima resposta, ref sem commit novo volta 304, que nao
+	// gasta o limite da API: e o que deixa o deploy automatico consultar
+	// todos os apps a cada minuto
+	rq := s.req(http.MethodGet, s.repoPath("/commits/"+url.PathEscape(ref)), "application/vnd.github.sha")
+	s.mu.Lock()
+	prev := s.etags[ref]
+	s.mu.Unlock()
+	if prev.etag != "" {
+		rq.header = map[string]string{"If-None-Match": prev.etag}
+	}
+	res, err := s.app.send(ctx, rq)
+	if err != nil {
+		return "", err
+	}
+	if res.status == http.StatusNotModified && prev.sha != "" {
+		return prev.sha, nil
+	}
+	err = res.check()
+	if IsNotFound(err) || isUnprocessable(err) {
 		return "", fmt.Errorf("%s nao existe em %s", ref, s.Repo)
 	}
 	if err != nil {
 		return "", err
 	}
-	sha := strings.TrimSpace(string(out))
+	sha := strings.TrimSpace(string(res.data))
 	if len(sha) != 40 {
 		return "", fmt.Errorf("resposta inesperada do GitHub pro commit de %s", ref)
 	}
+	if etag := res.header.Get("ETag"); etag != "" {
+		s.mu.Lock()
+		if s.etags == nil {
+			s.etags = map[string]etagged{}
+		}
+		s.etags[ref] = etagged{etag: etag, sha: sha}
+		s.mu.Unlock()
+	}
 	return sha, nil
+}
+
+// isUnprocessable e o 422 que o GitHub devolve pra sha que nao existe.
+func isUnprocessable(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status == http.StatusUnprocessableEntity
 }
 
 // Download baixa o codigo do commit e extrai em dir (que nao pode existir).
@@ -46,6 +77,9 @@ func (s *Session) Resolve(ctx context.Context, ref string) (string, error) {
 func (s *Session) Download(ctx context.Context, commit, dir string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.app.base()+s.repoPath("/tarball/"+url.PathEscape(commit)), nil)
 	if err != nil {
+		return err
+	}
+	if err := s.app.Limits.wait(s.quota, s.app.now()); err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "token "+s.token)
@@ -65,6 +99,9 @@ func (s *Session) Download(ctx context.Context, commit, dir string) error {
 		return fmt.Errorf("baixando o codigo: %w", err)
 	}
 	defer resp.Body.Close()
+	if err := s.app.Limits.observe(s.quota, resp.StatusCode, resp.Header, s.app.now()); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return &Error{Status: resp.StatusCode, Message: "baixando o codigo de " + s.Repo.String()}
 	}
@@ -202,7 +239,9 @@ type Comparison struct {
 func (s *Session) Compare(ctx context.Context, base, head string) (Comparison, error) {
 	var c Comparison
 	path := s.repoPath("/compare/" + url.PathEscape(base) + "..." + url.PathEscape(head) + "?per_page=1")
-	_, err := s.app.doLimit(ctx, http.MethodGet, path, "token "+s.token, "", nil, &c, maxCompare)
+	rq := s.req(http.MethodGet, path, "")
+	rq.limit = maxCompare
+	_, err := s.app.do(ctx, rq, &c)
 	if IsNotFound(err) {
 		return c, fmt.Errorf("nao achei %s ou %s em %s", base, head, s.Repo)
 	}

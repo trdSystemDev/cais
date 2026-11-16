@@ -541,6 +541,20 @@ Com producao automatica, o merge na main ja sobe a producao (sem passar pelo
 Promover); com homologacao na mesma branch, a producao automatica pularia a
 validacao.
 
+A consulta cabe no limite da API do GitHub (5.000 requisicoes por hora pro
+app e por instalacao) mesmo com dezenas de apps:
+
+- o token de cada repositorio (uma hora, so aquele repositorio) e guardado e
+  reaproveitado ate faltar 5 minutos pra vencer: a consulta de um app e uma
+  chamada so, e as do app (JWT) caem pra uma por repositorio por hora;
+- a consulta manda o ETag da anterior; branch sem commit novo volta `304`,
+  que nao conta no limite;
+- o cais anota a cota que cada resposta informa. Com menos de 10% (minimo
+  100), a rodada do automatico espera o reset e a reserva fica pros deploys
+  manuais (o log diz quanto sobra e ate quando); com a cota esgotada, nem
+  chama (insistir faz o GitHub bloquear por mais tempo) e o erro diz o
+  horario em que volta.
+
 ## Backups
 
 Todo dia no horario configurado (e no "Fazer backup agora"), o cais faz um

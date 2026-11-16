@@ -7,23 +7,24 @@ import (
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/apps"
+	"github.com/trdSystemDev/cais/internal/github"
 )
 
-func (g githubSource) Compare(ctx context.Context, repo, base, head string) (apps.Comparison, error) {
-	s, err := g.open(ctx, repo)
-	if err != nil {
-		return apps.Comparison{}, err
-	}
-	c, err := s.Compare(ctx, base, head)
-	return apps.Comparison{Status: c.Status, AheadBy: c.AheadBy, BehindBy: c.BehindBy}, err
+func (g githubSource) Compare(ctx context.Context, repo, base, head string) (out apps.Comparison, err error) {
+	err = g.with(ctx, repo, func(s *github.Session) error {
+		c, err := s.Compare(ctx, base, head)
+		out = apps.Comparison{Status: c.Status, AheadBy: c.AheadBy, BehindBy: c.BehindBy}
+		return err
+	})
+	return out, err
 }
 
-func (g githubSource) Tree(ctx context.Context, repo, commit string) (string, error) {
-	s, err := g.open(ctx, repo)
-	if err != nil {
-		return "", err
-	}
-	return s.Tree(ctx, commit)
+func (g githubSource) Tree(ctx context.Context, repo, commit string) (tree string, err error) {
+	err = g.with(ctx, repo, func(s *github.Session) (err error) {
+		tree, err = s.Tree(ctx, commit)
+		return err
+	})
+	return tree, err
 }
 
 // CheckPromotion diz se o commit no ar na homologacao pode ir pra producao
@@ -85,6 +86,15 @@ func (c *Core) AutoDeployOnce(ctx context.Context) (started []string, done <-cha
 		close(finished)
 		return nil, finished
 	}
+	// com a cota da API do GitHub no fim, a rodada espera: a reserva fica
+	// pros deploys manuais (o automatico so atrasa)
+	if q, low := c.gh.Limits.Low(c.deps.Now()); low {
+		c.autoLog(autoQuota, fmt.Errorf("pausado: restam %d de %d requisicoes da API do GitHub (cota %s) ate %s; a reserva fica pros deploys manuais",
+			q.Remaining, q.Limit, q.Name, q.Reset.Local().Format("15:04")))
+		close(finished)
+		return nil, finished
+	}
+	c.autoLog(autoQuota, nil)
 	pending := 0
 	results := make(chan struct{})
 	for _, a := range list {
@@ -127,6 +137,9 @@ func (c *Core) AutoDeployOnce(ctx context.Context) (started []string, done <-cha
 
 // autoLog registra erro de consulta do deploy automatico so quando muda
 // (sem GitHub App configurado, seria uma linha por minuto pra sempre).
+// autoQuota e a chave do autoLog pra pausa por limite da API.
+const autoQuota = "limite do GitHub"
+
 func (c *Core) autoLog(app string, err error) {
 	msg := ""
 	if err != nil {

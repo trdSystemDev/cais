@@ -145,3 +145,69 @@ func TestRollbackPausaODeployAutomatico(t *testing.T) {
 		t.Fatalf("depois da correcao: %+v", a)
 	}
 }
+
+// deploy automatico com muitos apps: a sessao do repositorio e reaproveitada
+// e a consulta sem commit novo volta 304 (nao gasta o limite da API)
+func TestDeployAutomaticoEconomizaAPI(t *testing.T) {
+	c, _, gh := newAppsCore(t)
+	ctx := context.Background()
+	const repo = "trdSystemDev/meu-app"
+	for _, n := range []string{"a1", "a2", "a3"} {
+		c.CreateApp(ctx, apps.App{Name: n, Repo: repo, AutoDeploy: true})
+	}
+	round := func() []string {
+		started, done := c.AutoDeployOnce(ctx)
+		<-done
+		return started
+	}
+	if got := round(); len(got) != 3 {
+		t.Fatalf("primeira rodada: %v", got)
+	}
+	gh.Calls()
+	if got := round(); len(got) != 0 {
+		t.Fatalf("sem commit novo: %v", got)
+	}
+	calls := gh.Calls()
+	if calls["commits"] != 3 || calls["304"] != 3 || len(calls) != 2 {
+		t.Fatalf("rodada sem mudanca chamou %v; queria so 3 consultas de commit, todas 304", calls)
+	}
+
+	// token recusado (app reinstalado): abre outra sessao e segue
+	gh.RevokeTokens()
+	gh.SetFile(repo, "Dockerfile", "FROM node:24\n")
+	if got := round(); len(got) != 3 {
+		t.Fatalf("depois do token recusado: %v", got)
+	}
+	if calls := gh.Calls(); calls["access_tokens"] != 1 {
+		t.Errorf("token novo pedido %d vezes (queria 1, guardado pros outros)", calls["access_tokens"])
+	}
+}
+
+// com a cota da API no fim, o deploy automatico espera ate o reset e deixa
+// a reserva pros deploys manuais
+func TestDeployAutomaticoPausaNoLimiteDaAPI(t *testing.T) {
+	c, _, gh := newAppsCore(t)
+	ctx := context.Background()
+	const repo = "trdSystemDev/meu-app"
+	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: repo, AutoDeploy: true})
+	round := func() []string {
+		started, done := c.AutoDeployOnce(ctx)
+		<-done
+		return started
+	}
+	gh.SetQuota(5000, 300)
+	round() // fica sabendo da cota
+	gh.SetFile(repo, "Dockerfile", "FROM node:24\n")
+	gh.Calls()
+	if got := round(); len(got) != 0 {
+		t.Fatalf("deploy automatico com a cota no fim: %v", got)
+	}
+	if calls := gh.Calls(); len(calls) != 0 {
+		t.Fatalf("rodada pausada chamou a API: %v", calls)
+	}
+	// o manual usa a reserva (o automatico volta no reset da cota, que o
+	// teste do pacote github cobre)
+	if _, err := c.DeployApp(ctx, "meu-app", ""); err != nil {
+		t.Fatalf("deploy manual com a cota baixa: %v", err)
+	}
+}

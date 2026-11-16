@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -73,6 +74,9 @@ type App struct {
 	// BaseURL troca a API (testes); vazio e o GitHub.
 	BaseURL string
 	Now     func() time.Time
+	// Limits anota o limite de requisicoes que o GitHub informa e recusa
+	// chamar com a cota esgotada; nil nao anota.
+	Limits *Limits
 }
 
 // ParseKey le a chave privada do GitHub App (o .pem baixado da pagina do
@@ -152,103 +156,179 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &e) && e.Status == http.StatusNotFound
 }
 
-// do faz uma chamada a API. auth e "Bearer <jwt>" ou "token <instalacao>".
-func (a App) do(ctx context.Context, method, path, auth, accept string, body, out any) ([]byte, error) {
-	return a.doLimit(ctx, method, path, auth, accept, body, out, maxFile)
+// IsUnauthorized diz se o erro e 401: token que deixou de valer (app
+// reinstalado, chave trocada).
+func IsUnauthorized(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status == http.StatusUnauthorized
 }
 
-// doLimit e o do com outro limite de tamanho da resposta.
-func (a App) doLimit(ctx context.Context, method, path, auth, accept string, body, out any, limit int) ([]byte, error) {
+// request e uma chamada a API.
+type request struct {
+	method, path string
+	auth         string // "Bearer <jwt>" ou "token <instalacao>"
+	accept       string
+	header       map[string]string // cabecalhos extras (If-None-Match)
+	body         any
+	limit        int    // tamanho maximo da resposta
+	quota        string // cota que a chamada gasta (QuotaApp ou a da instalacao)
+}
+
+// response e a resposta crua: quem chama decide o que e erro (o Resolve
+// trata o 304).
+type response struct {
+	status int
+	header http.Header
+	data   []byte
+}
+
+// check transforma status de erro em *Error.
+func (r response) check() error {
+	if r.status < 300 {
+		return nil
+	}
+	var e struct {
+		Message string `json:"message"`
+	}
+	json.Unmarshal(r.data, &e)
+	if e.Message == "" {
+		e.Message = http.StatusText(r.status)
+	}
+	return &Error{Status: r.status, Message: e.Message}
+}
+
+// send faz a chamada e anota o limite que o GitHub informou. Erro so de
+// rede, de tamanho ou de limite esgotado (*RateLimitError): com a cota
+// esgotada nem chama, porque insistir faz o GitHub bloquear por mais tempo.
+func (a App) send(ctx context.Context, rq request) (response, error) {
+	if err := a.Limits.wait(rq.quota, a.now()); err != nil {
+		return response{}, err
+	}
 	var rd io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
+	if rq.body != nil {
+		b, err := json.Marshal(rq.body)
 		if err != nil {
-			return nil, err
+			return response{}, err
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, a.base()+path, rd)
+	req, err := http.NewRequestWithContext(ctx, rq.method, a.base()+rq.path, rd)
 	if err != nil {
-		return nil, err
+		return response{}, err
 	}
+	accept := rq.accept
 	if accept == "" {
 		accept = "application/vnd.github+json"
 	}
 	req.Header.Set("Accept", accept)
-	req.Header.Set("Authorization", auth)
+	req.Header.Set("Authorization", rq.auth)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "cais")
-	if body != nil {
+	if rq.body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range rq.header {
+		req.Header.Set(k, v)
 	}
 	resp, err := a.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("falando com o GitHub: %w", err)
+		return response{}, fmt.Errorf("falando com o GitHub: %w", err)
 	}
 	defer resp.Body.Close()
+	if err := a.Limits.observe(rq.quota, resp.StatusCode, resp.Header, a.now()); err != nil {
+		return response{}, err
+	}
+	limit := rq.limit
+	if limit == 0 {
+		limit = maxFile
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
+	if err != nil {
+		return response{}, err
+	}
+	if len(data) > limit {
+		return response{}, fmt.Errorf("resposta do GitHub grande demais (%s)", rq.path)
+	}
+	return response{status: resp.StatusCode, header: resp.Header, data: data}, nil
+}
+
+// do faz a chamada e decodifica o JSON da resposta em out (se nao for nil).
+func (a App) do(ctx context.Context, rq request, out any) ([]byte, error) {
+	res, err := a.send(ctx, rq)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > limit {
-		return nil, fmt.Errorf("resposta do GitHub grande demais (%s)", path)
-	}
-	if resp.StatusCode >= 300 {
-		var e struct {
-			Message string `json:"message"`
-		}
-		json.Unmarshal(data, &e)
-		if e.Message == "" {
-			e.Message = http.StatusText(resp.StatusCode)
-		}
-		return nil, &Error{Status: resp.StatusCode, Message: e.Message}
+	if err := res.check(); err != nil {
+		return nil, err
 	}
 	if out != nil {
-		if err := json.Unmarshal(data, out); err != nil {
+		if err := json.Unmarshal(res.data, out); err != nil {
 			return nil, fmt.Errorf("resposta do GitHub: %w", err)
 		}
 	}
-	return data, nil
+	return res.data, nil
+}
+
+// asApp e uma chamada com o JWT do app (cota do app).
+func (a App) asApp(ctx context.Context, method, path string, body, out any) ([]byte, error) {
+	jwt, err := a.jwt()
+	if err != nil {
+		return nil, err
+	}
+	return a.do(ctx, request{method: method, path: path, auth: "Bearer " + jwt, body: body, quota: QuotaApp}, out)
 }
 
 // Session e o acesso a um repositorio com um token de instalacao, que vale
-// uma hora e so enxerga esse repositorio.
+// uma hora e so enxerga esse repositorio. Pode ser usada por varias
+// goroutines (o Sessions guarda uma por repositorio).
 type Session struct {
 	app   App
 	token string
 	Repo  Repo
 	// DefaultBranch e o branch principal do repositorio (main, master...).
 	DefaultBranch string
+	// Expires e quando o token deixa de valer.
+	Expires time.Time
+	quota   string // cota da instalacao
+
+	mu    sync.Mutex
+	etags map[string]etagged // ref -> ultima resposta do Resolve
+}
+
+// etagged e o commit de um ref com o ETag da resposta: perguntar de novo
+// com If-None-Match e receber 304 nao gasta o limite da API.
+type etagged struct {
+	etag, sha string
 }
 
 // Open autentica no repositorio: acha a instalacao do app nele e pede um
-// token restrito a ele.
+// token restrito a ele (3 chamadas: use Sessions pra reaproveitar).
 func (a App) Open(ctx context.Context, r Repo) (*Session, error) {
 	if a.ID <= 0 || a.Key == nil {
 		return nil, errors.New("GitHub App nao configurado (github.app_id e o secret github_app_key)")
-	}
-	jwt, err := a.jwt()
-	if err != nil {
-		return nil, err
 	}
 	var inst struct {
 		ID int64 `json:"id"`
 	}
 	path := "/repos/" + url.PathEscape(r.Owner) + "/" + url.PathEscape(r.Name) + "/installation"
-	if _, err := a.do(ctx, http.MethodGet, path, "Bearer "+jwt, "", nil, &inst); err != nil {
+	if _, err := a.asApp(ctx, http.MethodGet, path, nil, &inst); err != nil {
 		if IsNotFound(err) {
 			return nil, fmt.Errorf("o GitHub App nao esta instalado em %s (ou o repositorio nao existe): instale em Settings > GitHub Apps > Configure e libere o repositorio", r)
 		}
 		return nil, err
 	}
 	var tok struct {
-		Token string `json:"token"`
+		Token     string    `json:"token"`
+		ExpiresAt time.Time `json:"expires_at"`
 	}
 	body := map[string]any{"repositories": []string{r.Name}}
-	if _, err := a.do(ctx, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", inst.ID), "Bearer "+jwt, "", body, &tok); err != nil {
+	if _, err := a.asApp(ctx, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", inst.ID), body, &tok); err != nil {
 		return nil, err
 	}
-	s := &Session{app: a, token: tok.Token, Repo: r}
+	if tok.ExpiresAt.IsZero() {
+		tok.ExpiresAt = a.now().Add(time.Hour)
+	}
+	s := &Session{app: a, token: tok.Token, Repo: r, Expires: tok.ExpiresAt, quota: QuotaInstallation(inst.ID)}
 	var info struct {
 		DefaultBranch string `json:"default_branch"`
 	}
@@ -263,8 +343,15 @@ func (s *Session) repoPath(rest string) string {
 	return "/repos/" + url.PathEscape(s.Repo.Owner) + "/" + url.PathEscape(s.Repo.Name) + rest
 }
 
+// req monta uma chamada com o token da sessao.
+func (s *Session) req(method, path, accept string) request {
+	return request{method: method, path: path, auth: "token " + s.token, accept: accept, quota: s.quota}
+}
+
 func (s *Session) call(ctx context.Context, method, path, accept string, body, out any) ([]byte, error) {
-	return s.app.do(ctx, method, path, "token "+s.token, accept, body, out)
+	rq := s.req(method, path, accept)
+	rq.body = body
+	return s.app.do(ctx, rq, out)
 }
 
 func contentPath(p string) string {

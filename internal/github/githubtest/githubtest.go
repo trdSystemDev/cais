@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Server e a API falsa. Repos tem os repositorios em que o app esta
@@ -40,7 +41,13 @@ type Server struct {
 	repos   map[string]map[string]string
 	history map[string][]string          // repo -> commits, do mais velho ao atual
 	snaps   map[string]map[string]string // commit -> arquivos
+	calls   map[string]int               // tipo de chamada -> quantas
+	quota   *quota                       // cota informada nos cabecalhos (nil: nenhuma)
+	revoked map[string]bool              // tokens recusados com 401
+	tokens  int                          // tokens emitidos
 }
+
+type quota struct{ limit, remaining int }
 
 // New sobe a API com os repositorios dados.
 func New(t *testing.T, appID int64, repos map[string]map[string]string) *Server {
@@ -50,6 +57,7 @@ func New(t *testing.T, appID int64, repos map[string]map[string]string) *Server 
 		t.Fatal(err)
 	}
 	s := &Server{AppID: appID, pub: &k.PublicKey, repos: repos, history: map[string][]string{}, snaps: map[string]map[string]string{},
+		calls: map[string]int{}, revoked: map[string]bool{},
 		Key: pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})}
 	for repo := range repos {
 		s.record(repo)
@@ -75,6 +83,12 @@ func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	notFound := func() { w.WriteHeader(404); io.WriteString(w, `{"message":"Not Found"}`) }
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	s.calls[kind(parts)]++
+	if s.quota != nil {
+		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(s.quota.limit))
+		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(s.quota.remaining))
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+	}
 
 	// /app/installations/<id>/access_tokens: um id (numerico, como no
 	// GitHub) por repositorio, e o token so vale pra ele
@@ -84,7 +98,9 @@ func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(201)
-		json.NewEncoder(w).Encode(map[string]string{"token": "tok:" + parts[2]})
+		s.tokens++
+		json.NewEncoder(w).Encode(map[string]string{"token": "tok:" + parts[2] + ":" + strconv.Itoa(s.tokens),
+			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)})
 		return
 	}
 	if len(parts) < 3 || parts[0] != "repos" {
@@ -103,7 +119,8 @@ func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// daqui pra frente, so com o token desse repositorio
-	if r.Header.Get("Authorization") != "token tok:"+strconv.Itoa(s.installID(full)) {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "token tok:"+strconv.Itoa(s.installID(full))+":") || s.revoked[strings.TrimPrefix(auth, "token ")] {
 		w.WriteHeader(401)
 		io.WriteString(w, `{"message":"token de outro repositorio"}`)
 		return
@@ -124,6 +141,13 @@ func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 			notFound()
 			return
 		}
+		etag := `W/"` + commit + `"`
+		if r.Header.Get("If-None-Match") == etag {
+			s.calls["304"]++
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
 		io.WriteString(w, commit)
 	case rest[0] == "tarball" && len(rest) == 2:
 		snap, ok := s.snaps[rest[1]]
@@ -153,6 +177,49 @@ func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	default:
 		t.Errorf("githubtest: rota inesperada %s %s", r.Method, r.URL.Path)
 		notFound()
+	}
+}
+
+// kind e o tipo da chamada pra contagem: installation, access_tokens,
+// repo, commits, tarball, compare, git.
+func kind(parts []string) string {
+	switch {
+	case len(parts) == 4 && parts[0] == "app":
+		return "access_tokens"
+	case len(parts) == 3:
+		return "repo"
+	case len(parts) > 3:
+		return parts[3]
+	}
+	return "outra"
+}
+
+// Calls devolve quantas chamadas de cada tipo a API recebeu (e "304": as
+// consultas de commit respondidas sem mudanca) e zera a contagem.
+func (s *Server) Calls() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.calls
+	s.calls = map[string]int{}
+	return out
+}
+
+// SetQuota faz as respostas informarem a cota (limite e quanto sobra).
+func (s *Server) SetQuota(limit, remaining int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.quota = &quota{limit, remaining}
+}
+
+// RevokeTokens faz os tokens ja emitidos serem recusados com 401 (app
+// reinstalado).
+func (s *Server) RevokeTokens() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := 1; i <= s.tokens; i++ {
+		for repo := range s.repos {
+			s.revoked["tok:"+strconv.Itoa(s.installID(repo))+":"+strconv.Itoa(i)] = true
+		}
 	}
 }
 

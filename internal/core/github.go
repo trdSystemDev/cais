@@ -32,37 +32,49 @@ func (c *Core) githubApp() (github.App, error) {
 	if err != nil {
 		return github.App{}, err
 	}
-	return github.App{ID: cfg.GitHub.AppID, Key: key, BaseURL: c.deps.GitHubURL}, nil
+	return github.App{ID: cfg.GitHub.AppID, Key: key, BaseURL: c.deps.GitHubURL, Now: c.deps.Now}, nil
 }
 
-// githubSource e a origem do codigo dos apps pelo GitHub App: cada acesso
-// pede um token de uma hora restrito ao repositorio.
+// githubSource e a origem do codigo dos apps pelo GitHub App. As sessoes
+// (token de uma hora restrito ao repositorio) ficam guardadas no Core e sao
+// reaproveitadas enquanto o token vale.
 type githubSource struct{ c *Core }
 
-func (g githubSource) open(ctx context.Context, repo string) (*github.Session, error) {
+// with roda fn com a sessao do repositorio. Token recusado (401: app
+// reinstalado, chave trocada) descarta a sessao e tenta uma vez com outra.
+func (g githubSource) with(ctx context.Context, repo string, fn func(*github.Session) error) error {
 	r, err := github.ParseRepo(repo)
-	if err != nil {
-		return nil, err
-	}
-	gh, err := g.c.githubApp()
-	if err != nil {
-		return nil, err
-	}
-	return gh.Open(ctx, r)
-}
-
-func (g githubSource) Resolve(ctx context.Context, repo, ref string) (string, error) {
-	s, err := g.open(ctx, repo)
-	if err != nil {
-		return "", err
-	}
-	return s.Resolve(ctx, ref)
-}
-
-func (g githubSource) Download(ctx context.Context, repo, commit, dir string) error {
-	s, err := g.open(ctx, repo)
 	if err != nil {
 		return err
 	}
-	return s.Download(ctx, commit, dir)
+	gh, err := g.c.githubApp()
+	if err != nil {
+		return err
+	}
+	for try := 0; ; try++ {
+		s, err := g.c.gh.Open(ctx, gh, r)
+		if err != nil {
+			return err
+		}
+		err = fn(s)
+		if try == 0 && github.IsUnauthorized(err) {
+			g.c.gh.Forget(gh, r)
+			continue
+		}
+		return err
+	}
+}
+
+func (g githubSource) Resolve(ctx context.Context, repo, ref string) (sha string, err error) {
+	err = g.with(ctx, repo, func(s *github.Session) (err error) {
+		sha, err = s.Resolve(ctx, ref)
+		return err
+	})
+	return sha, err
+}
+
+func (g githubSource) Download(ctx context.Context, repo, commit, dir string) error {
+	return g.with(ctx, repo, func(s *github.Session) error {
+		return s.Download(ctx, commit, dir)
+	})
 }
