@@ -327,7 +327,7 @@ fi
 
 run systemctl daemon-reload
 if systemctl is-active --quiet cais; then
-	say "Reiniciando o daemon (os containers continuam no ar)"
+	say "Reiniciando o daemon (os containers continuam no ar; deploys e backups em andamento terminam antes)"
 	run systemctl restart cais
 else
 	say "Ligando o daemon"

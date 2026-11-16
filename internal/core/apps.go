@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 	"sync"
@@ -295,4 +296,33 @@ func (c *Core) AppGuide(_ context.Context, name string) (string, error) {
 	}
 	in.Databases, in.Buckets = a.Databases, a.Buckets
 	return apps.Guide(in), nil
+}
+
+// RecoverApps termina os deploys que o daemon nao terminou (parou no meio
+// da troca: queda, kill, reboot): cada um volta a versao que estava no ar,
+// como um deploy que falha. Roda na subida do daemon.
+func (c *Core) RecoverApps(ctx context.Context) {
+	m := c.appManager()
+	list, err := m.List()
+	if err != nil {
+		log.Printf("recuperando deploys interrompidos: %v", err)
+		return
+	}
+	for _, a := range list {
+		if !m.Interrupted(a.Name) || !c.work.Begin() {
+			continue
+		}
+		// ocupado: o deploy que pegou a trava recupera antes de comecar
+		if unlock, err := c.lockApp(a.Name); err == nil {
+			log.Printf("o deploy de %s foi interrompido no meio: voltando a versao anterior", a.Name)
+			c.setDeploying(a.Name, true)
+			if _, err := m.Recover(context.WithoutCancel(ctx), a.Name); err != nil {
+				log.Printf("recuperando %s: %v", a.Name, err)
+			}
+			c.setDeploying(a.Name, false)
+			unlock()
+		}
+		c.work.End()
+	}
+	c.CheckApps(ctx)
 }

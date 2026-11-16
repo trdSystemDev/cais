@@ -39,6 +39,11 @@ Regras:
   `--group`. Quem acessa o socket controla a VPS (como o `docker.sock`).
 - **Acoes nao morrem com o cliente.** Rodam com o contexto do daemon: se a TUI
   cair no meio de um deploy, o deploy termina.
+- **Nem com o restart do daemon.** O SIGTERM (`systemctl restart`, `install.sh`)
+  fecha o socket pra acao nova e espera as em andamento (deploy manual ou
+  automatico, backup, restore) terminarem e responderem; so entao o daemon
+  sai. A unidade usa `KillMode=mixed` (os `docker compose` que ele roda nao
+  levam o sinal) e `TimeoutStopSec=30min`; um segundo sinal encerra na hora.
 - **Daemon unico.** `Listen` recusa um segundo daemon no mesmo socket e remove
   socket orfao de um daemon que morreu.
 
@@ -361,6 +366,14 @@ O deploy:
    unhealthy conta como falha (sem healthcheck, "running" na hora do `up` nao
    garante que o app fica de pe);
 8. se falhar, volta o commit anterior (`src.prev`) e sobe ele de novo.
+
+Se o daemon morre no meio da troca (queda, kill, reboot, o limite do
+`TimeoutStopSec`), a marca `deploy.yaml` na pasta do app fica. Na subida, o
+daemon volta a versao que estava no ar (o ultimo deploy que deu certo, em
+`src` ou `src.prev`) e sobe ela, como num deploy que falha; o historico
+registra o deploy como interrompido. O deploy automatico tenta o commit
+interrompido mais uma vez (o commit nao teve culpa); interrompido de novo,
+espera o proximo commit.
 
 **Deploy sem queda.** Um service com `traefik.enable` e `healthcheck` no
 compose nao e recriado: o cais sobe os containers novos ao lado dos antigos

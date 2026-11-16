@@ -92,8 +92,18 @@ func runDaemon(args []string) error {
 	if err != nil {
 		return err
 	}
+	// SIGTERM (systemctl stop/restart, install.sh) desliga sem cortar nada:
+	// as acoes em andamento terminam antes. Um segundo sinal encerra na hora.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
 	c := core.New(core.Deps{})
 	go c.CheckEnvironment(ctx)
+	// deploy que o daemon anterior nao terminou (queda, kill, reboot): volta
+	// a versao que estava no ar
+	go c.RecoverApps(ctx)
 	// deploy automatico: consulta o GitHub (nada de webhook, nenhuma porta)
 	go c.RunAutoDeploy(ctx, *autoEvery)
 	// limpeza do disco (cache de build): uma vez por dia, a primeira logo
@@ -104,6 +114,7 @@ func runDaemon(args []string) error {
 
 	log.Printf("cais daemon %s ouvindo em %s", version, *socket)
 	err = rpc.Serve(ctx, ln, c)
+	c.Close() // deploy automatico e backup em andamento
 	log.Print("cais daemon encerrado")
 	return err
 }

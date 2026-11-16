@@ -14,6 +14,13 @@ Type=simple
 ExecStart=/usr/local/bin/cais daemon
 Restart=on-failure
 RestartSec=2
+# parar/reiniciar espera os deploys e backups em andamento terminarem (o
+# daemon recusa acao nova e sai quando nao sobra nenhuma). mixed manda o
+# SIGTERM so pro daemon: os docker compose que ele roda nao sao cortados.
+# Passado o limite, o systemd mata tudo e o daemon seguinte volta a versao
+# anterior de um deploy que ficou no meio.
+KillMode=mixed
+TimeoutStopSec=30min
 # cria /run/cais (e apaga ao parar) com permissao so pro root
 RuntimeDirectory=cais
 RuntimeDirectoryMode=0755

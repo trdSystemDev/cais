@@ -32,6 +32,12 @@ const (
 	SecretsDir = "secrets"  // arquivos de secret (${CAIS_SECRETS}/<nome>)
 	SrcDir     = "src"      // codigo do commit no ar
 	PrevDir    = "src.prev" // commit anterior, pra voltar se o deploy falhar
+	NextDir    = "src.next" // codigo do deploy em andamento (antes da troca)
+	FailedDir  = "src.failed"
+	// SwapFile marca a troca em andamento (de src.next pra src ate o
+	// registro do deploy). Se o daemon para no meio, ela fica, e o Recover
+	// sabe que o codigo em src pode nao ter subido.
+	SwapFile = "deploy.yaml"
 )
 
 // DefaultCompose e o compose usado quando o app nao diz outro.
@@ -105,10 +111,27 @@ type Deploy struct {
 	Rollback bool `yaml:"rollback,omitempty" json:"rollback,omitempty"`
 	// Images diz que subiu com as imagens guardadas desse commit, sem build.
 	Images bool `yaml:"images,omitempty" json:"images,omitempty"`
+	// Interrupted diz que o daemon parou no meio da troca (queda, kill,
+	// reboot) e o Recover terminou o deploy voltando a versao anterior.
+	Interrupted bool `yaml:"interrupted,omitempty" json:"interrupted,omitempty"`
 }
 
 // OK diz se o deploy subiu.
 func (d Deploy) OK() bool { return d.Error == "" }
+
+// Tried diz se o ultimo deploy ja foi desse commit: o deploy automatico nao
+// tenta de novo um commit que falhou (seria um deploy por minuto). O
+// interrompido (o daemon parou no meio, o commit nao teve culpa) e tentado
+// mais uma vez; interrompido duas vezes seguidas, para.
+func (a App) Tried(commit string) bool {
+	if a.Last == nil || a.Last.Commit != commit {
+		return false
+	}
+	if !a.Last.Interrupted {
+		return true
+	}
+	return len(a.History) > 1 && a.History[1].Commit == commit && a.History[1].Interrupted
+}
 
 // HistorySize e quantos deploys o app guarda no historico.
 const HistorySize = 20
@@ -409,6 +432,15 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	if ref != "" && !refRe.MatchString(ref) {
 		return DeployResult{}, fmt.Errorf("commit ou branch invalido %q", ref)
 	}
+	// um deploy anterior que o daemon nao terminou deixa as pastas no meio
+	// da troca: a versao boa volta pro src antes de tudo (a deste deploy
+	// sobe por cima)
+	if _, err := m.recover(ctx, a, false); err != nil {
+		return DeployResult{}, err
+	}
+	if a, err = m.Get(name); err != nil {
+		return DeployResult{}, err
+	}
 	commit, err := m.Source.Resolve(ctx, a.Repo, ref)
 	if err != nil {
 		return DeployResult{}, err
@@ -418,7 +450,7 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	// o codigo novo vai pra uma pasta propria: o app no ar nao e tocado ate
 	// o build terminar
 	dir := m.dir(name)
-	next := "src.next"
+	next := NextDir
 	os.RemoveAll(filepath.Join(dir, next))
 	if err := m.Source.Download(ctx, a.Repo, commit, filepath.Join(dir, next)); err != nil {
 		return res, err
@@ -458,7 +490,15 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 		}
 	}
 
-	// troca: src vira src.prev e o novo vira src
+	// troca: src vira src.prev e o novo vira src. Da marca ate o registro
+	// do deploy, uma parada do daemon deixa o app entre as duas versoes; a
+	// marca e o que o Recover usa pra voltar a boa.
+	last := Deploy{Commit: commit, Warnings: res.Warnings, PromotedFrom: tag.PromotedFrom, Auto: tag.Auto,
+		Rollback: tag.Rollback, Images: res.Images}
+	if err := m.markSwap(a, last); err != nil {
+		return fail(err)
+	}
+	defer os.Remove(m.swapPath(name)) // depois do registro
 	hadPrev := m.deployed(a)
 	os.RemoveAll(filepath.Join(dir, PrevDir))
 	if hadPrev {
@@ -467,6 +507,9 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 		}
 	}
 	if err := os.Rename(filepath.Join(dir, next), filepath.Join(dir, SrcDir)); err != nil {
+		if hadPrev {
+			os.Rename(filepath.Join(dir, PrevDir), filepath.Join(dir, SrcDir)) // o no ar volta pro lugar
+		}
 		return fail(err)
 	}
 
@@ -485,8 +528,7 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	if upErr == nil {
 		upErr = m.settle(ctx, a)
 	}
-	last := Deploy{At: m.Now(), Commit: commit, Warnings: res.Warnings, PromotedFrom: tag.PromotedFrom, Auto: tag.Auto,
-		Rollback: tag.Rollback, Images: res.Images}
+	last.At = m.Now()
 	if upErr != nil {
 		last.Error = upErr.Error()
 		if hadPrev {
@@ -586,12 +628,10 @@ func (m Manager) settle(ctx context.Context, a App) error {
 	}
 }
 
-// rollback volta src.prev pro lugar e sobe de novo. O build da versao
-// anterior e refeito (as imagens do compose sao trocadas a cada build), mas
-// com o cache das camadas.
+// rollback volta src.prev pro lugar e sobe de novo.
 func (m Manager) rollback(ctx context.Context, a App) error {
 	dir := m.dir(a.Name)
-	failed := filepath.Join(dir, "src.failed")
+	failed := filepath.Join(dir, FailedDir)
 	os.RemoveAll(failed)
 	if err := os.Rename(filepath.Join(dir, SrcDir), failed); err != nil {
 		return err
@@ -600,6 +640,13 @@ func (m Manager) rollback(ctx context.Context, a App) error {
 		return err
 	}
 	os.RemoveAll(failed)
+	return m.upCurrent(ctx, a)
+}
+
+// upCurrent sobe o codigo de src, que e o do commit a.Commit. O build da
+// versao e refeito so sem as imagens guardadas dela (as imagens do compose
+// sao trocadas a cada build), e com o cache das camadas.
+func (m Manager) upCurrent(ctx context.Context, a App) error {
 	p := m.project(a, SrcDir)
 	// as imagens guardadas da versao no ar voltam sem build; sem elas, o
 	// build refaz (com o cache das camadas)
@@ -610,6 +657,104 @@ func (m Manager) rollback(ctx context.Context, a App) error {
 		}
 	}
 	return m.Docker.Up(ctx, p)
+}
+
+func (m Manager) swapPath(name string) string { return filepath.Join(m.dir(name), SwapFile) }
+
+// markSwap grava a marca da troca com o registro do deploy em andamento.
+func (m Manager) markSwap(a App, d Deploy) error {
+	data, err := yaml.Marshal(d)
+	if err != nil {
+		return err
+	}
+	return fsx.WriteAtomic(m.swapPath(a.Name), data, 0o644)
+}
+
+// Interrupted diz se o app tem um deploy que o daemon nao terminou (a
+// marca da troca ficou): o Recover termina.
+func (m Manager) Interrupted(name string) bool {
+	_, err := os.Stat(m.swapPath(name))
+	return err == nil
+}
+
+// srcCommit e o commit do codigo numa pasta do app (o CAIS_COMMIT do .env
+// que o deploy grava); vazio se a pasta nao existe.
+func (m Manager) srcCommit(a App, src string) string {
+	data, err := os.ReadFile(m.dotEnvPath(a, src))
+	if err != nil {
+		return ""
+	}
+	env, err := ParseEnv(data)
+	if err != nil {
+		return ""
+	}
+	return env["CAIS_COMMIT"]
+}
+
+// Recover termina o deploy que o daemon nao terminou (parou no meio da
+// troca: queda, kill, reboot): volta a versao que estava no ar, como o
+// deploy que falha faz, e registra o deploy como interrompido. Devolve se
+// havia o que recuperar.
+func (m Manager) Recover(ctx context.Context, name string) (bool, error) {
+	a, err := m.Get(name)
+	if err != nil {
+		return false, err
+	}
+	return m.recover(ctx, a, true)
+}
+
+// recover faz o Recover. A versao boa e a do commit no ar (a.Commit, so
+// muda no registro de um deploy que deu certo): esta em src (a troca nem
+// tinha comecado, ou ja tinha voltado) ou em src.prev. Sem up (no comeco de
+// um deploy novo) so arruma as pastas: o deploy novo sobe por cima.
+func (m Manager) recover(ctx context.Context, a App, up bool) (bool, error) {
+	data, err := os.ReadFile(m.swapPath(a.Name))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var d Deploy
+	yaml.Unmarshal(data, &d) // marca ilegivel: ainda assim recupera
+
+	dir := m.dir(a.Name)
+	os.RemoveAll(filepath.Join(dir, NextDir))
+	os.RemoveAll(filepath.Join(dir, FailedDir))
+	good := false
+	switch {
+	case a.Commit == "": // primeiro deploy: nao tem versao anterior
+	case m.srcCommit(a, SrcDir) == a.Commit:
+		good = true
+	case m.srcCommit(a, PrevDir) == a.Commit:
+		if err := os.RemoveAll(filepath.Join(dir, SrcDir)); err != nil {
+			return true, err
+		}
+		if err := os.Rename(filepath.Join(dir, PrevDir), filepath.Join(dir, SrcDir)); err != nil {
+			return true, err
+		}
+		good = true
+	}
+
+	d.At, d.Interrupted, d.RolledBack = m.Now(), true, false
+	d.Error = fmt.Sprintf("o deploy de %s foi interrompido no meio (o daemon parou)", short(d.Commit))
+	var upErr error
+	switch {
+	case !good:
+		d.Error += "; nao ha versao anterior pra voltar: faca o deploy de novo"
+	case !up:
+		d.Error += fmt.Sprintf("; o codigo de %s voltou pro lugar antes do deploy seguinte", short(a.Commit))
+	default:
+		if upErr = m.upCurrent(ctx, a); upErr != nil {
+			d.Error += fmt.Sprintf("; voltar pra versao anterior (%s) falhou: %v", short(a.Commit), upErr)
+		} else {
+			d.RolledBack = true
+			d.Error += fmt.Sprintf("; a versao anterior (%s) voltou e continua no ar", short(a.Commit))
+		}
+	}
+	m.record(a, d)
+	os.Remove(m.swapPath(a.Name))
+	return true, upErr
 }
 
 func (m Manager) record(a App, d Deploy) {

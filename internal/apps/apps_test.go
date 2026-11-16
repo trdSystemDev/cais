@@ -1047,3 +1047,115 @@ func TestCommitTag(t *testing.T) {
 		}
 	}
 }
+
+// interrupted deixa o app como um deploy de c2 cortado no meio da troca
+// (o daemon parou depois de trocar as pastas e antes do registro): c2 em
+// src, c1 em src.prev, a marca da troca e o app.yaml ainda em c1.
+func interrupted(t *testing.T, m Manager, d *fakeDocker) {
+	t.Helper()
+	m.Create(App{Name: "web", Repo: "o/web"})
+	for _, c := range []string{"c1", "c2"} {
+		if _, err := m.Deploy(context.Background(), "web", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, _ := m.Get("web")
+	a.Commit, a.Last, a.History = "c1", &a.History[1], a.History[1:]
+	m.save(a)
+	if err := m.markSwap(a, Deploy{Commit: "c2", Auto: true}); err != nil {
+		t.Fatal(err)
+	}
+	d.calls = nil
+}
+
+func TestRecoverVoltaAVersaoNoArDeUmDeployInterrompido(t *testing.T) {
+	m, _, d := newManager(t)
+	interrupted(t, m, d)
+	if !m.Interrupted("web") {
+		t.Fatal("a marca da troca nao foi vista")
+	}
+
+	ok, err := m.Recover(context.Background(), "web")
+	if !ok || err != nil {
+		t.Fatalf("recover %v %v", ok, err)
+	}
+	if !slices.Equal(d.calls, []string{"config v1", "build v1", "up v1"}) {
+		t.Errorf("chamadas %v", d.calls)
+	}
+	if data, _ := os.ReadFile(filepath.Join(m.Root, "web", SrcDir, DefaultCompose)); string(data) != "v1" {
+		t.Errorf("src ficou com %q", data)
+	}
+	a, _ := m.Get("web")
+	if a.Commit != "c1" || !a.Last.Interrupted || !a.Last.RolledBack || a.Last.Commit != "c2" || !a.Last.Auto {
+		t.Errorf("registro %+v", a.Last)
+	}
+	if m.Interrupted("web") {
+		t.Error("a marca ficou")
+	}
+	// o automatico tenta o commit interrompido mais uma vez
+	if a.Tried("c2") {
+		t.Error("interrompido uma vez nao deveria contar como tentado")
+	}
+	// nada mais pra recuperar
+	if ok, _ := m.Recover(context.Background(), "web"); ok {
+		t.Error("recuperou duas vezes")
+	}
+}
+
+func TestRecoverComODaemonParadoEntreAsPastas(t *testing.T) {
+	m, _, d := newManager(t)
+	interrupted(t, m, d)
+	// src ja tinha virado src.prev, e o novo ainda nao tinha virado src
+	os.RemoveAll(filepath.Join(m.Root, "web", SrcDir))
+
+	if _, err := m.Recover(context.Background(), "web"); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(m.Root, "web", SrcDir, DefaultCompose)); string(data) != "v1" {
+		t.Errorf("src ficou com %q", data)
+	}
+}
+
+// o deploy seguinte (sem passar pelo Recover da subida) parte da versao
+// boa: se ele falhar, a volta e pra c1, nunca pro c2 que nao confirmou
+func TestDeployDepoisDeInterrompidoVoltaParaAVersaoBoa(t *testing.T) {
+	m, src, d := newManager(t)
+	src.commits["c3"] = map[string]string{"docker-compose.yml": "v3"}
+	interrupted(t, m, d)
+	d.failUp["v3"] = true
+
+	_, err := m.Deploy(context.Background(), "web", "c3")
+	if err == nil || !strings.Contains(err.Error(), "(c1) foi restaurada") {
+		t.Fatalf("erro %v", err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(m.Root, "web", SrcDir, DefaultCompose)); string(data) != "v1" {
+		t.Errorf("voltou pra %q", data)
+	}
+	a, _ := m.Get("web")
+	if len(a.History) < 2 || !a.History[1].Interrupted || a.History[1].Commit != "c2" {
+		t.Errorf("historico %+v", a.History)
+	}
+}
+
+func TestTriedTentaOInterrompidoUmaVezSo(t *testing.T) {
+	failed := Deploy{Commit: "c2", Error: "x"}
+	cut := Deploy{Commit: "c2", Error: "x", Interrupted: true}
+	for _, tc := range []struct {
+		hist []Deploy
+		want bool
+	}{
+		{nil, false},
+		{[]Deploy{{Commit: "c1"}}, false},
+		{[]Deploy{failed}, true},
+		{[]Deploy{cut, {Commit: "c1"}}, false},
+		{[]Deploy{cut, cut}, true},
+	} {
+		a := App{History: tc.hist}
+		if len(tc.hist) > 0 {
+			a.Last = &tc.hist[0]
+		}
+		if got := a.Tried("c2"); got != tc.want {
+			t.Errorf("%+v: %v", tc.hist, got)
+		}
+	}
+}

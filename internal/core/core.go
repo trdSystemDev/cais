@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"io"
+	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/inflight"
 )
 
 // Deps sao as dependencias externas do Core. Campos vazios recebem a
@@ -90,6 +92,20 @@ type Core struct {
 	gh github.Sessions
 
 	backup backupRuntime
+
+	// work e o trabalho que o daemon dispara sozinho (deploy automatico,
+	// backup, recuperacao): o Close espera ele terminar
+	work inflight.Group
+}
+
+// Close desliga o trabalho de fundo: nada novo comeca, e espera o deploy
+// automatico, o backup e a recuperacao em andamento terminarem. Cortar um
+// deploy no meio deixaria o app metade numa versao, metade na outra.
+func (c *Core) Close() {
+	if n := c.work.Count(); n > 0 {
+		log.Printf("desligando: esperando %d deploys/backups em andamento terminarem", n)
+	}
+	c.work.Close()
 }
 
 // New cria o Core. Nenhuma acao roda aqui: quem decide quando checar o

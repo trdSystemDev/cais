@@ -68,7 +68,9 @@ func (c *Core) RunAutoDeploy(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			c.AutoDeployOnce(ctx)
+			if ctx.Err() == nil {
+				c.AutoDeployOnce(ctx)
+			}
 		}
 	}
 }
@@ -105,17 +107,24 @@ func (c *Core) AutoDeployOnce(ctx context.Context) (started []string, done <-cha
 		c.autoLog(a.Name, err)
 		// depois de um rollback, a ponta de entao nao sobe (desfaria o
 		// rollback): so um commit novo
-		if err != nil || head == a.Commit || (a.Last != nil && a.Last.Commit == head) || head == a.AutoHold {
+		if err != nil || head == a.Commit || a.Tried(head) || head == a.AutoHold {
 			continue
+		}
+		// daemon desligando: o commit fica pra quando ele voltar
+		if !c.work.Begin() {
+			break
 		}
 		unlock, err := c.lockApp(a.Name)
 		if err != nil {
+			c.work.End()
 			continue // ocupado (deploy manual em andamento): tenta na proxima rodada
 		}
 		started = append(started, a.Name)
 		pending++
 		go func(name string) {
-			defer func() { unlock(); results <- struct{}{} }()
+			defer func() { unlock(); c.work.End(); results <- struct{}{} }()
+			// o deploy nao ve o desligamento do daemon: o Close espera
+			ctx := context.WithoutCancel(ctx)
 			log.Printf("deploy automatico de %s: commit novo %s", name, short(head))
 			c.setDeploying(name, true)
 			_, err := m.AutoDeploy(ctx, name, head)

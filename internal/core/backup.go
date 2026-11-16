@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/databases"
@@ -409,7 +410,14 @@ func (c *Core) RunBackups(ctx context.Context, every time.Duration) {
 			c.update(func(s *State) { s.Backup.Next = st.Next })
 			continue
 		}
-		if _, err := c.runBackup(ctx, true); err != nil && !errors.Is(err, ErrBusy) {
+		// o backup nao ve o desligamento do daemon (o Close espera): um
+		// backup cortado so voltaria amanha
+		if !c.work.Begin() {
+			return
+		}
+		_, err := c.runBackup(context.WithoutCancel(ctx), true)
+		c.work.End()
+		if err != nil && !errors.Is(err, ErrBusy) {
 			log.Printf("backup automatico: %v", err)
 		}
 	}
@@ -621,9 +629,14 @@ func (c *Core) stateDirs() []backup.Dir {
 		if rel == filepath.ToSlash(skipBackups) {
 			return true
 		}
-		// apps/<app>/src, src.prev, src.next, src.failed
+		// apps/<app>/src, src.prev, src.next, src.failed e a marca da troca
+		// de um deploy em andamento (restaurada, viraria uma recuperacao
+		// falsa)
 		parts := strings.Split(rel, "/")
-		return d.IsDir() && len(parts) == 3 && parts[0] == "apps" && strings.HasPrefix(parts[2], "src")
+		if len(parts) != 3 || parts[0] != "apps" {
+			return false
+		}
+		return d.IsDir() && strings.HasPrefix(parts[2], "src") || !d.IsDir() && parts[2] == apps.SwapFile
 	}
 	return []backup.Dir{
 		{Prefix: "state/etc", Path: filepath.Dir(c.deps.ConfigPath)},

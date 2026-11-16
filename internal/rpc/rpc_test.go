@@ -501,3 +501,52 @@ func TestAppPeloSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// SIGTERM no meio de uma acao (install.sh reinicia o daemon durante um
+// deploy): a acao termina sem ver o cancelamento e responde, chamada nova
+// e recusada, e so entao o Serve volta
+func TestDesligarEsperaAAcaoEmAndamento(t *testing.T) {
+	release := make(chan struct{})
+	var canceled atomic.Bool
+	d := startDaemon(t, func(ctx context.Context) docker.Status {
+		<-release
+		canceled.Store(ctx.Err() != nil)
+		return okStatus(ctx)
+	})
+	c := dial(t, d.path)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := c.CheckEnvironment(context.Background())
+		result <- err
+	}()
+	waitUntil(t, func() bool {
+		s, _ := d.core.Snapshot(context.Background())
+		return s.Environment.Checking
+	})
+
+	d.cancel()
+	waitUntil(t, func() bool {
+		_, err := c.Snapshot(context.Background())
+		return err != nil && strings.Contains(err.Error(), "reiniciando")
+	})
+	select {
+	case err := <-d.done:
+		t.Fatalf("o Serve voltou com a acao em andamento: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatalf("a acao em andamento falhou: %v", err)
+	}
+	if canceled.Load() {
+		t.Error("a acao viu o desligamento")
+	}
+	select {
+	case err := <-d.done:
+		d.done <- err // pro stop do Cleanup
+	case <-time.After(3 * time.Second):
+		t.Fatal("o Serve nao voltou depois da acao")
+	}
+}
