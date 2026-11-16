@@ -85,7 +85,7 @@ func TestTestNotify(t *testing.T) {
 	if err := c.TestNotify(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.wait(t, 1); !strings.HasPrefix(got[0], "[cais exemplo.com.br] e-mail de teste") {
+	if got := f.wait(t, 1); !strings.HasPrefix(got[0], "[cais exemplo.com.br] Os avisos do cais estao chegando") {
 		t.Errorf("assunto: %q", got[0])
 	}
 
@@ -141,7 +141,7 @@ func TestAvisoDeployAutomaticoSoQuandoDesiste(t *testing.T) {
 	after(30 * time.Minute)
 	round()
 	got := f.wait(t, 1)
-	if !strings.Contains(got[0], "deploy automatico de meu-app falhou") || !strings.Contains(got[0], "toomanyrequests") {
+	if !strings.Contains(got[0], "Deploy automatico de meu-app falhou") || !strings.Contains(got[0], "toomanyrequests") {
 		t.Errorf("e-mail: %q", got[0])
 	}
 }
@@ -183,7 +183,7 @@ func TestAvisoBackupUmaVezPorSequencia(t *testing.T) {
 		}
 	}
 	waitLast(at3)
-	if got := f.wait(t, 1); !strings.Contains(got[0], "backup falhou") || !strings.Contains(got[0], "nao chegou no Drive") {
+	if got := f.wait(t, 1); !strings.Contains(got[0], "Backup falhou") || !strings.Contains(got[0], "nao chegou no Google Drive") {
 		t.Errorf("e-mail: %q", got[0])
 	}
 

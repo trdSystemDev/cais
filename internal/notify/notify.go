@@ -1,6 +1,5 @@
 // Package notify envia os e-mails de aviso do cais pela API transacional
-// da Brevo. So texto puro: e um aviso pra pessoa abrir a TUI, nao um
-// relatorio.
+// da Brevo, em HTML (Message.HTML) com a alternativa em texto puro.
 package notify
 
 import (
@@ -23,6 +22,8 @@ type Mail struct {
 	To      []string
 	Subject string
 	Text    string
+	// HTML e opcional: com ele, Text vira a alternativa em texto puro.
+	HTML string
 }
 
 type address struct {
@@ -35,6 +36,7 @@ type brevoMail struct {
 	To          []address `json:"to"`
 	Subject     string    `json:"subject"`
 	TextContent string    `json:"textContent"`
+	HTMLContent string    `json:"htmlContent,omitempty"`
 }
 
 // Send envia m pela Brevo em url (BrevoAPI fora dos testes) com a chave
@@ -51,6 +53,7 @@ func Send(ctx context.Context, url, key string, m Mail) error {
 		Sender:      address{Email: m.From, Name: "cais"},
 		Subject:     m.Subject,
 		TextContent: m.Text,
+		HTMLContent: m.HTML,
 	}
 	for _, to := range m.To {
 		body.To = append(body.To, address{Email: to})

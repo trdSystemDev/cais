@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<title>{{.Title}}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;-webkit-text-size-adjust:100%;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{.Intro}}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f3f4f6;">
+<tr><td align="center" style="padding:32px 16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+
+<tr><td style="padding:0 4px 14px 4px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;font-weight:700;letter-spacing:-0.5px;color:#111827;">cais</td>
+<td align="right" style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#6b7280;">{{.Server}}</td>
+</tr></table>
+</td></tr>
+
+<tr><td style="background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr><td style="height:4px;line-height:4px;font-size:0;background:{{.P.Accent}};">&nbsp;</td></tr>
+<tr><td style="padding:28px 32px 8px 32px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:{{.P.Soft}};color:{{.P.Accent}};font-size:11px;font-weight:700;letter-spacing:0.8px;">{{.P.Label}}</span>
+<h1 style="margin:14px 0 0 0;font-size:22px;line-height:1.3;font-weight:700;color:#111827;">{{.Title}}</h1>
+{{- if .Intro}}
+<p style="margin:12px 0 0 0;font-size:15px;line-height:1.6;color:#374151;">{{.Intro}}</p>
+{{- end}}
+</td></tr>
+
+{{- if .Items}}
+<tr><td style="padding:16px 32px 0 32px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+{{- range .Items}}
+<div style="padding:8px 12px;margin-bottom:6px;background:{{$.P.Soft}};border-radius:6px;font-family:SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;font-size:13px;color:#111827;">{{.}}</div>
+{{- end}}
+</td></tr>
+{{- end}}
+
+{{- if .Facts}}
+<tr><td style="padding:16px 32px 0 32px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid #f0f1f3;">
+{{- range .Facts}}
+<tr>
+<td width="120" style="padding:9px 0;border-bottom:1px solid #f0f1f3;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#6b7280;vertical-align:top;">{{.Label}}</td>
+<td style="padding:9px 0;border-bottom:1px solid #f0f1f3;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#111827;font-weight:600;vertical-align:top;">{{.Value}}</td>
+</tr>
+{{- end}}
+</table>
+</td></tr>
+{{- end}}
+
+{{- if .Detail}}
+<tr><td style="padding:20px 32px 0 32px;">
+<div style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:700;letter-spacing:0.6px;color:#6b7280;margin-bottom:8px;">ERRO</div>
+<div style="background:#f9fafb;border:1px solid #e5e7eb;border-left:3px solid {{.P.Accent}};border-radius:6px;padding:12px 14px;font-family:SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;font-size:12.5px;line-height:1.55;color:#1f2937;white-space:pre-wrap;word-break:break-word;">{{.Detail}}</div>
+</td></tr>
+{{- end}}
+
+
+
+{{- if .Next}}
+<tr><td style="padding:20px 32px 0 32px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#4b5563;">{{.Next}}</td></tr>
+{{- end}}
+
+<tr><td style="height:28px;line-height:28px;font-size:0;">&nbsp;</td></tr>
+</table>
+</td></tr>
+
+<tr><td style="padding:18px 4px 0 4px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:1.6;color:#9ca3af;text-align:center;">
+Aviso automatico do cais em {{.Server}}.<br>
+Pra mudar quem recebe: aba Setup, ou cais setup config --notify-to.
+</td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>
