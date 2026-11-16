@@ -1,0 +1,152 @@
+# Desenvolvimento
+
+Como o cais e organizado por dentro, como rodar no PC e como lancar uma versao.
+
+## Arquitetura
+
+Go, com a TUI em Bubble Tea e Lip Gloss (clicavel, com mouse).
+
+O projeto e agnostico a interface. O `core` e o unico dono do estado e o
+unico que executa acoes; as interfaces so chamam acoes e reagem ao estado.
+
+O core roda num unico processo, o **daemon** (`cais daemon`, via systemd).
+TUI, CLI e o MCP (`cais mcp`) sao clientes dele por um socket Unix, entao todos
+enxergam o mesmo estado ao mesmo tempo.
+
+```
+   cais (TUI)     cais state/check (CLI)     cais mcp (IA)
+        \                   |                       /
+         \------ rpc.Client (implementa core.API) -/
+                            |
+          /run/cais/cais.sock  (JSON-RPC 2.0, uma msg por linha)
+                            |
+   cais daemon:  rpc.Serve -> internal/core (estado + acoes)
+                            |
+          docker / secrets / databases / apps / github
+```
+
+Regras:
+
+- **Um contrato so.** `core.API` e implementada pelo `*core.Core` (local, usado
+  nos testes) e pelo `rpc.Client` (remoto). As interfaces dependem so dela.
+- **Protocolo.** JSON-RPC 2.0 sobre o socket; mudancas de estado chegam como
+  notificacao `state` depois de um `state.subscribe`. Metodos em
+  `internal/rpc/protocol.go`.
+- **Socket e root.** Nasce com permissao `0660`: so root, ou o grupo passado em
+  `--group`. Quem acessa o socket controla a VPS (como o `docker.sock`).
+- **Acoes nao morrem com o cliente.** Rodam com o contexto do daemon: se a TUI
+  cair no meio de um deploy, o deploy termina.
+- **Nem com o restart do daemon.** O SIGTERM (`systemctl restart`, `install.sh`)
+  fecha o socket pra acao nova e espera as em andamento (deploy manual ou
+  automatico, backup, restore) terminarem e responderem; so entao o daemon
+  sai. A unidade usa `KillMode=mixed` (os `docker compose` que ele roda nao
+  levam o sinal) e `TimeoutStopSec=45min` (o limite de um deploy mais a volta
+  da versao anterior); um segundo sinal encerra na hora.
+- **Daemon unico.** `Listen` recusa um segundo daemon no mesmo socket e remove
+  socket orfao de um daemon que morreu.
+
+- **Estado imutavel e serializavel.** `core.State` e uma foto; quem altera e
+  so o core. Tudo tem tag JSON e erros viram texto, pra o MCP devolver direto.
+- **Acao publica e devolve.** Cada metodo de acao publica o novo estado pra
+  todos os inscritos *e* devolve o proprio resultado (o MCP precisa da resposta
+  da chamada).
+- **Reatividade sem acoplamento.** `Subscribe` entrega sempre a foto mais
+  recente; leitor lento perde fotos intermediarias, mas nunca trava o core. Uma
+  acao disparada pelo MCP atualiza a TUI aberta sem nenhum codigo extra.
+- **Nucleo sem tela.** `internal/core/arch_test.go` falha se qualquer pacote
+  fora de `internal/ui` importar as libs de tela (Bubble Tea, Lip Gloss).
+
+## Estrutura
+
+| Caminho | Responsabilidade |
+|---|---|
+| `cmd/cais` | ponto de entrada: monta o core e a interface |
+| `internal/core` | estado, acoes e inscricoes -- o que as interfaces usam |
+| `internal/mcpserver` | servidor MCP: cada ferramenta chama uma acao da `core.API` (nada que apaga dados) |
+| `internal/rpc` | socket do daemon: servidor, cliente (`core.API`) e protocolo |
+| `internal/ui` | TUI em Bubble Tea, clicavel (so le estado e chama acoes); cores pelo fundo do terminal |
+| `internal/bootstrap` | assistente da VPS vazia |
+| `internal/stacks` | stacks base + `templates/` embutidos |
+| `internal/docker` | checagem, SDK do Docker e `docker compose` |
+| `internal/secrets` | secrets centrais e por app |
+| `internal/databases` | databases/usuarios Postgres e MySQL |
+| `internal/apps` | apps em `/var/lib/cais/apps/<app>`: deploy, `.env`, secrets, avisos e ajuda do compose |
+| `internal/github` | GitHub App: token por repositorio, commit e tarball do codigo |
+| `internal/config` | `/etc/cais/config.yaml` e os caminhos no disco |
+| `install.sh` | instalador: baixa o release (ou compila o clone) e traz a unidade do systemd |
+| `.github/workflows/` | release a cada tag `v*` |
+| `docs/` | esta documentacao |
+
+## Pastas na VPS
+
+| Caminho | Conteudo |
+|---|---|
+| `/etc/cais/config.yaml` | configuracao: e-mail, servicos opcionais ativos, hosts, avisos |
+| `/var/lib/cais/stacks/<stack>/` | compose das stacks (proxy, postgres, mysql, garage) |
+| `/var/lib/cais/apps/<app>/` | `app.yaml`, `env` (variaveis), `secrets/` e o codigo: `src/` (no ar) e `src.prev` (anterior) |
+| `/var/lib/cais/secrets/` | secrets centrais (senhas das instancias de banco etc.) |
+| `/var/lib/cais/backups/` | backups |
+| `/run/cais/cais.sock` | socket do daemon |
+
+`/etc/cais` e `/var/lib/cais` sao criados pelo systemd (`ConfigurationDirectory`
+e `StateDirectory`); `/var/lib/cais` e `0700`, so o daemon escreve nele. Os
+caminhos ficam em `internal/config/paths.go` e podem ser trocados por
+`CAIS_CONFIG` e `CAIS_DATA_DIR` (ex: pra testar no PC).
+
+Secrets ficam em texto puro em `/var/lib/cais` (pasta root `0700`, arquivos
+`0444`); o valor nunca aparece no estado nem em log. Backups saem
+criptografados com [age](https://age-encryption.org) para uma chave publica
+cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
+
+O cais gera sozinho os secrets das stacks (senhas root dos bancos, RPC
+secret e token de admin do Garage) e nunca troca um que ja existe; so a chave
+do GitHub App e a da Brevo (avisos por e-mail) sao informadas.
+
+## Testar no PC
+
+Pra testar num PC, sem DNS publico: `--tls selfsigned --test-domain
+trd.localhost` (o systemd-resolved e os navegadores ja resolvem `*.localhost`
+pra 127.0.0.1; `.local` e recusado porque e do mDNS), e os apps em
+`<app>.trd.localhost`. O cais cria uma CA local
+restrita ao dominio do teste (name constraints: nao assina nada fora dele) e um
+certificado com SAN pra todos os nomes; o `setup run` termina mostrando como
+confiar nela (`trust anchor`). Use `CAIS_SOCKET`, `CAIS_CONFIG` e `CAIS_DATA_DIR` numa pasta
+persistente (nao `/tmp`: os volumes sobrevivem ao reboot e os secrets nao).
+
+Em desenvolvimento (Windows/macOS) o socket padrao fica na pasta temporaria;
+rode `cais daemon` num terminal e `cais` em outro.
+
+## Build e testes
+
+```sh
+make build         # dist/cais-linux-amd64 e dist/cais-linux-arm64
+make test          # go test ./...
+make test-docker   # importacao de banco contra bancos de verdade (docker)
+make dev           # daemon de teste + TUI no PC
+```
+
+## Releases
+
+Cada tag `v*` no GitHub vira um release pelo GitHub Actions
+(`.github/workflows/release.yml`): roda os testes, compila os binarios
+`cais-linux-amd64` e `cais-linux-arm64` e publica com o `SHA256SUMS` e o
+`install.sh`. Pra lancar uma versao, da `main` em dia com o GitHub:
+
+```sh
+make release V=v0.3.0
+```
+
+## Roadmap
+
+1. Esqueleto: TUI com abas clicaveis, checagem de Docker/Compose
+2. Bootstrap: templates das stacks + assistente da VPS vazia
+3. Apps: repositorio do GitHub com compose de producao, deploy com volta, logs, restart
+4. Bancos: database e usuario por app no Postgres/MySQL compartilhado
+5. Deploy automatico (feito: consulta ao GitHub a cada minuto, sem webhook nem porta) e homologacao com promocao
+6. Backups (feito: bancos e estado do cais, criptografados com age, pro Google Drive)
+7. `install.sh` (feito: por curl, do release do GitHub; ou compilando um clone)
+8. MCP (feito: `cais mcp` pelo SSH, sem exclusoes nem Setup)
+
+---
+
+[Voltar pra documentacao](README.md)
