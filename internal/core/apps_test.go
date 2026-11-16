@@ -20,12 +20,14 @@ import (
 
 // appDocker finge o docker compose dos apps.
 type appDocker struct {
-	mu     sync.Mutex
-	calls  []string
-	block  chan struct{} // se nao nil, o build espera
-	upErr  error
-	ps     []docker.Container
-	config string
+	mu    sync.Mutex
+	calls []string
+	block chan struct{} // se nao nil, o build espera
+	upErr error
+	// buildErr e o erro do build (nil: builda)
+	buildErr error
+	ps       []docker.Container
+	config   string
 }
 
 func (d *appDocker) add(s string) {
@@ -47,7 +49,9 @@ func (d *appDocker) Build(_ context.Context, p docker.Project) error {
 	if d.block != nil {
 		<-d.block
 	}
-	return nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.buildErr
 }
 
 func (d *appDocker) Up(_ context.Context, p docker.Project) error {

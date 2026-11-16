@@ -60,6 +60,9 @@ func runApps(args []string) error {
 				if a.Last.RolledBack {
 					last += ", anterior no ar"
 				}
+				if at, ok := a.AutoRetryAt(); ok && a.AutoDeploy {
+					last += ", tenta de novo as " + at.Local().Format("15:04")
+				}
 				last += ")"
 			}
 			switch {

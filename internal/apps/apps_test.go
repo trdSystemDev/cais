@@ -117,6 +117,7 @@ type fakeDocker struct {
 	failUp map[string]bool // compose (conteudo) cujo up falha
 	// compose (conteudo) cujo rollout falha
 	failRollout map[string]bool
+	failBuild   map[string]error              // compose (conteudo) cujo build falha
 	images      map[string]string             // tag -> id da imagem
 	envSeen     map[string]string             // .env lido no Config
 	ps          map[string][]docker.Container // compose -> containers depois do up
@@ -141,6 +142,9 @@ func (f *fakeDocker) Config(_ context.Context, p docker.Project) ([]byte, error)
 func (f *fakeDocker) Build(_ context.Context, p docker.Project) error {
 	c := f.compose(p)
 	f.calls = append(f.calls, "build "+c)
+	if err := f.failBuild[c]; err != nil {
+		return err
+	}
 	if f.images != nil {
 		// o build troca a imagem do service web pela do codigo
 		f.images[p.Name+"-web"] = "img-" + c
@@ -1093,7 +1097,7 @@ func TestRecoverVoltaAVersaoNoArDeUmDeployInterrompido(t *testing.T) {
 		t.Error("a marca ficou")
 	}
 	// o automatico tenta o commit interrompido mais uma vez
-	if a.Tried("c2") {
+	if a.Tried("c2", m.Now()) {
 		t.Error("interrompido uma vez nao deveria contar como tentado")
 	}
 	// nada mais pra recuperar
@@ -1154,8 +1158,82 @@ func TestTriedTentaOInterrompidoUmaVezSo(t *testing.T) {
 		if len(tc.hist) > 0 {
 			a.Last = &tc.hist[0]
 		}
-		if got := a.Tried("c2"); got != tc.want {
+		if got := a.Tried("c2", time.Now()); got != tc.want {
 			t.Errorf("%+v: %v", tc.hist, got)
 		}
+	}
+}
+
+func TestFalhaPassageiraOuCulpaDoCommit(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("docker compose build (web): failed to resolve source metadata for docker.io/library/node:24: 429 Too Many Requests - toomanyrequests: You have reached your pull rate limit"), true},
+		{errors.New("npm error code ETIMEDOUT\nnpm error network request to https://registry.npmjs.org/x failed"), true},
+		{errors.New("Get \"https://registry-1.docker.io/v2/\": net/http: TLS handshake timeout"), true},
+		{errors.New("dial tcp: lookup registry-1.docker.io: Temporary failure in name resolution"), true},
+		{errors.New("docker compose build (web): process \"/bin/sh -c npm run build\" did not complete successfully: exit code: 1"), false},
+		{errors.New("container web is unhealthy"), false},
+		{&ComposeError{App: "web", Problems: []string{"publica a porta 80 (connection refused)"}}, false},
+		{nil, false},
+	} {
+		if got := transient(tc.err); got != tc.want {
+			t.Errorf("%v: %v", tc.err, got)
+		}
+	}
+}
+
+// o deploy registra se a falha e passageira: o build que nao baixou a
+// imagem base sim; o app que nao fica de pe nao
+func TestDeployRegistraFalhaPassageira(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	d.failBuild = map[string]error{"v1": errors.New("failed to resolve source metadata: 503 Service Unavailable")}
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err == nil {
+		t.Fatal("deploy passou")
+	}
+	if a, _ := m.Get("web"); !a.Last.Transient {
+		t.Errorf("build sem registry nao ficou passageiro: %+v", a.Last)
+	}
+
+	d.failBuild = nil
+	d.failUp["v1"] = true
+	m.Deploy(context.Background(), "web", "c1")
+	if a, _ := m.Get("web"); a.Last.Transient || a.Last.Error == "" {
+		t.Errorf("app unhealthy ficou passageiro: %+v", a.Last)
+	}
+}
+
+func TestAutoRetryAtEsperaCadaVezMais(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	pass := func(min int) Deploy {
+		return Deploy{Commit: "c2", At: t0.Add(time.Duration(min) * time.Minute), Error: "x", Transient: true}
+	}
+	app := func(hist ...Deploy) App { return App{Last: &hist[0], History: hist} }
+	ok := Deploy{Commit: "c1", At: t0.Add(-time.Hour)}
+
+	for _, tc := range []struct {
+		name  string
+		a     App
+		at    time.Time
+		retry bool
+	}{
+		{"primeira falha: 2 min", app(pass(0), ok), t0.Add(2 * time.Minute), true},
+		{"segunda: 10 min", app(pass(2), pass(0), ok), t0.Add(12 * time.Minute), true},
+		{"terceira: 30 min", app(pass(12), pass(2), pass(0), ok), t0.Add(42 * time.Minute), true},
+		{"quarta: desiste", app(pass(42), pass(12), pass(2), pass(0), ok), time.Time{}, false},
+		{"culpa do commit: nao tenta", app(Deploy{Commit: "c2", At: t0, Error: "x"}, ok), time.Time{}, false},
+		{"passageira depois de uma de culpa do commit conta as duas", app(pass(5), Deploy{Commit: "c2", At: t0, Error: "x"}, ok), t0.Add(15 * time.Minute), true},
+		{"deu certo: nada", app(ok), time.Time{}, false},
+	} {
+		at, retry := tc.a.AutoRetryAt()
+		if retry != tc.retry || !at.Equal(tc.at) {
+			t.Errorf("%s: %v %v", tc.name, at, retry)
+		}
+	}
+	a := app(pass(0), ok)
+	if !a.Tried("c2", t0.Add(time.Minute)) || a.Tried("c2", t0.Add(2*time.Minute)) {
+		t.Error("Tried nao respeita a espera")
 	}
 }

@@ -114,23 +114,84 @@ type Deploy struct {
 	// Interrupted diz que o daemon parou no meio da troca (queda, kill,
 	// reboot) e o Recover terminou o deploy voltando a versao anterior.
 	Interrupted bool `yaml:"interrupted,omitempty" json:"interrupted,omitempty"`
+	// Transient diz que a falha parece passageira (rede, registry fora do
+	// ar, limite do Docker Hub) e nao culpa do commit: o deploy automatico
+	// tenta de novo (AutoRetryAfter).
+	Transient bool `yaml:"transient,omitempty" json:"transient,omitempty"`
 }
 
 // OK diz se o deploy subiu.
 func (d Deploy) OK() bool { return d.Error == "" }
 
-// Tried diz se o ultimo deploy ja foi desse commit: o deploy automatico nao
-// tenta de novo um commit que falhou (seria um deploy por minuto). O
-// interrompido (o daemon parou no meio, o commit nao teve culpa) e tentado
-// mais uma vez; interrompido duas vezes seguidas, para.
-func (a App) Tried(commit string) bool {
+// AutoRetryAfter sao as esperas antes de cada nova tentativa automatica de
+// um commit cujo deploy falhou por motivo passageiro (Deploy.Transient).
+// Esgotadas, o commit espera o proximo (ou um deploy manual).
+var AutoRetryAfter = []time.Duration{2 * time.Minute, 10 * time.Minute, 30 * time.Minute}
+
+// AutoRetryAt diz se, e a partir de quando, o deploy automatico tenta de
+// novo o commit do ultimo deploy, que falhou sem culpa do commit:
+// interrompido (o daemon parou no meio) tenta mais uma vez; falha
+// passageira, uma vez a cada espera de AutoRetryAfter.
+func (a App) AutoRetryAt() (time.Time, bool) {
+	l := a.Last
+	if l == nil || l.OK() {
+		return time.Time{}, false
+	}
+	// tentativas seguidas que falharam com esse commit (o historico comeca
+	// pelo ultimo deploy)
+	n := 0
+	for _, d := range a.History {
+		if d.Commit != l.Commit || d.OK() {
+			break
+		}
+		n++
+	}
+	switch {
+	case l.Interrupted && n == 1:
+		return l.At, true
+	case l.Transient && !l.Interrupted && n >= 1 && n <= len(AutoRetryAfter):
+		return l.At.Add(AutoRetryAfter[n-1]), true
+	}
+	return time.Time{}, false
+}
+
+// Tried diz se o deploy automatico deve deixar o commit de lado agora: o
+// ultimo deploy ja foi dele e nao e hora de tentar de novo. Um commit que
+// falhou por culpa dele nao e tentado de novo (seria um deploy por minuto).
+func (a App) Tried(commit string, now time.Time) bool {
 	if a.Last == nil || a.Last.Commit != commit {
 		return false
 	}
-	if !a.Last.Interrupted {
-		return true
+	at, ok := a.AutoRetryAt()
+	return !ok || now.Before(at)
+}
+
+// transientMarks sao trechos de erro de rede e de registry: o build ou o
+// up que falha com eles provavelmente passa na proxima tentativa.
+var transientMarks = []string{
+	"toomanyrequests", "too many requests", "rate limit",
+	"i/o timeout", "tls handshake timeout", "context deadline exceeded", "timeout exceeded",
+	"connection reset", "connection refused", "broken pipe", "unexpected eof",
+	"no such host", "temporary failure in name resolution", "network is unreachable", "no route to host",
+	"502 bad gateway", "503 service unavailable", "504 gateway",
+	"etimedout", "econnreset", "econnrefused", "eai_again", "enotfound",
+	"failed to do request", "failed to resolve source metadata",
+}
+
+// transient diz se o erro do deploy parece passageiro. Compose fora do
+// formato nunca e: o commit e que tem que mudar.
+func transient(err error) bool {
+	var ce *ComposeError
+	if err == nil || errors.As(err, &ce) {
+		return false
 	}
-	return len(a.History) > 1 && a.History[1].Commit == commit && a.History[1].Interrupted
+	msg := strings.ToLower(err.Error())
+	for _, m := range transientMarks {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // HistorySize e quantos deploys o app guarda no historico.
@@ -458,7 +519,7 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	fail := func(err error) (DeployResult, error) {
 		os.RemoveAll(filepath.Join(dir, next))
 		m.record(a, Deploy{At: m.Now(), Commit: commit, Error: err.Error(), Warnings: res.Warnings, Problems: res.Problems,
-			PromotedFrom: tag.PromotedFrom, Auto: tag.Auto, Rollback: tag.Rollback})
+			PromotedFrom: tag.PromotedFrom, Auto: tag.Auto, Rollback: tag.Rollback, Transient: transient(err)})
 		return res, err
 	}
 	if _, err := os.Stat(filepath.Join(dir, next, a.ComposeFile())); err != nil {
@@ -530,7 +591,7 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	}
 	last.At = m.Now()
 	if upErr != nil {
-		last.Error = upErr.Error()
+		last.Error, last.Transient = upErr.Error(), transient(upErr)
 		if hadPrev {
 			if rerr := m.rollback(ctx, a); rerr != nil {
 				upErr = fmt.Errorf("%w\n\ne a volta pra versao anterior tambem falhou: %v", upErr, rerr)

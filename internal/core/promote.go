@@ -107,7 +107,7 @@ func (c *Core) AutoDeployOnce(ctx context.Context) (started []string, done <-cha
 		c.autoLog(a.Name, err)
 		// depois de um rollback, a ponta de entao nao sobe (desfaria o
 		// rollback): so um commit novo
-		if err != nil || head == a.Commit || a.Tried(head) || head == a.AutoHold {
+		if err != nil || head == a.Commit || a.Tried(head, c.deps.Now()) || head == a.AutoHold {
 			continue
 		}
 		// daemon desligando: o commit fica pra quando ele voltar
@@ -130,7 +130,13 @@ func (c *Core) AutoDeployOnce(ctx context.Context) (started []string, done <-cha
 			_, err := m.AutoDeploy(ctx, name, head)
 			c.setDeploying(name, false)
 			if err != nil {
-				log.Printf("deploy automatico de %s falhou: %v", name, err)
+				retry := ""
+				if a, gerr := m.Get(name); gerr == nil {
+					if at, ok := a.AutoRetryAt(); ok {
+						retry = fmt.Sprintf(" (parece passageiro: tenta de novo as %s)", at.Local().Format("15:04"))
+					}
+				}
+				log.Printf("deploy automatico de %s falhou%s: %v", name, retry, err)
 			}
 			c.CheckApps(ctx)
 		}(a.Name)

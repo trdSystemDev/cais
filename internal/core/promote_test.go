@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/docker"
@@ -209,5 +211,57 @@ func TestDeployAutomaticoPausaNoLimiteDaAPI(t *testing.T) {
 	// teste do pacote github cobre)
 	if _, err := c.DeployApp(ctx, "meu-app", ""); err != nil {
 		t.Fatalf("deploy manual com a cota baixa: %v", err)
+	}
+}
+
+// falha passageira (Docker Hub no limite) no deploy automatico: tenta de
+// novo depois de 2, 10 e 30 minutos e desiste; o proximo commit sobe normal
+func TestDeployAutomaticoTentaDeNovoFalhaPassageira(t *testing.T) {
+	c, d, gh := newAppsCore(t)
+	ctx := context.Background()
+	const repo = "trdSystemDev/meu-app"
+	var mu sync.Mutex
+	now := fixedNow
+	c.deps.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	after := func(dur time.Duration) { mu.Lock(); now = now.Add(dur); mu.Unlock() }
+	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: repo, AutoDeploy: true})
+
+	round := func() int {
+		started, done := c.AutoDeployOnce(ctx)
+		<-done
+		return len(started)
+	}
+	d.mu.Lock()
+	d.buildErr = errors.New("docker compose build (meu-app): toomanyrequests: You have reached your pull rate limit")
+	d.mu.Unlock()
+
+	steps := []struct {
+		wait time.Duration
+		want int
+	}{
+		{0, 1},                // commit novo: falha passageira
+		{time.Minute, 0},      // antes dos 2 min
+		{time.Minute, 1},      // 2 min: segunda tentativa
+		{9 * time.Minute, 0},  // antes dos 10 min
+		{time.Minute, 1},      // 10 min: terceira
+		{30 * time.Minute, 1}, // 30 min: quarta e ultima
+		{2 * time.Hour, 0},    // desistiu: espera o proximo commit
+	}
+	for i, s := range steps {
+		after(s.wait)
+		if got := round(); got != s.want {
+			t.Fatalf("passo %d: %d deploys, esperava %d", i, got, s.want)
+		}
+	}
+
+	d.mu.Lock()
+	d.buildErr = nil
+	d.mu.Unlock()
+	gh.SetFile(repo, "Dockerfile", "FROM node:24\n")
+	if got := round(); got != 1 {
+		t.Fatalf("commit novo: %d", got)
+	}
+	if a := findApp(snap(t, c).Apps.List, "meu-app"); a.Commit != gh.Commit(repo) {
+		t.Fatalf("commit novo nao subiu: %+v", a.Last)
 	}
 }

@@ -541,7 +541,11 @@ compativeis com a versao anterior.
 Cada app escolhe: **manual** ou **automatico a cada commit na branch dele**
 (TUI: seletor Deploy na Geral; CLI: `cais app set <app> -auto on|off`). O daemon
 consulta o GitHub a cada minuto (`cais daemon --auto-every`), sem webhook e sem
-abrir porta. Um commit que falhou nao e tentado de novo; o proximo sim.
+abrir porta. Um commit que falhou por culpa dele (compose recusado, build
+quebrado, app que nao fica de pe) nao e tentado de novo; o proximo sim.
+Falha que parece passageira (rede, registry fora do ar, limite do Docker
+Hub, `ETIMEDOUT` do npm) e tentada de novo depois de 2, 10 e 30 minutos; a
+Geral e o `cais apps` mostram o horario da proxima tentativa.
 
 | Como quer trabalhar | producao | homologacao |
 |---|---|---|

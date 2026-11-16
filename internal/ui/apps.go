@@ -1580,6 +1580,9 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 			if l.RolledBack {
 				line += "; versao anterior no ar"
 			}
+			if at, ok := a.AutoRetryAt(); ok && a.AutoDeploy {
+				line += "; tenta de novo as " + at.Local().Format("15:04")
+			}
 			line += ")"
 		}
 		switch {
