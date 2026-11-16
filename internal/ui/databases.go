@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"slices"
 	"strings"
 
@@ -28,12 +29,16 @@ type dbPanel struct {
 	engine  string // postgres, mysql ou garage; aberto quando nao vazio
 	name    *textinput.Model
 	exts    *textinput.Model
+	src     *textinput.Model // string de conexao pra importar (tem senha)
 	focus   int
 	busy    bool
 	err     string
 	created *infraRow
 	list    []infraRow
 	done    string // aviso de exclusao feita
+
+	// importing e a importacao em andamento, pelo estado do core
+	importing *core.DBImport
 
 	// excluir: o nome do item aguardando confirmacao (digitar o nome)
 	delName  string
@@ -47,6 +52,9 @@ type infraRow struct {
 	secrets []string
 	apps    []string
 	size    string
+	// imported e a origem quando o database acabou de ser importado
+	imported string
+	dumpSize string
 }
 
 type (
@@ -78,6 +86,9 @@ func newDBPanel(api core.API, zones *zone.Manager, th theme) *dbPanel {
 	}
 	p.name = mk("")
 	p.exts = mk("ex: postgis (opcional)")
+	p.src = mk("opcional: postgres://...")
+	p.src.EchoMode = textinput.EchoPassword
+	p.src.CharLimit = 2048
 	p.delInput = mk("digite o nome")
 	p.setTheme(th)
 	return p
@@ -85,7 +96,7 @@ func newDBPanel(api core.API, zones *zone.Manager, th theme) *dbPanel {
 
 func (p *dbPanel) setTheme(th theme) {
 	p.th = th
-	for _, ti := range []*textinput.Model{p.name, p.exts, p.delInput} {
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.src, p.delInput} {
 		th.styleInput(ti)
 	}
 }
@@ -96,8 +107,11 @@ func (p *dbPanel) open() bool { return p.engine != "" }
 // de cada item da lista e a confirmacao aberta
 func (p *dbPanel) ids() []string {
 	ids := []string{"db-name", "db-create", "db-close"}
-	if p.engine == "postgres" {
-		ids = []string{"db-name", "db-exts", "db-create", "db-close"}
+	switch p.engine {
+	case "postgres":
+		ids = []string{"db-name", "db-exts", "db-src", "db-create", "db-close"}
+	case "mysql":
+		ids = []string{"db-name", "db-src", "db-create", "db-close"}
 	}
 	for _, d := range p.list {
 		ids = append(ids, "db-del:"+d.name)
@@ -120,6 +134,8 @@ func (p *dbPanel) input(id string) *textinput.Model {
 		return p.name
 	case "db-exts":
 		return p.exts
+	case "db-src":
+		return p.src
 	case "db-del-confirm":
 		return p.delInput
 	}
@@ -146,10 +162,11 @@ func (p *dbPanel) setFocus(i int) tea.Cmd {
 
 func (p *dbPanel) show(engine string) tea.Cmd {
 	p.engine, p.err, p.created, p.busy, p.list, p.done, p.delName = engine, "", nil, false, nil, "", ""
-	for _, ti := range []*textinput.Model{p.name, p.exts, p.delInput} {
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.src, p.delInput} {
 		ti.SetValue("")
 	}
 	p.name.Placeholder = "nome (ex: meu_app)"
+	p.src.Placeholder = "opcional: " + engine + "://usuario:senha@host/banco"
 	if p.buckets() {
 		p.name.Placeholder = "nome (ex: meu-app-arquivos)"
 	}
@@ -158,7 +175,8 @@ func (p *dbPanel) show(engine string) tea.Cmd {
 
 func (p *dbPanel) close() {
 	p.engine, p.delName = "", ""
-	for _, ti := range []*textinput.Model{p.name, p.exts, p.delInput} {
+	p.src.SetValue("") // tem senha: nao fica no campo depois de fechar
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.src, p.delInput} {
 		ti.Blur()
 	}
 }
@@ -171,7 +189,7 @@ func (p *dbPanel) listCmd() tea.Cmd {
 		if engine == "garage" {
 			list, err := p.api.Buckets(ctx)
 			for _, b := range list {
-				rows = append(rows, infraRow{b.Name, b.Secrets, b.Apps, cmpOrStr(b.Size, "?")})
+				rows = append(rows, infraRow{name: b.Name, secrets: b.Secrets, apps: b.Apps, size: cmpOrStr(b.Size, "?")})
 			}
 			return dbListMsg{engine, rows, err}
 		}
@@ -182,7 +200,7 @@ func (p *dbPanel) listCmd() tea.Cmd {
 				if d.Size != nil {
 					size = databases.HumanSize(*d.Size)
 				}
-				rows = append(rows, infraRow{d.Name, d.Secrets, d.Apps, size})
+				rows = append(rows, infraRow{name: d.Name, secrets: d.Secrets, apps: d.Apps, size: size})
 			}
 		}
 		return dbListMsg{engine, rows, err}
@@ -212,13 +230,17 @@ func (p *dbPanel) create() tea.Cmd {
 			return dbCreatedMsg{infraRow{name: info.Name, secrets: info.Secrets}, err}
 		}
 	}
-	req := core.DatabaseRequest{Engine: p.engine, Name: name}
+	req := core.DatabaseRequest{Engine: p.engine, Name: name, Source: strings.TrimSpace(p.src.Value())}
 	if p.engine == "postgres" {
 		req.Extensions = splitComma(p.exts.Value())
 	}
 	return func() tea.Msg {
 		info, err := p.api.CreateDatabase(context.Background(), req)
-		return dbCreatedMsg{infraRow{name: info.Name, secrets: info.Secrets}, err}
+		row := infraRow{name: info.Name, secrets: info.Secrets, imported: info.Imported}
+		if info.Imported != "" {
+			row.dumpSize = databases.HumanSize(info.ImportedBytes)
+		}
+		return dbCreatedMsg{row, err}
 	}
 }
 
@@ -283,7 +305,7 @@ func (p *dbPanel) update(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		p.created = &msg.row
-		for _, ti := range []*textinput.Model{p.name, p.exts} {
+		for _, ti := range []*textinput.Model{p.name, p.exts, p.src} {
 			ti.SetValue("")
 		}
 		return p.listCmd(), true
@@ -377,30 +399,43 @@ func (p *dbPanel) view(w, h int) string {
 	focusID := p.focusID()
 	var buttons []string
 	for _, id := range p.ids() {
-		if id != "db-name" && id != "db-exts" && id != "db-create" && id != "db-close" {
+		if id != "db-name" && id != "db-exts" && id != "db-src" && id != "db-create" && id != "db-close" {
 			continue // excluir: na lista e na confirmacao
 		}
 		focused := id == focusID
 		if ti := p.input(id); ti != nil {
-			label := map[string]string{"db-name": nameLabel, "db-exts": "Extensoes"}[id]
+			label := map[string]string{"db-name": nameLabel, "db-exts": "Extensoes", "db-src": "Importar de"}[id]
 			marker, ls := "  ", t.fg(t.text).Width(12)
 			if focused {
 				marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(12)
 			}
 			b.WriteString(p.zones.Mark(id, marker+ls.Render(label)+t.input(ti, 29)) + "\n")
+			if id == "db-src" {
+				b.WriteString(p.viewSource(w-6) + "\n")
+			}
 			continue
 		}
 		label := map[string]string{"db-create": "Criar", "db-close": "Fechar"}[id]
+		if id == "db-create" && strings.TrimSpace(p.src.Value()) != "" {
+			label = "Criar e importar"
+		}
 		k := btnNormal
 		if id == "db-close" {
 			k = btnNeutral
 		}
 		if p.busy && id == "db-create" {
 			k, label = btnOff, "Criando..."
+			if strings.TrimSpace(p.src.Value()) != "" {
+				label = "Importando..."
+			}
 		}
 		buttons = append(buttons, " ", p.zones.Mark(id, t.button(label, k, focused)))
 	}
 	b.WriteString("\n" + lipgloss.JoinHorizontal(lipgloss.Top, buttons...) + "\n")
+	if im := p.importing; im != nil && p.busy && im.Engine == p.engine {
+		b.WriteString("\n" + wrap.Foreground(t.warn).Render(fmt.Sprintf("Importando de %s: %s copiados. Pode sair da aba: a copia continua no daemon.",
+			im.Source, databases.HumanSize(im.Bytes))) + "\n")
+	}
 	if p.err != "" && p.delName == "" {
 		b.WriteString("\n" + wrap.Foreground(t.danger).Render(p.err) + "\n")
 	}
@@ -408,7 +443,11 @@ func (p *dbPanel) view(w, h int) string {
 		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render(p.done) + "\n")
 	}
 	if c := p.created; c != nil {
-		b.WriteString("\n" + t.fg(t.ok).Bold(true).Render(nameLabel+" "+c.name+" criado.") + "\n")
+		msg := nameLabel + " " + c.name + " criado."
+		if c.imported != "" {
+			msg = nameLabel + " " + c.name + " criado com o conteudo de " + c.imported + " (dump de " + c.dumpSize + ")."
+		}
+		b.WriteString("\n" + wrap.Foreground(t.ok).Bold(true).Render(msg) + "\n")
 		b.WriteString(wrap.Inherit(muted).Render("Ligue ao app em Apps -> Secrets -> "+link+": o app recebe os secrets "+
 			strings.Join(c.secrets, " e ")+".") + "\n")
 	}
@@ -443,6 +482,25 @@ func (p *dbPanel) view(w, h int) string {
 		}
 	}
 	return t.panel(true, w-2, h).MaxHeight(h + 2).Render(b.String())
+}
+
+// viewSource mostra, embaixo do campo Importar de, o que o cais entendeu da
+// string de conexao (sem a senha), ou por que nao entendeu.
+func (p *dbPanel) viewSource(w int) string {
+	t := p.th
+	raw := strings.TrimSpace(p.src.Value())
+	// alinhado com o campo, inclusive nas linhas quebradas
+	line := func(c color.Color, text string) string {
+		return t.fg(c).PaddingLeft(14).Width(w).Render(text)
+	}
+	if raw == "" {
+		return line(t.muted, "vazio cria o banco vazio")
+	}
+	s, err := databases.ParseSource(p.engine, raw)
+	if err != nil {
+		return line(t.danger, err.Error())
+	}
+	return line(t.ok, "copia de "+s.String())
 }
 
 // writeInfraRows e a tabela dos databases ou buckets: nome, secrets que o

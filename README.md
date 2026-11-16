@@ -171,6 +171,40 @@ acessa esse database. A senha fica guardada no cais e nao aparece na tela;
 `cais db list` mostra cada database com os secrets que o app recebe, o app
 ligado e o espaco ocupado.
 
+### Importar um banco de outro servidor
+
+Em vez de nascer vazio, o database pode nascer com o conteudo de um banco
+que ja existe em outro lugar (a VPS antiga, um RDS, o Supabase). No campo
+**Importar de** do Novo banco, ou pelo CLI:
+
+```sh
+cais db create postgres loja -import   # pede a string de conexao, sem eco
+echo "$URL" | cais db create mysql blog -import
+```
+
+```
+postgres://usuario:senha@host:5432/banco?sslmode=require
+mysql://usuario:senha@host:3306/banco
+```
+
+- O dump (`pg_dump`/`mysqldump`) roda dentro do container do banco do cais e
+  vai direto pro restore, sem passar pelo disco. A origem so e lida.
+- No Postgres o dump sai sem dono e sem GRANT e, no fim, tudo (schemas,
+  tabelas, sequences, views, funcoes, tipos) passa a ser do usuario do app.
+  Extensoes do dump sao criadas como superusuario (a imagem e a do PostGIS).
+- No MySQL o `DEFINER` das views, triggers e rotinas da origem e tirado (o
+  usuario de la nao existe aqui).
+- Se a copia falha (senha, rede, extensao que nao existe aqui), o database
+  novo e apagado: nada fica pela metade. Nome que ja existe na instancia sem
+  ter sido criado pelo cais e recusado.
+- A senha da origem vai pro dump pelo stdin: nao aparece no `ps`, no log nem
+  no estado. Senha com `@ : / #` pode ir como esta, sem codificar.
+- A origem tem que aceitar conexao vinda do IP desta VPS. Banco na propria
+  VPS: use o IP dela na rede do docker (ex: `172.17.0.1`), nao `localhost`.
+- O `pg_dump` do cais e o do Postgres 18: le servidores ate a versao 18.
+- Importar nao e oferecido pelo MCP: a string de conexao tem a senha da
+  origem, e ela nao passa pela IA.
+
 Depois ligue o database ao app (Apps -> Secrets -> Ligar banco, ou pelo CLI):
 
 ```sh

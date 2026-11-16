@@ -120,17 +120,32 @@ Exemplos:
   cais service garage off`},
 	}},
 	{title: "Bancos (no Postgres/MySQL da infra):", group: "db", cmds: []command{
-		{name: "db create", usage: "db create postgres|mysql <nome> [-extensions postgis]", short: "database e usuario com senha nova (guardada no cais)", long: `
+		{name: "db create", usage: "db create postgres|mysql <nome> [-extensions postgis] [-import]", short: "database e usuario com senha nova (vazio ou importado)", long: `
 Cria o database e um usuario de mesmo nome, que so acessa esse database. A
 senha fica guardada no cais e chega no app pelos secrets ao ligar o banco
 (cais app db). Nome: minusculas, numeros e _, ate 32.
 
+Com -import, o database novo ja nasce com o conteudo de um banco em outro
+servidor: o cais pede a string de conexao (sem eco; ou le do stdin) e copia
+tudo com pg_dump/mysqldump, de dentro do container do banco. No Postgres as
+tabelas passam a ser do usuario do app; no MySQL o DEFINER das views e
+triggers vira o do cais. Se a copia falhar, o database novo e apagado.
+
+  postgres://usuario:senha@host:5432/banco?sslmode=require
+  mysql://usuario:senha@host:3306/banco
+
+O servidor de origem tem que aceitar conexao vinda do IP desta VPS. A
+origem so e lida (nada muda nela). Banco no proprio servidor: use o IP dele
+na rede do docker (ex: 172.17.0.1), nao localhost.
+
 Flags:
   -extensions lista   extensoes do Postgres, separadas por virgula:
 ` + wrapList(databases.Extensions, 22, 78) + `
+  -import             importa de outro servidor (pede a string de conexao)
 
 Exemplos:
   cais db create postgres portal -extensions postgis
+  cais db create mysql estoque -import
   cais app db portal postgres/portal      # liga ao app`},
 		{name: "db list", usage: "db list", short: "databases criados pelo cais: secrets, espaco e app"},
 		{name: "db delete", usage: "db delete postgres|mysql <nome> [-yes]", short: "apaga o database e o usuario (nao pode estar ligado a app)", long: `

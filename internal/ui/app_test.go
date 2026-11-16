@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -54,6 +55,15 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 		},
 		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 		Exec:      fakeGarage,
+		// importacao de banco: o dump escreve um SQL curto, o restore engole
+		ExecStream: func(_ context.Context, _ string, stdin io.Reader, stdout io.Writer, args ...string) error {
+			if strings.Contains(strings.Join(args, " "), "_dump") {
+				_, err := io.WriteString(stdout, "CREATE TABLE t (id int);\n")
+				return err
+			}
+			_, err := io.Copy(io.Discard, stdin)
+			return err
+		},
 	})
 	return c, &ups, &pss
 }
@@ -530,5 +540,32 @@ func TestInfraExcluirBancoEBucket(t *testing.T) {
 	waitFor(t, m, "loja-fotos excluido.")
 	if list, _ := c.Buckets(ctx); len(list) != 0 {
 		t.Fatalf("bucket continua: %+v", list)
+	}
+}
+
+// Novo banco importado: o campo esconde a senha, a previa mostra a origem
+// sem ela, e o resultado diz de onde veio
+func TestInfraImportarBanco(t *testing.T) {
+	c, _, _ := testCore(t, okChecker)
+	setupDone(t, c, "postgres")
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Novo banco")
+	click(t, m, "newdb:postgres")
+	waitFor(t, m, "vazio cria o banco vazio")
+	typeIn(t, m, "db-name", "loja")
+	typeIn(t, m, "db-src", "mysql://antigo:S3gredo@db.antigo.com/loja")
+	waitFor(t, m, `de "mysql", mas o banco`)
+	m.db.src.SetValue("")
+	typeIn(t, m, "db-src", "postgres://antigo:S3gredo@db.antigo.com/loja")
+	waitFor(t, m, "copia de antigo@db.antigo.com:5432/loja")
+	waitFor(t, m, "Criar e importar")
+	if strings.Contains(screen(m), "S3gredo") {
+		t.Fatal("a senha da origem aparece na tela")
+	}
+	click(t, m, "db-create")
+	waitFor(t, m, "criado com o conteudo de antigo@db.antigo.com:5432/loja")
+	if v := m.db.src.Value(); v != "" {
+		t.Errorf("a string de conexao ficou no campo: %q", v)
 	}
 }

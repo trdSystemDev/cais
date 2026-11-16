@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
@@ -581,9 +582,21 @@ func runDB(args []string) error {
 	fs, socket := newFlags("db " + sub)
 	exts := fs.String("extensions", "", "extensoes do Postgres, separadas por virgula (ex: postgis)")
 	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
+	imp := fs.Bool("import", false, "create: importa de outro servidor (pede a string de conexao)")
 	pos := parseInterspersed(fs, args)
 	if sub != "create" && sub != "list" && sub != "delete" {
 		return groupError("db", sub)
+	}
+	// a string de conexao tem a senha da origem: nunca por argumento
+	var source string
+	if sub == "create" && *imp {
+		var err error
+		if source, err = readSecret("String de conexao do banco de origem: "); err != nil {
+			return err
+		}
+		if source == "" {
+			return errors.New("string de conexao vazia")
+		}
 	}
 	c, err := connect(*socket)
 	if err != nil {
@@ -595,13 +608,23 @@ func runDB(args []string) error {
 	switch sub {
 	case "create":
 		if len(pos) != 2 {
-			return errors.New("uso: cais db create postgres|mysql <nome> [-extensions postgis]")
+			return errors.New("uso: cais db create postgres|mysql <nome> [-extensions postgis] [-import]")
 		}
-		info, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: pos[0], Name: pos[1], Extensions: splitList(*exts)})
+		req := core.DatabaseRequest{Engine: pos[0], Name: pos[1], Extensions: splitList(*exts), Source: source}
+		var info core.DatabaseInfo
+		if source == "" {
+			info, err = c.CreateDatabase(ctx, req)
+		} else {
+			info, err = createImporting(ctx, c, req)
+		}
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Database %s criado no %s (host %s:%d, rede %s).\n", info.Name, info.Engine, info.Host, info.Port, info.Network)
+		if info.Imported != "" {
+			fmt.Printf("Database %s criado no %s com o conteudo de %s (dump de %s).\n", info.Name, info.Engine, info.Imported, databases.HumanSize(info.ImportedBytes))
+		} else {
+			fmt.Printf("Database %s criado no %s (host %s:%d, rede %s).\n", info.Name, info.Engine, info.Host, info.Port, info.Network)
+		}
 		fmt.Printf("Ligue ao app com: cais app db <app> %s/%s (o app recebe os secrets %s).\n", info.Engine, info.Name, strings.Join(info.Secrets, " e "))
 	case "delete":
 		if len(pos) != 2 {
@@ -630,6 +653,39 @@ func runDB(args []string) error {
 		w.Flush()
 	}
 	return nil
+}
+
+// createImporting cria o database importando de outro servidor e mostra o
+// andamento (quanto do dump ja foi copiado) enquanto espera.
+func createImporting(ctx context.Context, c *rpc.Client, req core.DatabaseRequest) (core.DatabaseInfo, error) {
+	states, unsubscribe, err := c.Subscribe(ctx)
+	if err != nil {
+		return core.DatabaseInfo{}, err
+	}
+	printed := make(chan struct{})
+	go func() {
+		defer close(printed)
+		var shown int64 = -1
+		var last time.Time
+		for st := range states {
+			im := st.Import
+			if im == nil || im.Engine != req.Engine || im.Name != req.Name {
+				continue
+			}
+			if shown < 0 {
+				fmt.Printf("Importando de %s...\n", im.Source)
+				shown = 0
+			}
+			if im.Bytes > shown && time.Since(last) >= 3*time.Second {
+				fmt.Printf("  %s copiados\n", databases.HumanSize(im.Bytes))
+				shown, last = im.Bytes, time.Now()
+			}
+		}
+	}()
+	info, err := c.CreateDatabase(ctx, req)
+	unsubscribe()
+	<-printed
+	return info, err
 }
 
 // dbSize e o espaco ocupado, ou ? se a instancia nao respondeu.

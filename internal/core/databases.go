@@ -21,6 +21,10 @@ type DatabaseRequest struct {
 	Name string `json:"name"`
 	// Extensions sao extensoes do Postgres criadas no database (postgis).
 	Extensions []string `json:"extensions,omitempty"`
+	// Source e a string de conexao de um banco pra importar (postgres://
+	// ou mysql://usuario:senha@host:porta/banco); vazio cria o database
+	// vazio. Tem a senha da origem: nunca vai pra log nem pro estado.
+	Source string `json:"source,omitempty"`
 }
 
 // DatabaseInfo e um database criado pelo cais. A senha fica guardada no
@@ -40,6 +44,10 @@ type DatabaseInfo struct {
 	Apps []string `json:"apps,omitempty"`
 	// Size e o espaco ocupado em bytes; nil se a instancia nao respondeu.
 	Size *int64 `json:"size,omitempty"`
+	// Imported e a origem (sem senha) quando o database veio de uma
+	// importacao, e ImportedBytes o tamanho do dump copiado.
+	Imported      string `json:"imported,omitempty"`
+	ImportedBytes int64  `json:"imported_bytes,omitempty"`
 }
 
 // dbCredentials e o usuario e a senha de um database criado pelo cais (o
@@ -94,7 +102,9 @@ func dbInfo(e databases.Engine, name string) DatabaseInfo {
 
 // CreateDatabase cria database e usuario com senha nova (o usuario so
 // acessa o proprio database). Nome que ja existe e recusado: nunca troca a
-// senha de um banco em uso sem pedir.
+// senha de um banco em uso sem pedir. Com req.Source, copia o banco de
+// origem pra dentro do database novo; se a copia falha, o database novo e
+// apagado (nada fica pela metade).
 func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (DatabaseInfo, error) {
 	e, err := databases.Get(req.Engine)
 	if err != nil {
@@ -103,6 +113,14 @@ func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (Databas
 	name := strings.TrimSpace(req.Name)
 	if err := databases.CheckIdentifier(name); err != nil {
 		return DatabaseInfo{}, err
+	}
+	var src *databases.Source
+	if strings.TrimSpace(req.Source) != "" {
+		s, err := databases.ParseSource(e.Name, req.Source)
+		if err != nil {
+			return DatabaseInfo{}, err
+		}
+		src = &s
 	}
 	cfg, err := config.Load(c.deps.ConfigPath)
 	if err != nil {
@@ -123,6 +141,15 @@ func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (Databas
 	} else if ok {
 		return DatabaseInfo{}, fmt.Errorf("o database %s ja existe no %s (a credencial esta na lista)", name, e.Name)
 	}
+	if src != nil {
+		// database com esse nome que o cais nao conhece (criado na mao): a
+		// importacao misturaria os dois
+		if sizes, err := databases.Sizes(ctx, c.deps.ExecInput, e); err != nil {
+			return DatabaseInfo{}, err
+		} else if _, ok := sizes[name]; ok {
+			return DatabaseInfo{}, fmt.Errorf("ja existe um database %s no %s que nao foi criado pelo cais: use outro nome", name, e.Name)
+		}
+	}
 	pw := secrets.Password()
 	if err := databases.Provision(ctx, c.deps.ExecInput, e, name, pw, req.Extensions); err != nil {
 		if strings.Contains(err.Error(), "is not available") {
@@ -130,10 +157,22 @@ func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (Databas
 		}
 		return DatabaseInfo{}, err
 	}
+	info := dbInfo(e, name)
+	if src != nil {
+		n, err := c.importDB(ctx, e, name, *src)
+		if err != nil {
+			// o database novo fica vazio ou pela metade: melhor nao existir
+			if derr := databases.Drop(context.WithoutCancel(ctx), c.deps.ExecInput, e, name); derr != nil {
+				err = fmt.Errorf("%w\n\n(e o database %s, que ficou pela metade, nao foi apagado: %v)", err, name, derr)
+			}
+			return DatabaseInfo{}, err
+		}
+		info.Imported, info.ImportedBytes = src.String(), n
+	}
 	if err := store.Put(secret, pw); err != nil {
 		return DatabaseInfo{}, fmt.Errorf("database criado, mas a senha nao foi guardada: %w", err)
 	}
-	return dbInfo(e, name), nil
+	return info, nil
 }
 
 // DeleteDatabase apaga o database, o usuario e a senha guardada. Recusa se

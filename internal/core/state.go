@@ -22,6 +22,19 @@ type State struct {
 	Infra       Infra        `json:"infra"`
 	Apps        Apps         `json:"apps"`
 	Backup      BackupStatus `json:"backup"`
+	// Import e a importacao de banco em andamento (nil: nenhuma).
+	Import *DBImport `json:"import,omitempty"`
+}
+
+// DBImport e o andamento de um banco sendo importado de outro servidor.
+type DBImport struct {
+	Engine string `json:"engine"`
+	Name   string `json:"name"`
+	// Source e a origem sem a senha (usuario@host:porta/banco).
+	Source    string    `json:"source"`
+	StartedAt time.Time `json:"started_at"`
+	// Bytes e quanto do dump ja foi copiado.
+	Bytes int64 `json:"bytes"`
 }
 
 // Infra e o estado das stacks base, como o docker ve.

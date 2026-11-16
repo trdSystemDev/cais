@@ -275,6 +275,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) onState(s core.State) tea.Cmd {
 	m.state = s
 	m.setup.onState(m.state)
+	m.db.importing = s.Import
 	appsCmd := m.apps.onState(m.state)
 	return tea.Batch(m.syncInfraLogs(false), appsCmd, m.syncAppLogs(false))
 }
