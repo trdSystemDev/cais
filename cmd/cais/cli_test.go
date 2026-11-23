@@ -160,6 +160,9 @@ func TestCLIComandos(t *testing.T) {
 			calls: []string{"AppLogs"}, out: []string{"linha 1"}},
 		{name: "app delete sem confirmar", args: "app delete loja", stdin: "outro\n", code: 1, noCalls: true},
 		{name: "app delete -yes", args: "app delete loja -yes", calls: []string{"DeleteApp"}},
+		{name: "app delete confirmado", args: "app delete loja", stdin: "loja\n", calls: []string{"DeleteApp"}, out: []string{"loja excluido"}},
+		{name: "db delete confirmado", args: "db delete postgres loja", stdin: "loja\n", calls: []string{"DeleteDatabase"}},
+		{name: "db delete sem confirmar", args: "db delete postgres loja", stdin: "outro\n", code: 1, noCalls: true},
 		{name: "app set", args: "app set loja -branch develop -auto off", setup: func(f *coretest.Recorder) { f.SetOut("CheckApps", loja()) }, calls: []string{"CheckApps", "UpdateApp"}},
 		{name: "app promote", args: "app promote hml -yes",
 			setup: func(f *coretest.Recorder) {

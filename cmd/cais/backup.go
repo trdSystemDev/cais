@@ -61,23 +61,7 @@ func (e *cli) runBackup(args []string) error {
 		st, _ := c.RefreshBackup(ctx)
 		e.printBackupStatus(st)
 	case "client":
-		if len(pos) != 1 {
-			return errors.New("uso: cais backup client <client-id> (Google: o secret e pedido sem eco ou lido do stdin)")
-		}
-		st, err := c.RefreshBackup(ctx)
-		if err != nil {
-			return err
-		}
-		secret := ""
-		if st.Provider != backup.ProviderOneDrive { // o app do Azure e publico: sem secret
-			if secret, err = e.readSecret("Client secret: "); err != nil {
-				return err
-			}
-		}
-		if err := c.SetBackupClient(ctx, pos[0], secret); err != nil {
-			return err
-		}
-		fmt.Fprintln(e.out, "Client do "+backup.ProviderName(st.Provider)+" gravado. Agora: cais backup login")
+		return e.backupClient(ctx, c, pos)
 	case "login":
 		return e.backupLogin(ctx, c)
 	case "logout":
@@ -87,23 +71,7 @@ func (e *cli) runBackup(args []string) error {
 		}
 		fmt.Fprintln(e.out, backup.ProviderName(st.Provider)+" desconectado (os backups que ja estao la ficam).")
 	case "key":
-		st, err := c.RefreshBackup(ctx)
-		if err != nil {
-			return err
-		}
-		if st.Recipient != "" && !*yes {
-			if err := e.confirmName(false, "trocar", "Ja existe uma chave. Os backups antigos continuam abrindo so com a chave privada antiga."); err != nil {
-				return err
-			}
-		}
-		priv, err := c.NewBackupKey(ctx)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(e.out, "Chave privada do backup (guarde num gerenciador de senhas; ela NAO fica na VPS e sem ela nenhum backup abre):")
-		fmt.Fprintln(e.out)
-		fmt.Fprintln(e.out, priv)
-		fmt.Fprintln(e.out)
+		return e.backupKey(ctx, c, *yes)
 	case "schedule":
 		if len(pos) != 1 {
 			return errors.New("uso: cais backup schedule HH:MM|off [-days 30]")
@@ -118,59 +86,120 @@ func (e *cli) runBackup(args []string) error {
 		st, _ := c.RefreshBackup(ctx)
 		e.printBackupStatus(st)
 	case "now":
-		return e.withProgress(c, func(ctx context.Context) error {
-			run, err := c.RunBackup(ctx)
-			if run.File != "" && err == nil {
-				fmt.Fprintf(e.out, "Backup %s no %s (%s, %d databases, %d arquivos)", run.File, backup.ProviderName(run.Provider), databases.HumanSize(run.Size), run.Databases, run.Files)
-				if run.Removed > 0 {
-					fmt.Fprintf(e.out, "; %d backups velhos apagados", run.Removed)
-				}
-				fmt.Fprintln(e.out, ".")
-			}
-			return err
-		})
+		return e.backupNow(c)
 	case "files":
-		files, err := c.BackupFiles(ctx)
-		if err != nil {
-			return err
-		}
-		if len(files) == 0 {
-			st, _ := c.RefreshBackup(ctx)
-			fmt.Fprintf(e.out, "Nenhum backup no %s ainda. Faca um com: cais backup now\n", backup.ProviderName(st.Provider))
-			return nil
-		}
-		w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "BACKUP\tTAMANHO\tCRIADO")
-		for _, f := range files {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", f.Name, databases.HumanSize(f.Size), f.Created.Local().Format("02/01/2006 15:04"))
-		}
-		w.Flush()
+		return e.backupFiles(ctx, c)
 	case "restore":
-		if len(pos) < 1 {
-			return errors.New("uso: cais backup restore <backup> -key <arquivo> [engine/database ...]")
-		}
-		identity, err := e.readKey(*keyFile)
-		if err != nil {
-			return err
-		}
-		req := core.RestoreRequest{File: pos[0], Identity: identity, Databases: pos[1:]}
-		if len(req.Databases) > 0 && !*yes {
-			if err := e.confirmName(false, "restaurar", "Restaurar apaga o conteudo atual de "+strings.Join(req.Databases, ", ")+
-				" (as conexoes abertas caem) e poe o do backup no lugar."); err != nil {
-				return err
-			}
-		}
-		res, err := c.RestoreBackup(ctx, req)
-		if err != nil {
-			return err
-		}
-		if len(req.Databases) == 0 {
-			fmt.Fprintln(e.out, "O backup tem: "+strings.Join(res.Available, ", "))
-			fmt.Fprintln(e.out, "Restaure com: cais backup restore "+req.File+" -key <arquivo> engine/database ...")
-			return nil
-		}
-		fmt.Fprintln(e.out, "Restaurado: "+strings.Join(res.Restored, ", "))
+		return e.backupRestore(ctx, c, pos, *keyFile, *yes)
 	}
+	return nil
+}
+
+// backupClient grava o client do destino (o secret e pedido sem eco).
+func (e *cli) backupClient(ctx context.Context, c daemonAPI, pos []string) error {
+	if len(pos) != 1 {
+		return errors.New("uso: cais backup client <client-id> (Google: o secret e pedido sem eco ou lido do stdin)")
+	}
+	st, err := c.RefreshBackup(ctx)
+	if err != nil {
+		return err
+	}
+	secret := ""
+	if st.Provider != backup.ProviderOneDrive { // o app do Azure e publico: sem secret
+		if secret, err = e.readSecret("Client secret: "); err != nil {
+			return err
+		}
+	}
+	if err := c.SetBackupClient(ctx, pos[0], secret); err != nil {
+		return err
+	}
+	fmt.Fprintln(e.out, "Client do "+backup.ProviderName(st.Provider)+" gravado. Agora: cais backup login")
+	return nil
+}
+
+// backupKey gera a chave do backup e mostra a privada uma vez.
+func (e *cli) backupKey(ctx context.Context, c daemonAPI, yes bool) error {
+	st, err := c.RefreshBackup(ctx)
+	if err != nil {
+		return err
+	}
+	if st.Recipient != "" && !yes {
+		if err := e.confirmName(false, "trocar", "Ja existe uma chave. Os backups antigos continuam abrindo so com a chave privada antiga."); err != nil {
+			return err
+		}
+	}
+	priv, err := c.NewBackupKey(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(e.out, "Chave privada do backup (guarde num gerenciador de senhas; ela NAO fica na VPS e sem ela nenhum backup abre):")
+	fmt.Fprintln(e.out)
+	fmt.Fprintln(e.out, priv)
+	fmt.Fprintln(e.out)
+	return nil
+}
+
+// backupNow faz um backup agora, mostrando o andamento.
+func (e *cli) backupNow(c daemonAPI) error {
+	return e.withProgress(c, func(ctx context.Context) error {
+		run, err := c.RunBackup(ctx)
+		if run.File != "" && err == nil {
+			fmt.Fprintf(e.out, "Backup %s no %s (%s, %d databases, %d arquivos)", run.File, backup.ProviderName(run.Provider), databases.HumanSize(run.Size), run.Databases, run.Files)
+			if run.Removed > 0 {
+				fmt.Fprintf(e.out, "; %d backups velhos apagados", run.Removed)
+			}
+			fmt.Fprintln(e.out, ".")
+		}
+		return err
+	})
+}
+
+// backupFiles lista os backups no destino.
+func (e *cli) backupFiles(ctx context.Context, c daemonAPI) error {
+	files, err := c.BackupFiles(ctx)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		st, _ := c.RefreshBackup(ctx)
+		fmt.Fprintf(e.out, "Nenhum backup no %s ainda. Faca um com: cais backup now\n", backup.ProviderName(st.Provider))
+		return nil
+	}
+	w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "BACKUP\tTAMANHO\tCRIADO")
+	for _, f := range files {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", f.Name, databases.HumanSize(f.Size), f.Created.Local().Format("02/01/2006 15:04"))
+	}
+	w.Flush()
+	return nil
+}
+
+// backupRestore lista o conteudo de um backup ou restaura databases dele.
+func (e *cli) backupRestore(ctx context.Context, c daemonAPI, pos []string, keyFile string, yes bool) error {
+	if len(pos) < 1 {
+		return errors.New("uso: cais backup restore <backup> -key <arquivo> [engine/database ...]")
+	}
+	identity, err := e.readKey(keyFile)
+	if err != nil {
+		return err
+	}
+	req := core.RestoreRequest{File: pos[0], Identity: identity, Databases: pos[1:]}
+	if len(req.Databases) > 0 && !yes {
+		if err := e.confirmName(false, "restaurar", "Restaurar apaga o conteudo atual de "+strings.Join(req.Databases, ", ")+
+			" (as conexoes abertas caem) e poe o do backup no lugar."); err != nil {
+			return err
+		}
+	}
+	res, err := c.RestoreBackup(ctx, req)
+	if err != nil {
+		return err
+	}
+	if len(req.Databases) == 0 {
+		fmt.Fprintln(e.out, "O backup tem: "+strings.Join(res.Available, ", "))
+		fmt.Fprintln(e.out, "Restaure com: cais backup restore "+req.File+" -key <arquivo> engine/database ...")
+		return nil
+	}
+	fmt.Fprintln(e.out, "Restaurado: "+strings.Join(res.Restored, ", "))
 	return nil
 }
 

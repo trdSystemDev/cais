@@ -11,11 +11,8 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/trdSystemDev/cais/internal/apps"
-	"github.com/trdSystemDev/cais/internal/core"
-	"github.com/trdSystemDev/cais/internal/databases"
 	"github.com/trdSystemDev/cais/internal/github"
 )
 
@@ -145,48 +142,11 @@ func (e *cli) runApp(args []string) error {
 
 	switch sub {
 	case "create":
-		repo, err := github.ParseRepo(arg(1))
-		if err != nil {
-			return err
-		}
-		a, err := c.CreateApp(ctx, apps.App{Name: name, Repo: repo.String(), Branch: *branch, Compose: *composeFile,
-			PromoteTo: *promoteTo, AutoDeploy: autoOn != nil && *autoOn})
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(e.out, "App %s criado (github.com/%s, compose %s).\n", a.Name, a.Repo, a.ComposeFile())
-		if a.PromoteTo != "" {
-			fmt.Fprintf(e.out, "Homologacao de %s: valide aqui e promova com: cais app promote %s\n", a.PromoteTo, a.Name)
-		}
-		if a.AutoDeploy {
-			fmt.Fprintf(e.out, "Deploy automatico a cada commit na branch %s.\n", cmpOr(a.Branch, "principal"))
-		}
-		fmt.Fprintln(e.out)
-		fmt.Fprintf(e.out, "Modelo de compose com labels, redes e secrets: cais app guide %s\n", a.Name)
-		fmt.Fprintf(e.out, "Variaveis: cais app env %s VAR=valor ...   Secrets: cais app secret %s <nome>\n", a.Name, a.Name)
-		fmt.Fprintf(e.out, "Deploy: cais app deploy %s\n", a.Name)
+		return e.appCreate(ctx, c, name, arg(1), apps.App{Branch: *branch, Compose: *composeFile, PromoteTo: *promoteTo, AutoDeploy: autoOn != nil && *autoOn})
 	case "deploy":
-		fmt.Fprintf(e.out, "Deploy de %s: baixando o codigo, build (a versao atual continua no ar) e up...\n", name)
-		res, err := c.DeployApp(ctx, name, *ref)
-		for _, w := range res.Warnings {
-			fmt.Fprintf(e.out, "  aviso: %s\n", w)
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(e.out, "%s no ar no commit %s.\n", name, short(res.Commit))
+		return e.appDeploy(ctx, c, name, *ref)
 	case "rollback":
-		fmt.Fprintf(e.out, "Voltando %s pra %s (imagens guardadas quando existem, sem queda)...\n", name, cmpOr(arg(1), "o deploy anterior"))
-		res, err := c.RollbackApp(ctx, name, arg(1))
-		if err != nil {
-			return err
-		}
-		how := "com as imagens guardadas"
-		if !res.Images {
-			how = "com build (as imagens desse commit nao estavam guardadas)"
-		}
-		fmt.Fprintf(e.out, "%s no ar no commit %s, %s.\n", name, short(res.Commit), how)
-		fmt.Fprintln(e.out, "Variaveis e secrets sao os de agora. O deploy automatico (se ligado) espera um commit novo na branch.")
+		return e.appRollback(ctx, c, name, arg(1))
 	case "history":
 		return e.appHistory(ctx, c, name)
 	case "promote":
@@ -202,20 +162,7 @@ func (e *cli) runApp(args []string) error {
 	case "env":
 		return e.appEnv(ctx, c, name, pos[1:], splitList(*unset), *importEnv)
 	case "secrets":
-		list, err := c.AppSecrets(ctx, name)
-		if err != nil {
-			return err
-		}
-		if len(list) == 0 {
-			fmt.Fprintf(e.out, "%s sem secrets.\n", name)
-		}
-		for _, s := range list {
-			extra := ""
-			if s.Infra != "" {
-				extra = "  credencial de " + s.Infra + " (gravada pelo cais)"
-			}
-			fmt.Fprintf(e.out, "  %s  (${CAIS_SECRETS}/%s)%s\n", s.Name, s.Name, extra)
-		}
+		return e.appSecrets(ctx, c, name)
 	case "secret":
 		value, err := e.readSecret("Valor de " + arg(1) + ": ")
 		if err != nil {
@@ -240,22 +187,7 @@ func (e *cli) runApp(args []string) error {
 	case "bucket":
 		return e.appBucket(ctx, c, name, pos[1:])
 	case "delete":
-		what := "containers, imagens, codigo, variaveis e secrets"
-		if *volumes {
-			what += " e os VOLUMES (dados)"
-		}
-		if !*yes {
-			fmt.Fprintf(e.out, "Excluir %s apaga %s. O database da infra fica.\nDigite o nome do app pra confirmar: ", name, what)
-			var typed string
-			fmt.Scanln(&typed)
-			if strings.TrimSpace(typed) != name {
-				return errors.New("nome diferente: nada foi apagado")
-			}
-		}
-		if err := c.DeleteApp(ctx, name, *volumes); err != nil {
-			return err
-		}
-		fmt.Fprintf(e.out, "%s excluido.\n", name)
+		return e.appDelete(ctx, c, name, *volumes, *yes)
 	case "logs":
 		out, err := c.AppLogs(ctx, name, arg(1))
 		if err != nil {
@@ -263,6 +195,101 @@ func (e *cli) runApp(args []string) error {
 		}
 		fmt.Fprint(e.out, out)
 	}
+	return nil
+}
+
+// appCreate cadastra o app e mostra os proximos passos.
+func (e *cli) appCreate(ctx context.Context, c daemonAPI, name, repoArg string, base apps.App) error {
+	repo, err := github.ParseRepo(repoArg)
+	if err != nil {
+		return err
+	}
+	base.Name, base.Repo = name, repo.String()
+	a, err := c.CreateApp(ctx, base)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.out, "App %s criado (github.com/%s, compose %s).\n", a.Name, a.Repo, a.ComposeFile())
+	if a.PromoteTo != "" {
+		fmt.Fprintf(e.out, "Homologacao de %s: valide aqui e promova com: cais app promote %s\n", a.PromoteTo, a.Name)
+	}
+	if a.AutoDeploy {
+		fmt.Fprintf(e.out, "Deploy automatico a cada commit na branch %s.\n", cmpOr(a.Branch, "principal"))
+	}
+	fmt.Fprintln(e.out)
+	fmt.Fprintf(e.out, "Modelo de compose com labels, redes e secrets: cais app guide %s\n", a.Name)
+	fmt.Fprintf(e.out, "Variaveis: cais app env %s VAR=valor ...   Secrets: cais app secret %s <nome>\n", a.Name, a.Name)
+	fmt.Fprintf(e.out, "Deploy: cais app deploy %s\n", a.Name)
+	return nil
+}
+
+// appDeploy faz o deploy e mostra os avisos do compose.
+func (e *cli) appDeploy(ctx context.Context, c daemonAPI, name, ref string) error {
+	fmt.Fprintf(e.out, "Deploy de %s: baixando o codigo, build (a versao atual continua no ar) e up...\n", name)
+	res, err := c.DeployApp(ctx, name, ref)
+	for _, w := range res.Warnings {
+		fmt.Fprintf(e.out, "  aviso: %s\n", w)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.out, "%s no ar no commit %s.\n", name, short(res.Commit))
+	return nil
+}
+
+// appRollback volta pra um deploy anterior.
+func (e *cli) appRollback(ctx context.Context, c daemonAPI, name, commit string) error {
+	fmt.Fprintf(e.out, "Voltando %s pra %s (imagens guardadas quando existem, sem queda)...\n", name, cmpOr(commit, "o deploy anterior"))
+	res, err := c.RollbackApp(ctx, name, commit)
+	if err != nil {
+		return err
+	}
+	how := "com as imagens guardadas"
+	if !res.Images {
+		how = "com build (as imagens desse commit nao estavam guardadas)"
+	}
+	fmt.Fprintf(e.out, "%s no ar no commit %s, %s.\n", name, short(res.Commit), how)
+	fmt.Fprintln(e.out, "Variaveis e secrets sao os de agora. O deploy automatico (se ligado) espera um commit novo na branch.")
+	return nil
+}
+
+// appSecrets lista os secrets do app (so nomes).
+func (e *cli) appSecrets(ctx context.Context, c daemonAPI, name string) error {
+	list, err := c.AppSecrets(ctx, name)
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		fmt.Fprintf(e.out, "%s sem secrets.\n", name)
+	}
+	for _, s := range list {
+		extra := ""
+		if s.Infra != "" {
+			extra = "  credencial de " + s.Infra + " (gravada pelo cais)"
+		}
+		fmt.Fprintf(e.out, "  %s  (${CAIS_SECRETS}/%s)%s\n", s.Name, s.Name, extra)
+	}
+	return nil
+}
+
+// appDelete exclui o app, pedindo o nome antes (sem -yes).
+func (e *cli) appDelete(ctx context.Context, c daemonAPI, name string, volumes, yes bool) error {
+	what := "containers, imagens, codigo, variaveis e secrets"
+	if volumes {
+		what += " e os VOLUMES (dados)"
+	}
+	if !yes {
+		fmt.Fprintf(e.out, "Excluir %s apaga %s. O database da infra fica.\nDigite o nome do app pra confirmar: ", name, what)
+		var typed string
+		fmt.Fscanln(e.in, &typed)
+		if strings.TrimSpace(typed) != name {
+			return errors.New("nome diferente: nada foi apagado")
+		}
+	}
+	if err := c.DeleteApp(ctx, name, volumes); err != nil {
+		return err
+	}
+	fmt.Fprintf(e.out, "%s excluido.\n", name)
 	return nil
 }
 
@@ -517,196 +544,11 @@ func (e *cli) confirmName(yes bool, name, warning string) error {
 	}
 	fmt.Fprintf(e.out, "%s\nDigite %s pra confirmar: ", warning, name)
 	var typed string
-	fmt.Scanln(&typed)
+	fmt.Fscanln(e.in, &typed)
 	if strings.TrimSpace(typed) != name {
 		return errors.New("nome diferente: nada foi apagado")
 	}
 	return nil
-}
-
-// runBucket cria, lista e exclui buckets no Garage da infra.
-func (e *cli) runBucket(args []string) error {
-	sub, args := subcommand(args)
-	fs, socket := e.newFlags("bucket " + sub)
-	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
-	pos, err := e.parseInterspersed(fs, args)
-	if err != nil {
-		return err
-	}
-	if sub != "create" && sub != "list" && sub != "delete" {
-		return groupError("bucket", sub)
-	}
-	c, err := e.connect(*socket)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	ctx := context.Background()
-
-	switch sub {
-	case "create":
-		if len(pos) != 1 {
-			return errors.New("uso: cais bucket create <nome>")
-		}
-		info, err := c.CreateBucket(ctx, pos[0])
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(e.out, "Bucket %s criado (endpoint %s, regiao %s, path-style, rede %s).\n", info.Name, info.Endpoint, info.Region, info.Network)
-		fmt.Fprintf(e.out, "Ligue ao app com: cais app bucket <app> %s (o app recebe os secrets %s).\n", info.Name, strings.Join(info.Secrets, " e "))
-		fmt.Fprintln(e.out, "Atencao: os arquivos dos buckets nao entram no backup do cais.")
-	case "delete":
-		if len(pos) != 1 {
-			return errors.New("uso: cais bucket delete <nome> [-yes]")
-		}
-		if err := e.confirmName(*yes, pos[0], "Excluir o bucket "+pos[0]+" apaga o bucket e a chave dele (o Garage so exclui bucket vazio). Nao tem volta."); err != nil {
-			return err
-		}
-		if err := c.DeleteBucket(ctx, pos[0]); err != nil {
-			return err
-		}
-		fmt.Fprintf(e.out, "Bucket %s excluido.\n", pos[0])
-	case "list":
-		list, err := c.Buckets(ctx)
-		if err != nil {
-			return err
-		}
-		if len(list) == 0 {
-			fmt.Fprintln(e.out, "Nenhum bucket criado pelo cais. Crie com: cais bucket create <nome>")
-			return nil
-		}
-		w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "BUCKET\tSECRETS\tESPACO\tAPP")
-		for _, b := range list {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, strings.Join(b.Secrets, ", "), cmpOr(b.Size, "?"), cmpOr(strings.Join(b.Apps, ", "), "-"))
-		}
-		w.Flush()
-		fmt.Fprintln(e.out, "\nAtencao: os arquivos dos buckets nao entram no backup do cais.")
-	}
-	return nil
-}
-
-// runDB cria e lista bancos na infra.
-func (e *cli) runDB(args []string) error {
-	sub, args := subcommand(args)
-	fs, socket := e.newFlags("db " + sub)
-	exts := fs.String("extensions", "", "extensoes do Postgres, separadas por virgula (ex: postgis)")
-	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
-	imp := fs.Bool("import", false, "create: importa de outro servidor (pede a string de conexao)")
-	pos, err := e.parseInterspersed(fs, args)
-	if err != nil {
-		return err
-	}
-	if sub != "create" && sub != "list" && sub != "delete" {
-		return groupError("db", sub)
-	}
-	// a string de conexao tem a senha da origem: nunca por argumento
-	var source string
-	if sub == "create" && *imp {
-		var err error
-		if source, err = e.readSecret("String de conexao do banco de origem: "); err != nil {
-			return err
-		}
-		if source == "" {
-			return errors.New("string de conexao vazia")
-		}
-	}
-	c, err := e.connect(*socket)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	ctx := context.Background()
-
-	switch sub {
-	case "create":
-		if len(pos) != 2 {
-			return errors.New("uso: cais db create postgres|mysql <nome> [-extensions postgis] [-import]")
-		}
-		req := core.DatabaseRequest{Engine: pos[0], Name: pos[1], Extensions: splitList(*exts), Source: source}
-		var info core.DatabaseInfo
-		if source == "" {
-			info, err = c.CreateDatabase(ctx, req)
-		} else {
-			info, err = e.createImporting(ctx, c, req)
-		}
-		if err != nil {
-			return err
-		}
-		if info.Imported != "" {
-			fmt.Fprintf(e.out, "Database %s criado no %s com o conteudo de %s (dump de %s).\n", info.Name, info.Engine, info.Imported, databases.HumanSize(info.ImportedBytes))
-		} else {
-			fmt.Fprintf(e.out, "Database %s criado no %s (host %s:%d, rede %s).\n", info.Name, info.Engine, info.Host, info.Port, info.Network)
-		}
-		fmt.Fprintf(e.out, "Ligue ao app com: cais app db <app> %s/%s (o app recebe os secrets %s).\n", info.Engine, info.Name, strings.Join(info.Secrets, " e "))
-	case "delete":
-		if len(pos) != 2 {
-			return errors.New("uso: cais db delete postgres|mysql <nome> [-yes]")
-		}
-		if err := e.confirmName(*yes, pos[1], "Excluir o database "+pos[0]+"/"+pos[1]+" apaga todos os dados dele e o usuario. Nao tem volta."); err != nil {
-			return err
-		}
-		if err := c.DeleteDatabase(ctx, pos[0], pos[1]); err != nil {
-			return err
-		}
-		fmt.Fprintf(e.out, "Database %s/%s excluido.\n", pos[0], pos[1])
-	case "list":
-		list, err := c.Databases(ctx)
-		if err != nil {
-			return err
-		}
-		if len(list) == 0 {
-			fmt.Fprintln(e.out, "Nenhum database criado pelo cais. Crie com: cais db create postgres <nome>")
-		}
-		w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "DATABASE\tSECRETS\tESPACO\tAPP")
-		for _, d := range list {
-			fmt.Fprintf(w, "%s/%s\t%s\t%s\t%s\n", d.Engine, d.Name, strings.Join(d.Secrets, ", "), dbSize(d), cmpOr(strings.Join(d.Apps, ", "), "-"))
-		}
-		w.Flush()
-	}
-	return nil
-}
-
-// createImporting cria o database importando de outro servidor e mostra o
-// andamento (quanto do dump ja foi copiado) enquanto espera.
-func (e *cli) createImporting(ctx context.Context, c daemonAPI, req core.DatabaseRequest) (core.DatabaseInfo, error) {
-	states, unsubscribe, err := c.Subscribe(ctx)
-	if err != nil {
-		return core.DatabaseInfo{}, err
-	}
-	printed := make(chan struct{})
-	go func() {
-		defer close(printed)
-		var shown int64 = -1
-		var last time.Time
-		for st := range states {
-			im := st.Import
-			if im == nil || im.Engine != req.Engine || im.Name != req.Name {
-				continue
-			}
-			if shown < 0 {
-				fmt.Fprintf(e.out, "Importando de %s...\n", im.Source)
-				shown = 0
-			}
-			if im.Bytes > shown && time.Since(last) >= 3*time.Second {
-				fmt.Fprintf(e.out, "  %s copiados\n", databases.HumanSize(im.Bytes))
-				shown, last = im.Bytes, time.Now()
-			}
-		}
-	}()
-	info, err := c.CreateDatabase(ctx, req)
-	unsubscribe()
-	<-printed
-	return info, err
-}
-
-// dbSize e o espaco ocupado, ou ? se a instancia nao respondeu.
-func dbSize(d core.DatabaseInfo) string {
-	if d.Size == nil {
-		return "?"
-	}
-	return databases.HumanSize(*d.Size)
 }
 
 func cmpOr(a, b string) string {
