@@ -17,13 +17,14 @@ import (
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/databases"
 	"github.com/trdSystemDev/cais/internal/github"
-	"github.com/trdSystemDev/cais/internal/rpc"
 )
 
-func runApps(args []string) error {
-	fs, socket := newFlags("apps")
-	fs.Parse(args)
-	c, err := connect(*socket)
+func (e *cli) runApps(args []string) error {
+	fs, socket := e.newFlags("apps")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -37,10 +38,10 @@ func runApps(args []string) error {
 		return errors.New(list.Error)
 	}
 	if len(list.List) == 0 {
-		fmt.Println("Nenhum app. Crie com: cais app create <nome> <dono/repo>")
+		fmt.Fprintln(e.out, "Nenhum app. Crie com: cais app create <nome> <dono/repo>")
 		return nil
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "APP\tREPOSITORIO\tDEPLOY\tCONTAINERS\tNO AR\tULTIMO DEPLOY")
 	for _, a := range list.List {
 		running := 0
@@ -96,9 +97,9 @@ func short(commit string) string {
 	return commit
 }
 
-func runApp(args []string) error {
+func (e *cli) runApp(args []string) error {
 	sub, args := subcommand(args)
-	fs, socket := newFlags("app " + sub)
+	fs, socket := e.newFlags("app " + sub)
 	branch := fs.String("branch", "", "branch do deploy (padrao: a principal do repositorio)")
 	composeFile := fs.String("compose", "", "compose de producao, a partir da raiz (padrao docker-compose.yml)")
 	ref := fs.String("ref", "", "branch ou commit do deploy (padrao: o mais novo da branch do app)")
@@ -108,7 +109,10 @@ func runApp(args []string) error {
 	yes := fs.Bool("yes", false, "delete: nao pede confirmacao; promote: aceita voltar a producao pra um commit mais velho")
 	promoteTo := fs.String("promote-to", "", "create/set: o app e homologacao deste (a producao); set: off desfaz")
 	auto := fs.String("auto", "", "create/set: deploy automatico a cada commit na branch (on ou off)")
-	pos := parseInterspersed(fs, args)
+	pos, err := e.parseInterspersed(fs, args)
+	if err != nil {
+		return err
+	}
 	arg := func(i int) string {
 		if i < len(pos) {
 			return pos[i]
@@ -132,7 +136,7 @@ func runApp(args []string) error {
 		return err
 	}
 
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -150,29 +154,29 @@ func runApp(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("App %s criado (github.com/%s, compose %s).\n", a.Name, a.Repo, a.ComposeFile())
+		fmt.Fprintf(e.out, "App %s criado (github.com/%s, compose %s).\n", a.Name, a.Repo, a.ComposeFile())
 		if a.PromoteTo != "" {
-			fmt.Printf("Homologacao de %s: valide aqui e promova com: cais app promote %s\n", a.PromoteTo, a.Name)
+			fmt.Fprintf(e.out, "Homologacao de %s: valide aqui e promova com: cais app promote %s\n", a.PromoteTo, a.Name)
 		}
 		if a.AutoDeploy {
-			fmt.Printf("Deploy automatico a cada commit na branch %s.\n", cmpOr(a.Branch, "principal"))
+			fmt.Fprintf(e.out, "Deploy automatico a cada commit na branch %s.\n", cmpOr(a.Branch, "principal"))
 		}
-		fmt.Println()
-		fmt.Printf("Modelo de compose com labels, redes e secrets: cais app guide %s\n", a.Name)
-		fmt.Printf("Variaveis: cais app env %s VAR=valor ...   Secrets: cais app secret %s <nome>\n", a.Name, a.Name)
-		fmt.Printf("Deploy: cais app deploy %s\n", a.Name)
+		fmt.Fprintln(e.out)
+		fmt.Fprintf(e.out, "Modelo de compose com labels, redes e secrets: cais app guide %s\n", a.Name)
+		fmt.Fprintf(e.out, "Variaveis: cais app env %s VAR=valor ...   Secrets: cais app secret %s <nome>\n", a.Name, a.Name)
+		fmt.Fprintf(e.out, "Deploy: cais app deploy %s\n", a.Name)
 	case "deploy":
-		fmt.Printf("Deploy de %s: baixando o codigo, build (a versao atual continua no ar) e up...\n", name)
+		fmt.Fprintf(e.out, "Deploy de %s: baixando o codigo, build (a versao atual continua no ar) e up...\n", name)
 		res, err := c.DeployApp(ctx, name, *ref)
 		for _, w := range res.Warnings {
-			fmt.Printf("  aviso: %s\n", w)
+			fmt.Fprintf(e.out, "  aviso: %s\n", w)
 		}
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s no ar no commit %s.\n", name, short(res.Commit))
+		fmt.Fprintf(e.out, "%s no ar no commit %s.\n", name, short(res.Commit))
 	case "rollback":
-		fmt.Printf("Voltando %s pra %s (imagens guardadas quando existem, sem queda)...\n", name, cmpOr(arg(1), "o deploy anterior"))
+		fmt.Fprintf(e.out, "Voltando %s pra %s (imagens guardadas quando existem, sem queda)...\n", name, cmpOr(arg(1), "o deploy anterior"))
 		res, err := c.RollbackApp(ctx, name, arg(1))
 		if err != nil {
 			return err
@@ -181,67 +185,67 @@ func runApp(args []string) error {
 		if !res.Images {
 			how = "com build (as imagens desse commit nao estavam guardadas)"
 		}
-		fmt.Printf("%s no ar no commit %s, %s.\n", name, short(res.Commit), how)
-		fmt.Println("Variaveis e secrets sao os de agora. O deploy automatico (se ligado) espera um commit novo na branch.")
+		fmt.Fprintf(e.out, "%s no ar no commit %s, %s.\n", name, short(res.Commit), how)
+		fmt.Fprintln(e.out, "Variaveis e secrets sao os de agora. O deploy automatico (se ligado) espera um commit novo na branch.")
 	case "history":
-		return appHistory(ctx, c, name)
+		return e.appHistory(ctx, c, name)
 	case "promote":
-		return appPromote(ctx, c, name, *yes)
+		return e.appPromote(ctx, c, name, *yes)
 	case "set":
-		return appSet(ctx, c, name, fs, *promoteTo, autoOn)
+		return e.appSet(ctx, c, name, fs, *promoteTo, autoOn)
 	case "guide":
 		text, err := c.AppGuide(ctx, name)
 		if err != nil {
 			return err
 		}
-		fmt.Print(text)
+		fmt.Fprint(e.out, text)
 	case "env":
-		return appEnv(ctx, c, name, pos[1:], splitList(*unset), *importEnv)
+		return e.appEnv(ctx, c, name, pos[1:], splitList(*unset), *importEnv)
 	case "secrets":
 		list, err := c.AppSecrets(ctx, name)
 		if err != nil {
 			return err
 		}
 		if len(list) == 0 {
-			fmt.Printf("%s sem secrets.\n", name)
+			fmt.Fprintf(e.out, "%s sem secrets.\n", name)
 		}
 		for _, s := range list {
 			extra := ""
 			if s.Infra != "" {
 				extra = "  credencial de " + s.Infra + " (gravada pelo cais)"
 			}
-			fmt.Printf("  %s  (${CAIS_SECRETS}/%s)%s\n", s.Name, s.Name, extra)
+			fmt.Fprintf(e.out, "  %s  (${CAIS_SECRETS}/%s)%s\n", s.Name, s.Name, extra)
 		}
 	case "secret":
-		value, err := readSecret("Valor de " + arg(1) + ": ")
+		value, err := e.readSecret("Valor de " + arg(1) + ": ")
 		if err != nil {
 			return err
 		}
 		if err := c.SetAppSecret(ctx, name, arg(1), value); err != nil {
 			return err
 		}
-		fmt.Printf("%s gravado em ${CAIS_SECRETS}/%s (vale no proximo deploy).\n", arg(1), arg(1))
+		fmt.Fprintf(e.out, "%s gravado em ${CAIS_SECRETS}/%s (vale no proximo deploy).\n", arg(1), arg(1))
 	case "restart":
 		if err := c.RestartApp(ctx, name, arg(1)); err != nil {
 			return err
 		}
-		fmt.Printf("%s reiniciado.\n", name)
+		fmt.Fprintf(e.out, "%s reiniciado.\n", name)
 	case "stop":
 		if err := c.StopApp(ctx, name); err != nil {
 			return err
 		}
-		fmt.Printf("%s parado. Volta com: cais app restart %s\n", name, name)
+		fmt.Fprintf(e.out, "%s parado. Volta com: cais app restart %s\n", name, name)
 	case "db":
-		return appDB(ctx, c, name, pos[1:])
+		return e.appDB(ctx, c, name, pos[1:])
 	case "bucket":
-		return appBucket(ctx, c, name, pos[1:])
+		return e.appBucket(ctx, c, name, pos[1:])
 	case "delete":
 		what := "containers, imagens, codigo, variaveis e secrets"
 		if *volumes {
 			what += " e os VOLUMES (dados)"
 		}
 		if !*yes {
-			fmt.Printf("Excluir %s apaga %s. O database da infra fica.\nDigite o nome do app pra confirmar: ", name, what)
+			fmt.Fprintf(e.out, "Excluir %s apaga %s. O database da infra fica.\nDigite o nome do app pra confirmar: ", name, what)
 			var typed string
 			fmt.Scanln(&typed)
 			if strings.TrimSpace(typed) != name {
@@ -251,13 +255,13 @@ func runApp(args []string) error {
 		if err := c.DeleteApp(ctx, name, *volumes); err != nil {
 			return err
 		}
-		fmt.Printf("%s excluido.\n", name)
+		fmt.Fprintf(e.out, "%s excluido.\n", name)
 	case "logs":
 		out, err := c.AppLogs(ctx, name, arg(1))
 		if err != nil {
 			return err
 		}
-		fmt.Print(out)
+		fmt.Fprint(e.out, out)
 	}
 	return nil
 }
@@ -279,7 +283,7 @@ func onOff(v string) (*bool, error) {
 
 // appPromote mostra o que a promocao faz e sobe na producao o commit
 // validado na homologacao.
-func appPromote(ctx context.Context, c *rpc.Client, name string, yes bool) error {
+func (e *cli) appPromote(ctx context.Context, c daemonAPI, name string, yes bool) error {
 	p, err := c.CheckPromotion(ctx, name)
 	if err != nil {
 		return err
@@ -288,28 +292,28 @@ func appPromote(ctx context.Context, c *rpc.Client, name string, yes bool) error
 	case apps.PromoteBlocked:
 		return errors.New(p.Reason)
 	case apps.PromoteSame:
-		fmt.Printf("Nada a promover: %s.\n", p.Reason)
+		fmt.Fprintf(e.out, "Nada a promover: %s.\n", p.Reason)
 		return nil
 	case apps.PromoteOlder:
 		if !yes {
 			return fmt.Errorf("%s.\nPra promover mesmo assim: cais app promote %s -yes", p.Reason, name)
 		}
 	}
-	fmt.Printf("Promovendo %s (validado em %s) pra %s: build com a versao atual no ar e up...\n", short(p.Deploy), name, p.To)
+	fmt.Fprintf(e.out, "Promovendo %s (validado em %s) pra %s: build com a versao atual no ar e up...\n", short(p.Deploy), name, p.To)
 	res, err := c.PromoteApp(ctx, name, yes)
 	for _, w := range res.Warnings {
-		fmt.Printf("  aviso: %s\n", w)
+		fmt.Fprintf(e.out, "  aviso: %s\n", w)
 	}
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s no ar no commit %s.\n", p.To, short(res.Commit))
+	fmt.Fprintf(e.out, "%s no ar no commit %s.\n", p.To, short(res.Commit))
 	return nil
 }
 
 // appSet troca branch, compose, producao e deploy automatico do app; so o
 // que veio nas flags muda.
-func appSet(ctx context.Context, c *rpc.Client, name string, fs *flag.FlagSet, promoteTo string, auto *bool) error {
+func (e *cli) appSet(ctx context.Context, c daemonAPI, name string, fs *flag.FlagSet, promoteTo string, auto *bool) error {
 	list, err := c.CheckApps(ctx)
 	if err != nil {
 		return err
@@ -350,23 +354,26 @@ func appSet(ctx context.Context, c *rpc.Client, name string, fs *flag.FlagSet, p
 	if a.AutoDeploy {
 		mode = "automatico a cada commit na " + cmpOr(a.Branch, "branch principal")
 	}
-	fmt.Printf("%s: branch %s, compose %s, deploy %s.\n", a.Name, cmpOr(a.Branch, "principal"), a.ComposeFile(), mode)
+	fmt.Fprintf(e.out, "%s: branch %s, compose %s, deploy %s.\n", a.Name, cmpOr(a.Branch, "principal"), a.ComposeFile(), mode)
 	if a.PromoteTo != "" {
-		fmt.Printf("Homologacao de %s (cais app promote %s).\n", a.PromoteTo, a.Name)
+		fmt.Fprintf(e.out, "Homologacao de %s (cais app promote %s).\n", a.PromoteTo, a.Name)
 	}
 	return nil
 }
 
 // appEnv mostra ou muda as variaveis do app. Sem mudancas, so mostra.
-func appEnv(ctx context.Context, c *rpc.Client, name string, set, unset []string, importFile string) error {
+func (e *cli) appEnv(ctx context.Context, c daemonAPI, name string, set, unset []string, importFile string) error {
 	env, err := c.AppEnv(ctx, name)
 	if err != nil {
 		return err
 	}
+	if env == nil { // app sem variaveis pode chegar como null no JSON
+		env = map[string]string{}
+	}
 	if importFile != "" {
 		var data []byte
 		if importFile == "-" {
-			data, err = io.ReadAll(os.Stdin)
+			data, err = io.ReadAll(e.in)
 		} else {
 			data, err = os.ReadFile(importFile)
 		}
@@ -386,10 +393,10 @@ func appEnv(ctx context.Context, c *rpc.Client, name string, set, unset []string
 		}
 		sort.Strings(keys)
 		if len(keys) == 0 {
-			fmt.Printf("%s sem variaveis.\n", name)
+			fmt.Fprintf(e.out, "%s sem variaveis.\n", name)
 		}
 		for _, k := range keys {
-			fmt.Printf("  %s=%s\n", k, env[k])
+			fmt.Fprintf(e.out, "  %s=%s\n", k, env[k])
 		}
 		return nil
 	}
@@ -406,13 +413,13 @@ func appEnv(ctx context.Context, c *rpc.Client, name string, set, unset []string
 	if err := c.SetAppEnv(ctx, name, env); err != nil {
 		return err
 	}
-	fmt.Printf("Variaveis de %s gravadas; valem no proximo deploy.\n", name)
+	fmt.Fprintf(e.out, "Variaveis de %s gravadas; valem no proximo deploy.\n", name)
 	return nil
 }
 
 // appDB mostra, liga ou desliga os bancos da infra do app:
 // cais app db <app> | <engine/nome> | off <engine/nome>
-func appDB(ctx context.Context, c *rpc.Client, app string, args []string) error {
+func (e *cli) appDB(ctx context.Context, c daemonAPI, app string, args []string) error {
 	parse := func(s string) (string, string, error) {
 		engine, name, ok := strings.Cut(s, "/")
 		if !ok || engine == "" || name == "" {
@@ -431,10 +438,10 @@ func appDB(ctx context.Context, c *rpc.Client, app string, args []string) error 
 				continue
 			}
 			if len(a.Databases) == 0 {
-				fmt.Printf("%s nao usa banco da infra. Ligue com: cais app db %s postgres/<database>\n", app, app)
+				fmt.Fprintf(e.out, "%s nao usa banco da infra. Ligue com: cais app db %s postgres/<database>\n", app, app)
 			}
 			for _, l := range a.Databases {
-				fmt.Printf("  %s  (secrets %s)\n", l.ID(), strings.Join(l.Secrets(), " e "))
+				fmt.Fprintf(e.out, "  %s  (secrets %s)\n", l.ID(), strings.Join(l.Secrets(), " e "))
 			}
 			return nil
 		}
@@ -447,7 +454,7 @@ func appDB(ctx context.Context, c *rpc.Client, app string, args []string) error 
 		if err := c.UnlinkAppDatabase(ctx, app, engine, name); err != nil {
 			return err
 		}
-		fmt.Printf("%s desligado do banco %s (o database e os dados ficam); vale no proximo deploy.\n", app, args[1])
+		fmt.Fprintf(e.out, "%s desligado do banco %s (o database e os dados ficam); vale no proximo deploy.\n", app, args[1])
 	case len(args) == 1:
 		engine, name, err := parse(args[0])
 		if err != nil {
@@ -457,7 +464,7 @@ func appDB(ctx context.Context, c *rpc.Client, app string, args []string) error 
 			return err
 		}
 		l := apps.DBLink{Engine: engine, Name: name}
-		fmt.Printf("%s ligado ao banco %s: secrets %s em ${CAIS_SECRETS}, valem no proximo deploy.\n", app, args[0], strings.Join(l.Secrets(), " e "))
+		fmt.Fprintf(e.out, "%s ligado ao banco %s: secrets %s em ${CAIS_SECRETS}, valem no proximo deploy.\n", app, args[0], strings.Join(l.Secrets(), " e "))
 	default:
 		return errors.New("uso: cais app db <app> [engine/nome | off engine/nome]")
 	}
@@ -466,7 +473,7 @@ func appDB(ctx context.Context, c *rpc.Client, app string, args []string) error 
 
 // appBucket mostra, liga ou desliga os buckets do Garage do app:
 // cais app bucket <app> | <bucket> | off <bucket>
-func appBucket(ctx context.Context, c *rpc.Client, app string, args []string) error {
+func (e *cli) appBucket(ctx context.Context, c daemonAPI, app string, args []string) error {
 	switch {
 	case len(args) == 0:
 		list, err := c.CheckApps(ctx)
@@ -478,10 +485,10 @@ func appBucket(ctx context.Context, c *rpc.Client, app string, args []string) er
 				continue
 			}
 			if len(a.Buckets) == 0 {
-				fmt.Printf("%s nao usa bucket do Garage. Ligue com: cais app bucket %s <bucket>\n", app, app)
+				fmt.Fprintf(e.out, "%s nao usa bucket do Garage. Ligue com: cais app bucket %s <bucket>\n", app, app)
 			}
 			for _, l := range a.Buckets {
-				fmt.Printf("  %s  (secrets %s)\n", l.Name, strings.Join(l.Secrets(), " e "))
+				fmt.Fprintf(e.out, "  %s  (secrets %s)\n", l.Name, strings.Join(l.Secrets(), " e "))
 			}
 			return nil
 		}
@@ -490,13 +497,13 @@ func appBucket(ctx context.Context, c *rpc.Client, app string, args []string) er
 		if err := c.UnlinkAppBucket(ctx, app, args[1]); err != nil {
 			return err
 		}
-		fmt.Printf("%s desligado do bucket %s (o bucket e os arquivos ficam); vale no proximo deploy.\n", app, args[1])
+		fmt.Fprintf(e.out, "%s desligado do bucket %s (o bucket e os arquivos ficam); vale no proximo deploy.\n", app, args[1])
 	case len(args) == 1:
 		if err := c.LinkAppBucket(ctx, app, args[0]); err != nil {
 			return err
 		}
 		l := apps.BucketLink{Name: args[0]}
-		fmt.Printf("%s ligado ao bucket %s: secrets %s em ${CAIS_SECRETS}, valem no proximo deploy.\n", app, args[0], strings.Join(l.Secrets(), " e "))
+		fmt.Fprintf(e.out, "%s ligado ao bucket %s: secrets %s em ${CAIS_SECRETS}, valem no proximo deploy.\n", app, args[0], strings.Join(l.Secrets(), " e "))
 	default:
 		return errors.New("uso: cais app bucket <app> [<bucket> | off <bucket>]")
 	}
@@ -504,11 +511,11 @@ func appBucket(ctx context.Context, c *rpc.Client, app string, args []string) er
 }
 
 // confirmName pede o nome digitado antes de apagar algo (pulado com -yes).
-func confirmName(yes bool, name, warning string) error {
+func (e *cli) confirmName(yes bool, name, warning string) error {
 	if yes {
 		return nil
 	}
-	fmt.Printf("%s\nDigite %s pra confirmar: ", warning, name)
+	fmt.Fprintf(e.out, "%s\nDigite %s pra confirmar: ", warning, name)
 	var typed string
 	fmt.Scanln(&typed)
 	if strings.TrimSpace(typed) != name {
@@ -518,15 +525,18 @@ func confirmName(yes bool, name, warning string) error {
 }
 
 // runBucket cria, lista e exclui buckets no Garage da infra.
-func runBucket(args []string) error {
+func (e *cli) runBucket(args []string) error {
 	sub, args := subcommand(args)
-	fs, socket := newFlags("bucket " + sub)
+	fs, socket := e.newFlags("bucket " + sub)
 	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
-	pos := parseInterspersed(fs, args)
+	pos, err := e.parseInterspersed(fs, args)
+	if err != nil {
+		return err
+	}
 	if sub != "create" && sub != "list" && sub != "delete" {
 		return groupError("bucket", sub)
 	}
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -542,48 +552,51 @@ func runBucket(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Bucket %s criado (endpoint %s, regiao %s, path-style, rede %s).\n", info.Name, info.Endpoint, info.Region, info.Network)
-		fmt.Printf("Ligue ao app com: cais app bucket <app> %s (o app recebe os secrets %s).\n", info.Name, strings.Join(info.Secrets, " e "))
-		fmt.Println("Atencao: os arquivos dos buckets nao entram no backup do cais.")
+		fmt.Fprintf(e.out, "Bucket %s criado (endpoint %s, regiao %s, path-style, rede %s).\n", info.Name, info.Endpoint, info.Region, info.Network)
+		fmt.Fprintf(e.out, "Ligue ao app com: cais app bucket <app> %s (o app recebe os secrets %s).\n", info.Name, strings.Join(info.Secrets, " e "))
+		fmt.Fprintln(e.out, "Atencao: os arquivos dos buckets nao entram no backup do cais.")
 	case "delete":
 		if len(pos) != 1 {
 			return errors.New("uso: cais bucket delete <nome> [-yes]")
 		}
-		if err := confirmName(*yes, pos[0], "Excluir o bucket "+pos[0]+" apaga o bucket e a chave dele (o Garage so exclui bucket vazio). Nao tem volta."); err != nil {
+		if err := e.confirmName(*yes, pos[0], "Excluir o bucket "+pos[0]+" apaga o bucket e a chave dele (o Garage so exclui bucket vazio). Nao tem volta."); err != nil {
 			return err
 		}
 		if err := c.DeleteBucket(ctx, pos[0]); err != nil {
 			return err
 		}
-		fmt.Printf("Bucket %s excluido.\n", pos[0])
+		fmt.Fprintf(e.out, "Bucket %s excluido.\n", pos[0])
 	case "list":
 		list, err := c.Buckets(ctx)
 		if err != nil {
 			return err
 		}
 		if len(list) == 0 {
-			fmt.Println("Nenhum bucket criado pelo cais. Crie com: cais bucket create <nome>")
+			fmt.Fprintln(e.out, "Nenhum bucket criado pelo cais. Crie com: cais bucket create <nome>")
 			return nil
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "BUCKET\tSECRETS\tESPACO\tAPP")
 		for _, b := range list {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, strings.Join(b.Secrets, ", "), cmpOr(b.Size, "?"), cmpOr(strings.Join(b.Apps, ", "), "-"))
 		}
 		w.Flush()
-		fmt.Println("\nAtencao: os arquivos dos buckets nao entram no backup do cais.")
+		fmt.Fprintln(e.out, "\nAtencao: os arquivos dos buckets nao entram no backup do cais.")
 	}
 	return nil
 }
 
 // runDB cria e lista bancos na infra.
-func runDB(args []string) error {
+func (e *cli) runDB(args []string) error {
 	sub, args := subcommand(args)
-	fs, socket := newFlags("db " + sub)
+	fs, socket := e.newFlags("db " + sub)
 	exts := fs.String("extensions", "", "extensoes do Postgres, separadas por virgula (ex: postgis)")
 	yes := fs.Bool("yes", false, "delete: nao pede confirmacao")
 	imp := fs.Bool("import", false, "create: importa de outro servidor (pede a string de conexao)")
-	pos := parseInterspersed(fs, args)
+	pos, err := e.parseInterspersed(fs, args)
+	if err != nil {
+		return err
+	}
 	if sub != "create" && sub != "list" && sub != "delete" {
 		return groupError("db", sub)
 	}
@@ -591,14 +604,14 @@ func runDB(args []string) error {
 	var source string
 	if sub == "create" && *imp {
 		var err error
-		if source, err = readSecret("String de conexao do banco de origem: "); err != nil {
+		if source, err = e.readSecret("String de conexao do banco de origem: "); err != nil {
 			return err
 		}
 		if source == "" {
 			return errors.New("string de conexao vazia")
 		}
 	}
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -615,37 +628,37 @@ func runDB(args []string) error {
 		if source == "" {
 			info, err = c.CreateDatabase(ctx, req)
 		} else {
-			info, err = createImporting(ctx, c, req)
+			info, err = e.createImporting(ctx, c, req)
 		}
 		if err != nil {
 			return err
 		}
 		if info.Imported != "" {
-			fmt.Printf("Database %s criado no %s com o conteudo de %s (dump de %s).\n", info.Name, info.Engine, info.Imported, databases.HumanSize(info.ImportedBytes))
+			fmt.Fprintf(e.out, "Database %s criado no %s com o conteudo de %s (dump de %s).\n", info.Name, info.Engine, info.Imported, databases.HumanSize(info.ImportedBytes))
 		} else {
-			fmt.Printf("Database %s criado no %s (host %s:%d, rede %s).\n", info.Name, info.Engine, info.Host, info.Port, info.Network)
+			fmt.Fprintf(e.out, "Database %s criado no %s (host %s:%d, rede %s).\n", info.Name, info.Engine, info.Host, info.Port, info.Network)
 		}
-		fmt.Printf("Ligue ao app com: cais app db <app> %s/%s (o app recebe os secrets %s).\n", info.Engine, info.Name, strings.Join(info.Secrets, " e "))
+		fmt.Fprintf(e.out, "Ligue ao app com: cais app db <app> %s/%s (o app recebe os secrets %s).\n", info.Engine, info.Name, strings.Join(info.Secrets, " e "))
 	case "delete":
 		if len(pos) != 2 {
 			return errors.New("uso: cais db delete postgres|mysql <nome> [-yes]")
 		}
-		if err := confirmName(*yes, pos[1], "Excluir o database "+pos[0]+"/"+pos[1]+" apaga todos os dados dele e o usuario. Nao tem volta."); err != nil {
+		if err := e.confirmName(*yes, pos[1], "Excluir o database "+pos[0]+"/"+pos[1]+" apaga todos os dados dele e o usuario. Nao tem volta."); err != nil {
 			return err
 		}
 		if err := c.DeleteDatabase(ctx, pos[0], pos[1]); err != nil {
 			return err
 		}
-		fmt.Printf("Database %s/%s excluido.\n", pos[0], pos[1])
+		fmt.Fprintf(e.out, "Database %s/%s excluido.\n", pos[0], pos[1])
 	case "list":
 		list, err := c.Databases(ctx)
 		if err != nil {
 			return err
 		}
 		if len(list) == 0 {
-			fmt.Println("Nenhum database criado pelo cais. Crie com: cais db create postgres <nome>")
+			fmt.Fprintln(e.out, "Nenhum database criado pelo cais. Crie com: cais db create postgres <nome>")
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "DATABASE\tSECRETS\tESPACO\tAPP")
 		for _, d := range list {
 			fmt.Fprintf(w, "%s/%s\t%s\t%s\t%s\n", d.Engine, d.Name, strings.Join(d.Secrets, ", "), dbSize(d), cmpOr(strings.Join(d.Apps, ", "), "-"))
@@ -657,7 +670,7 @@ func runDB(args []string) error {
 
 // createImporting cria o database importando de outro servidor e mostra o
 // andamento (quanto do dump ja foi copiado) enquanto espera.
-func createImporting(ctx context.Context, c *rpc.Client, req core.DatabaseRequest) (core.DatabaseInfo, error) {
+func (e *cli) createImporting(ctx context.Context, c daemonAPI, req core.DatabaseRequest) (core.DatabaseInfo, error) {
 	states, unsubscribe, err := c.Subscribe(ctx)
 	if err != nil {
 		return core.DatabaseInfo{}, err
@@ -673,11 +686,11 @@ func createImporting(ctx context.Context, c *rpc.Client, req core.DatabaseReques
 				continue
 			}
 			if shown < 0 {
-				fmt.Printf("Importando de %s...\n", im.Source)
+				fmt.Fprintf(e.out, "Importando de %s...\n", im.Source)
 				shown = 0
 			}
 			if im.Bytes > shown && time.Since(last) >= 3*time.Second {
-				fmt.Printf("  %s copiados\n", databases.HumanSize(im.Bytes))
+				fmt.Fprintf(e.out, "  %s copiados\n", databases.HumanSize(im.Bytes))
 				shown, last = im.Bytes, time.Now()
 			}
 		}
@@ -705,12 +718,14 @@ func cmpOr(a, b string) string {
 
 // parseInterspersed aceita flags em qualquer posicao (cais app deploy x
 // -ref main): o pacote flag sozinho para no primeiro argumento posicional.
-func parseInterspersed(fs *flag.FlagSet, args []string) []string {
+func (e *cli) parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 	var pos []string
 	for {
-		fs.Parse(args)
+		if err := e.parse(fs, args); err != nil {
+			return nil, err
+		}
 		if fs.NArg() == 0 {
-			return pos
+			return pos, nil
 		}
 		pos = append(pos, fs.Arg(0))
 		args = fs.Args()[1:]
@@ -718,7 +733,7 @@ func parseInterspersed(fs *flag.FlagSet, args []string) []string {
 }
 
 // appHistory lista os ultimos deploys do app.
-func appHistory(ctx context.Context, c *rpc.Client, name string) error {
+func (e *cli) appHistory(ctx context.Context, c daemonAPI, name string) error {
 	st, err := c.CheckApps(ctx)
 	if err != nil {
 		return err
@@ -728,10 +743,10 @@ func appHistory(ctx context.Context, c *rpc.Client, name string) error {
 			continue
 		}
 		if len(a.History) == 0 {
-			fmt.Printf("%s ainda nao tem deploy.\n", name)
+			fmt.Fprintf(e.out, "%s ainda nao tem deploy.\n", name)
 			return nil
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "QUANDO\tCOMMIT\tORIGEM\tRESULTADO")
 		for _, d := range a.History {
 			origin := "manual"
@@ -761,9 +776,9 @@ func appHistory(ctx context.Context, c *rpc.Client, name string) error {
 		}
 		w.Flush()
 		if a.AutoHold != "" {
-			fmt.Printf("\nDeploy automatico esperando um commit novo (depois do rollback; %s nao sobe sozinho).\n", short(a.AutoHold))
+			fmt.Fprintf(e.out, "\nDeploy automatico esperando um commit novo (depois do rollback; %s nao sobe sozinho).\n", short(a.AutoHold))
 		}
-		fmt.Printf("\nVoltar: cais app rollback %s [commit]\n", name)
+		fmt.Fprintf(e.out, "\nVoltar: cais app rollback %s [commit]\n", name)
 		return nil
 	}
 	return fmt.Errorf("app %q nao encontrado", name)

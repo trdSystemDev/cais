@@ -1,0 +1,925 @@
+cais -- painel da VPS
+
+Uso:
+  cais [--socket caminho]            abre a interface (TUI)
+  cais daemon [--socket] [--group] [--auto-every 1m] [--deploy-timeout 30m]
+                                     roda o daemon (dono do estado e das acoes)
+  cais state [--socket]              imprime o estado atual em JSON
+  cais check [--socket]              checa o ambiente e imprime o resultado em JSON
+  cais mcp [--socket]                servidor MCP pelo stdin/stdout (pra IA, via ssh)
+  cais version                       mostra a versao
+  cais help [comando]                esta ajuda; com o comando, os detalhes dele
+
+Setup da VPS (so configura; os servicos ligam com cais service):
+  cais setup                         mostra a config, o que falta e o que aplicar
+  cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
+      --email --tls letsencrypt|selfsigned --test-domain --http-port --https-port
+      --behind-proxy --github-app-id --host-s3 --notify-from --notify-to
+  cais setup secret <nome>           grava um secret informado (le do stdin), ex: github_app_key
+  cais setup notify-test             manda um e-mail de teste pros destinatarios dos avisos
+  cais setup github-test             confere o GitHub App salvo e diz onde ele esta instalado
+
+Servicos (nada sobe sem ser ligado):
+  cais service <nome> on|off|start|stop|restart
+                                     liga/desliga, inicia/para ou reinicia um servico
+
+Bancos (no Postgres/MySQL da infra):
+  cais db create postgres|mysql <nome> [-extensions postgis] [-import]
+                                     database e usuario com senha nova (vazio ou importado)
+  cais db list                       databases criados pelo cais: secrets, espaco e app
+  cais db delete postgres|mysql <nome> [-yes]
+                                     apaga o database e o usuario (nao pode estar ligado a app)
+
+Buckets (no Garage da infra):
+  cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
+  cais bucket list                   buckets criados pelo cais: secrets, espaco e app
+  cais bucket delete <nome> [-yes]   apaga o bucket (vazio) e a chave (nao pode estar ligado a app)
+
+Backup (bancos e estado do cais, criptografado, pro Google Drive ou OneDrive):
+  cais backup status                 configuracao, proximo e ultimo backup
+  cais backup provider google|onedrive
+                                     escolhe o destino: Google Drive ou OneDrive pessoal
+  cais backup client <client-id>     grava o client do destino (Google Cloud ou Azure)
+  cais backup login                  conecta o destino (um codigo pra digitar em outro aparelho)
+  cais backup logout                 desconecta o destino (os backups ficam la)
+  cais backup key [-yes]             gera a chave e mostra a privada uma vez
+  cais backup schedule HH:MM|off [-days 30]
+                                     horario diario (fuso da VPS) e retencao
+  cais backup now                    faz um backup agora
+  cais backup files                  lista os backups no destino
+  cais backup restore <backup> -key <arquivo> [engine/database ...] [-yes]
+                                     devolve databases ao estado do backup
+  cais backup open <arquivo> -key <arquivo> -to <pasta>
+                                     extrai um backup baixado (sem o daemon, ate numa VPS nova)
+
+Apps (repositorio no GitHub com o compose de producao pronto):
+  cais apps                          lista os apps e o estado dos containers
+  cais app create <nome> <dono/repo> [-branch b] [-compose arquivo] [-promote-to app] [-auto on]
+                                     cadastra o app (nao faz deploy)
+  cais app set <nome> [-branch b] [-compose arquivo] [-promote-to <app>|off] [-auto on|off]
+                                     troca branch, compose, producao (homolog)
+                                     e deploy automatico
+  cais app promote <homologacao> [-yes]
+                                     sobe na producao o commit validado na homologacao
+  cais app deploy <nome> [-ref <branch ou commit>]
+                                     baixa o commit, build com a versao no ar, sobe;
+                                     se o up falhar, a versao anterior volta
+  cais app history <nome>            os ultimos deploys: quando, commit, origem e resultado
+  cais app rollback <nome> [commit]  volta pra um deploy anterior que deu certo (sem build)
+  cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
+  cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
+                                     mostra ou muda as variaveis (.env do projeto);
+                                     -import junta um .env (- le do stdin)
+  cais app db <nome> [postgres/<db> | off postgres/<db>]
+                                     bancos da infra do app: o deploy grava os secrets
+                                     postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}
+  cais app bucket <nome> [<bucket> | off <bucket>]
+                                     buckets do app: o deploy grava os secrets
+                                     s3_<bucket>_access_key e s3_<bucket>_secret_key
+  cais app secrets <nome>            lista os secrets do app (so nomes)
+  cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
+  cais app restart <nome> [service]  reinicia o app (ou um service)
+  cais app stop <nome>               para o app sem apagar nada
+  cais app logs <nome> <container>   ultimas linhas do log
+  cais app delete <nome> [-volumes] [-yes]
+                                     exclui o app (containers, imagens, codigo, variaveis,
+                                     secrets); -volumes apaga tambem os dados. O database
+                                     da infra fica
+
+Detalhes de um comando: cais <comando> -h (ex: cais app deploy -h).
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais tui -h
+cais -- painel da VPS
+
+Uso:
+  cais [--socket caminho]            abre a interface (TUI)
+  cais daemon [--socket] [--group] [--auto-every 1m] [--deploy-timeout 30m]
+                                     roda o daemon (dono do estado e das acoes)
+  cais state [--socket]              imprime o estado atual em JSON
+  cais check [--socket]              checa o ambiente e imprime o resultado em JSON
+  cais mcp [--socket]                servidor MCP pelo stdin/stdout (pra IA, via ssh)
+  cais version                       mostra a versao
+  cais help [comando]                esta ajuda; com o comando, os detalhes dele
+
+Setup da VPS (so configura; os servicos ligam com cais service):
+  cais setup                         mostra a config, o que falta e o que aplicar
+  cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
+      --email --tls letsencrypt|selfsigned --test-domain --http-port --https-port
+      --behind-proxy --github-app-id --host-s3 --notify-from --notify-to
+  cais setup secret <nome>           grava um secret informado (le do stdin), ex: github_app_key
+  cais setup notify-test             manda um e-mail de teste pros destinatarios dos avisos
+  cais setup github-test             confere o GitHub App salvo e diz onde ele esta instalado
+
+Servicos (nada sobe sem ser ligado):
+  cais service <nome> on|off|start|stop|restart
+                                     liga/desliga, inicia/para ou reinicia um servico
+
+Bancos (no Postgres/MySQL da infra):
+  cais db create postgres|mysql <nome> [-extensions postgis] [-import]
+                                     database e usuario com senha nova (vazio ou importado)
+  cais db list                       databases criados pelo cais: secrets, espaco e app
+  cais db delete postgres|mysql <nome> [-yes]
+                                     apaga o database e o usuario (nao pode estar ligado a app)
+
+Buckets (no Garage da infra):
+  cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
+  cais bucket list                   buckets criados pelo cais: secrets, espaco e app
+  cais bucket delete <nome> [-yes]   apaga o bucket (vazio) e a chave (nao pode estar ligado a app)
+
+Backup (bancos e estado do cais, criptografado, pro Google Drive ou OneDrive):
+  cais backup status                 configuracao, proximo e ultimo backup
+  cais backup provider google|onedrive
+                                     escolhe o destino: Google Drive ou OneDrive pessoal
+  cais backup client <client-id>     grava o client do destino (Google Cloud ou Azure)
+  cais backup login                  conecta o destino (um codigo pra digitar em outro aparelho)
+  cais backup logout                 desconecta o destino (os backups ficam la)
+  cais backup key [-yes]             gera a chave e mostra a privada uma vez
+  cais backup schedule HH:MM|off [-days 30]
+                                     horario diario (fuso da VPS) e retencao
+  cais backup now                    faz um backup agora
+  cais backup files                  lista os backups no destino
+  cais backup restore <backup> -key <arquivo> [engine/database ...] [-yes]
+                                     devolve databases ao estado do backup
+  cais backup open <arquivo> -key <arquivo> -to <pasta>
+                                     extrai um backup baixado (sem o daemon, ate numa VPS nova)
+
+Apps (repositorio no GitHub com o compose de producao pronto):
+  cais apps                          lista os apps e o estado dos containers
+  cais app create <nome> <dono/repo> [-branch b] [-compose arquivo] [-promote-to app] [-auto on]
+                                     cadastra o app (nao faz deploy)
+  cais app set <nome> [-branch b] [-compose arquivo] [-promote-to <app>|off] [-auto on|off]
+                                     troca branch, compose, producao (homolog)
+                                     e deploy automatico
+  cais app promote <homologacao> [-yes]
+                                     sobe na producao o commit validado na homologacao
+  cais app deploy <nome> [-ref <branch ou commit>]
+                                     baixa o commit, build com a versao no ar, sobe;
+                                     se o up falhar, a versao anterior volta
+  cais app history <nome>            os ultimos deploys: quando, commit, origem e resultado
+  cais app rollback <nome> [commit]  volta pra um deploy anterior que deu certo (sem build)
+  cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
+  cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
+                                     mostra ou muda as variaveis (.env do projeto);
+                                     -import junta um .env (- le do stdin)
+  cais app db <nome> [postgres/<db> | off postgres/<db>]
+                                     bancos da infra do app: o deploy grava os secrets
+                                     postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}
+  cais app bucket <nome> [<bucket> | off <bucket>]
+                                     buckets do app: o deploy grava os secrets
+                                     s3_<bucket>_access_key e s3_<bucket>_secret_key
+  cais app secrets <nome>            lista os secrets do app (so nomes)
+  cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
+  cais app restart <nome> [service]  reinicia o app (ou um service)
+  cais app stop <nome>               para o app sem apagar nada
+  cais app logs <nome> <container>   ultimas linhas do log
+  cais app delete <nome> [-volumes] [-yes]
+                                     exclui o app (containers, imagens, codigo, variaveis,
+                                     secrets); -volumes apaga tambem os dados. O database
+                                     da infra fica
+
+Detalhes de um comando: cais <comando> -h (ex: cais app deploy -h).
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais daemon -h
+Uso: cais daemon [--socket] [--group] [--auto-every 1m] [--deploy-timeout 30m]
+
+Roda o daemon (dono do estado e das acoes).
+
+Normalmente roda pelo systemd (assets/systemd/cais.service). A TUI e o CLI
+sao clientes dele pelo socket, que nasce com permissao 0660: so o root, ou o
+grupo de --group, usa o cais. Quem acessa o socket controla a VPS.
+
+O daemon tambem faz o deploy automatico dos apps marcados: consulta o
+GitHub a cada --auto-every e sobe o commit novo da branch.
+
+Um deploy (download, build, troca) que passa de --deploy-timeout e
+cancelado e a versao anterior volta. Ao parar (SIGTERM), o daemon espera os
+deploys e backups em andamento; a unidade do systemd espera ate 45min.
+
+Flags:
+  --group grupo            grupo que tambem pode usar o cais, alem do root
+  --auto-every tempo       intervalo da consulta do deploy automatico (padrao 1m)
+  --deploy-timeout tempo   limite de um deploy (padrao 30m; 0 usa o padrao,
+                           negativo nao limita)
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais state -h
+Uso: cais state [--socket]
+
+Imprime o estado atual em JSON.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais check -h
+Uso: cais check [--socket]
+
+Checa o ambiente e imprime o resultado em JSON.
+
+Confere Docker e Docker Compose (instalados, versao, daemon no ar).
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais mcp -h
+Uso: cais mcp [--socket]
+
+Servidor MCP pelo stdin/stdout (pra IA, via ssh).
+
+Expoe o cais como ferramentas MCP: ler o estado, logs e a ajuda do compose;
+criar e atualizar app, deploy, restart, stop, variaveis, secrets, criar e
+ligar banco e bucket. Nada que apaga dados nem o Setup: excluir app, banco,
+bucket ou secret, ligar ou desligar servico e a config da VPS ficam so na
+TUI e no CLI.
+
+Roda na VPS e conversa pelo stdin/stdout; o cliente MCP no seu computador
+chama pelo ssh (a autenticacao e a sua chave SSH, sem porta nova).
+
+Exemplo (Claude Code, no seu computador):
+  claude mcp add cais -- ssh cais@vps cais mcp   # instalado com --ssh
+  claude mcp add cais -- ssh root@vps cais mcp
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais version -h
+Uso: cais version
+
+Mostra a versao.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais help -h
+Uso: cais help [comando]
+
+Esta ajuda; com o comando, os detalhes dele.
+
+Exemplos:
+  cais help app            comandos de app
+  cais help app deploy     o mesmo que: cais app deploy -h
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais setup -h
+Setup da VPS (so configura; os servicos ligam com cais service):
+  cais setup                         mostra a config, o que falta e o que aplicar
+  cais setup config [opcoes]         grava o /etc/cais/config.yaml (so o que for passado)
+      --email --tls letsencrypt|selfsigned --test-domain --http-port --https-port
+      --behind-proxy --github-app-id --host-s3 --notify-from --notify-to
+  cais setup secret <nome>           grava um secret informado (le do stdin), ex: github_app_key
+  cais setup notify-test             manda um e-mail de teste pros destinatarios dos avisos
+  cais setup github-test             confere o GitHub App salvo e diz onde ele esta instalado
+
+Detalhes: cais setup <comando> -h.
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais setup plan -h
+Uso: cais setup
+
+Mostra a config, o que falta e o que aplicar.
+
+Nao muda nada. Mostra a configuracao, o que falta informar e, dos servicos
+ligados, quais tem config salva ainda nao aplicada (aplique com
+"cais service <nome> on").
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais setup config -h
+Uso: cais setup config [opcoes]
+
+Grava o /etc/cais/config.yaml (so o que for passado).
+
+So o que for passado muda; o resto fica como esta no arquivo. Gravar nao
+sobe nada: vale ao ligar um servico, ou ao aplicar num que ja esta ligado
+("cais service proxy on" de novo). Nao ha dominio da VPS: cada app traz o
+proprio dominio no compose, e o certificado do Let's Encrypt sai pra ele.
+
+Flags:
+  --email e-mail          avisos do Let's Encrypt
+  --tls modo              letsencrypt (padrao) ou selfsigned (teste local)
+  --test-domain dominio   so no modo de teste: os nomes que a CA local assina
+                          (ex: trd.localhost; apps em <app>.trd.localhost)
+  --http-port porta       porta http do proxy no host (padrao 80)
+  --https-port porta      porta https do proxy no host (padrao 443); fora de
+                          80/443 o Let's Encrypt nao emite: so pra teste
+  --behind-proxy          migracao com outro proxy da VPS (nginx) nas 80/443:
+                          as portas escutam so no 127.0.0.1 e o Traefik aceita
+                          o X-Forwarded-For dele (=false desliga, pra voltar
+                          pras 80/443). Ver docs/setup.md, "Migrar de um nginx"
+  --github-app-id id      App ID do GitHub App do cais (baixa o codigo dos apps)
+  --host-s3 host          endpoint S3 do Garage (obrigatorio com o Garage)
+  --notify-from e-mail    remetente dos avisos (um remetente validado na Brevo)
+  --notify-to e-mails     destinatarios dos avisos, separados por virgula;
+                          vazio desliga. A chave fica no secret brevo_api_key
+
+Os avisos sao e-mails pela Brevo quando um deploy automatico falha de vez
+(sem nova tentativa marcada) ou quando o backup automatico nao da certo.
+
+Exemplos:
+  cais setup config --email voce@exemplo.com.br --github-app-id 123456
+  cais setup config --tls selfsigned --test-domain trd.localhost   # teste no PC
+  cais setup config --http-port 8080 --https-port 8443 && cais service proxy on
+  cais setup config --http-port 8080 --https-port 8443 --behind-proxy   # atras do nginx
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais setup secret -h
+Uso: cais setup secret <nome>
+
+Grava um secret informado (le do stdin), ex: github_app_key.
+
+No terminal le sem eco; com stdin redirecionado, le o arquivo.
+
+Exemplo:
+  cais setup secret github_app_key < chave.pem
+  cais setup secret brevo_api_key            # cola a chave xkeysib-...
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais setup notify-test -h
+Uso: cais setup notify-test
+
+Manda um e-mail de teste pros destinatarios dos avisos.
+
+Usa o remetente e os destinatarios da config (cais setup config
+--notify-from --notify-to) e a chave da Brevo (cais setup secret
+brevo_api_key). Se a Brevo recusar, o motivo aparece aqui.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais setup github-test -h
+Uso: cais setup github-test
+
+Confere o GitHub App salvo e diz onde ele esta instalado.
+
+Usa o App ID da config e a chave (cais setup secret github_app_key). Se o
+GitHub recusar, o motivo aparece aqui; nao abre nenhum repositorio.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais service -h
+Uso: cais service <nome> on|off|start|stop|restart
+
+Liga/desliga, inicia/para ou reinicia um servico.
+
+Ligar gera os secrets que faltam, grava o compose e sobe o servico (e
+mostra o progresso, tambem na TUI aberta). "on" num servico ja ligado
+aplica nele a config salva no Setup. Desligar derruba os containers e
+preserva os volumes (os dados); ligar de novo traz tudo de volta.
+
+start, stop e restart so mexem nos containers de um servico ligado:
+parado, ele continua ligado na config e volta no start (ou no proximo
+"on"). Parar o postgres ou o mysql derruba os apps que usam o banco e faz
+o backup falhar ate ele voltar.
+
+O proxy (Traefik) publica os apps com HTTPS: sem ele, app com dominio nao
+sobe. O Garage precisa do proxy ligado.
+
+Exemplos:
+  cais service proxy on
+  cais service postgres on
+  cais service postgres restart
+  cais service garage off
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais db -h
+Bancos (no Postgres/MySQL da infra):
+  cais db create postgres|mysql <nome> [-extensions postgis] [-import]
+                                     database e usuario com senha nova (vazio ou importado)
+  cais db list                       databases criados pelo cais: secrets, espaco e app
+  cais db delete postgres|mysql <nome> [-yes]
+                                     apaga o database e o usuario (nao pode estar ligado a app)
+
+Detalhes: cais db <comando> -h.
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais db create -h
+Uso: cais db create postgres|mysql <nome> [-extensions postgis] [-import]
+
+Database e usuario com senha nova (vazio ou importado).
+
+Cria o database e um usuario de mesmo nome, que so acessa esse database. A
+senha fica guardada no cais e chega no app pelos secrets ao ligar o banco
+(cais app db). Nome: minusculas, numeros e _, ate 32.
+
+Com -import, o database novo ja nasce com o conteudo de um banco em outro
+servidor: o cais pede a string de conexao (sem eco; ou le do stdin) e copia
+tudo com pg_dump/mysqldump, de dentro do container do banco. No Postgres as
+tabelas passam a ser do usuario do app; no MySQL o DEFINER das views e
+triggers vira o do cais. Se a copia falhar, o database novo e apagado.
+
+  postgres://usuario:senha@host:5432/banco?sslmode=require
+  mysql://usuario:senha@host:3306/banco
+
+O servidor de origem tem que aceitar conexao vinda do IP desta VPS. A
+origem so e lida (nada muda nela). Banco no proprio servidor: use o IP dele
+na rede do docker (ex: 172.17.0.1), nao localhost.
+
+Flags:
+  -extensions lista   extensoes do Postgres, separadas por virgula:
+                      postgis, postgis_topology, postgis_raster,
+                      fuzzystrmatch, pg_trgm, uuid-ossp, citext, unaccent,
+                      hstore, pgcrypto, btree_gist, btree_gin
+  -import             importa de outro servidor (pede a string de conexao)
+
+Exemplos:
+  cais db create postgres portal -extensions postgis
+  cais db create mysql estoque -import
+  cais app db portal postgres/portal      # liga ao app
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais db list -h
+Uso: cais db list
+
+Databases criados pelo cais: secrets, espaco e app.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais db delete -h
+Uso: cais db delete postgres|mysql <nome> [-yes]
+
+Apaga o database e o usuario (nao pode estar ligado a app).
+
+Apaga todos os dados do database, o usuario e a senha guardada. Nao tem
+volta. Recusa se algum app ainda usa o banco: desligue antes com
+"cais app db <app> off postgres/<nome>". Pede o nome digitado pra confirmar.
+
+Flags:
+  -yes   nao pede confirmacao
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais bucket -h
+Buckets (no Garage da infra):
+  cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
+  cais bucket list                   buckets criados pelo cais: secrets, espaco e app
+  cais bucket delete <nome> [-yes]   apaga o bucket (vazio) e a chave (nao pode estar ligado a app)
+
+Detalhes: cais bucket <comando> -h.
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais bucket create -h
+Uso: cais bucket create <nome>
+
+Bucket e uma chave so dele (guardada no cais).
+
+Cria o bucket (privado) e uma chave com leitura, escrita e dono so nele. A
+chave fica guardada no cais e chega no app pelos secrets ao ligar o bucket
+(cais app bucket). Nome: 3 a 63 letras minusculas, numeros e -.
+
+Os arquivos dos buckets nao entram no backup do cais (so os databases e o
+estado do cais entram).
+
+Exemplos:
+  cais bucket create portal-fotos
+  cais app bucket portal portal-fotos     # liga ao app
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais bucket list -h
+Uso: cais bucket list
+
+Buckets criados pelo cais: secrets, espaco e app.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais bucket delete -h
+Uso: cais bucket delete <nome> [-yes]
+
+Apaga o bucket (vazio) e a chave (nao pode estar ligado a app).
+
+O Garage so apaga bucket vazio. Recusa se algum app ainda usa o bucket:
+desligue antes com "cais app bucket <app> off <nome>". Pede o nome digitado
+pra confirmar.
+
+Flags:
+  -yes   nao pede confirmacao
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup -h
+Backup (bancos e estado do cais, criptografado, pro Google Drive ou OneDrive):
+  cais backup status                 configuracao, proximo e ultimo backup
+  cais backup provider google|onedrive
+                                     escolhe o destino: Google Drive ou OneDrive pessoal
+  cais backup client <client-id>     grava o client do destino (Google Cloud ou Azure)
+  cais backup login                  conecta o destino (um codigo pra digitar em outro aparelho)
+  cais backup logout                 desconecta o destino (os backups ficam la)
+  cais backup key [-yes]             gera a chave e mostra a privada uma vez
+  cais backup schedule HH:MM|off [-days 30]
+                                     horario diario (fuso da VPS) e retencao
+  cais backup now                    faz um backup agora
+  cais backup files                  lista os backups no destino
+  cais backup restore <backup> -key <arquivo> [engine/database ...] [-yes]
+                                     devolve databases ao estado do backup
+  cais backup open <arquivo> -key <arquivo> -to <pasta>
+                                     extrai um backup baixado (sem o daemon, ate numa VPS nova)
+
+Detalhes: cais backup <comando> -h.
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup status -h
+Uso: cais backup status
+
+Configuracao, proximo e ultimo backup.
+
+Mostra a configuracao, o proximo e o ultimo backup, e o que fica de fora:
+os arquivos do Garage (buckets S3) e os volumes dos apps nao entram no
+backup do cais.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup provider -h
+Uso: cais backup provider google|onedrive
+
+Escolhe o destino: Google Drive ou OneDrive pessoal.
+
+Client e login de cada destino ficam guardados: voltar pro outro nao pede
+login de novo. Os backups ja feitos ficam onde estao; files, restore e a
+retencao olham so o destino atual.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup client -h
+Uso: cais backup client <client-id>
+
+Grava o client do destino (Google Cloud ou Azure).
+
+Google Drive: o client e do seu projeto no Google Cloud. Ative a Google
+Drive API, crie em Credenciais -> ID do cliente OAuth do tipo "TVs e
+dispositivos de entrada limitada" e publique a tela de consentimento (em
+"Teste" o login expira em 7 dias). O escopo e drive.file: o cais so ve a
+pasta que ele mesmo cria. O secret e lido sem eco, ou do stdin (cais backup
+client <id> < arquivo).
+
+OneDrive (conta pessoal): no portal do Azure, em Registros de aplicativo,
+registre um app com "Somente contas pessoais da Microsoft" e, em
+Autenticacao, ligue "Permitir fluxos de clientes publicos". O <client-id> e
+o "ID do aplicativo (cliente)"; nao tem secret. O cais pede so a pasta do
+app (Files.ReadWrite.AppFolder): fica em Aplicativos/<nome do app> e o resto
+do OneDrive nao e visto.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup login -h
+Uso: cais backup login
+
+Conecta o destino (um codigo pra digitar em outro aparelho).
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup logout -h
+Uso: cais backup logout
+
+Desconecta o destino (os backups ficam la).
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup key -h
+Uso: cais backup key [-yes]
+
+Gera a chave e mostra a privada uma vez.
+
+A publica fica na config e criptografa os backups; a privada aparece so
+agora e nao fica na VPS: guarde num gerenciador de senhas. Sem ela nenhum
+backup abre. Trocar a chave nao reabre os backups antigos (eles continuam com
+a privada anterior).
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup schedule -h
+Uso: cais backup schedule HH:MM|off [-days 30]
+
+Horario diario (fuso da VPS) e retencao.
+
+O backup roda todo dia no horario; se a VPS estava desligada na hora, roda
+assim que o daemon subir. Os backups mais velhos que -days dias saem do
+destino (o mais novo fica sempre). "off" deixa so o backup manual.
+
+Exemplo:
+  cais backup schedule 03:00 -days 30
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup now -h
+Uso: cais backup now
+
+Faz um backup agora.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup files -h
+Uso: cais backup files
+
+Lista os backups no destino.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup restore -h
+Uso: cais backup restore <backup> -key <arquivo> [engine/database ...] [-yes]
+
+Devolve databases ao estado do backup.
+
+Sem databases, so lista o que o backup tem. Com databases, apaga o
+conteudo atual de cada um (as conexoes abertas caem), recria com o mesmo
+usuario e senha e poe o dump do backup. O database tem que existir no cais.
+A chave privada so passa pela memoria do daemon.
+
+Exemplos:
+  cais backup files
+  cais backup restore cais-vps-2026-11-13_0300.tar.gz.age -key chave.txt
+  cais backup restore cais-vps-2026-11-13_0300.tar.gz.age -key chave.txt postgres/loja
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais backup open -h
+Uso: cais backup open <arquivo> -key <arquivo> -to <pasta>
+
+Extrai um backup baixado (sem o daemon, ate numa VPS nova).
+
+Abre um backup baixado do Drive (ou OneDrive) numa pasta: os dumps (postgres/, mysql/) e
+o estado do cais (state/etc = /etc/cais, state/data = /var/lib/cais, com os
+secrets). Serve pra olhar um dump ou montar uma VPS nova.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app -h
+Apps (repositorio no GitHub com o compose de producao pronto):
+  cais apps                          lista os apps e o estado dos containers
+  cais app create <nome> <dono/repo> [-branch b] [-compose arquivo] [-promote-to app] [-auto on]
+                                     cadastra o app (nao faz deploy)
+  cais app set <nome> [-branch b] [-compose arquivo] [-promote-to <app>|off] [-auto on|off]
+                                     troca branch, compose, producao (homolog)
+                                     e deploy automatico
+  cais app promote <homologacao> [-yes]
+                                     sobe na producao o commit validado na homologacao
+  cais app deploy <nome> [-ref <branch ou commit>]
+                                     baixa o commit, build com a versao no ar, sobe;
+                                     se o up falhar, a versao anterior volta
+  cais app history <nome>            os ultimos deploys: quando, commit, origem e resultado
+  cais app rollback <nome> [commit]  volta pra um deploy anterior que deu certo (sem build)
+  cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
+  cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
+                                     mostra ou muda as variaveis (.env do projeto);
+                                     -import junta um .env (- le do stdin)
+  cais app db <nome> [postgres/<db> | off postgres/<db>]
+                                     bancos da infra do app: o deploy grava os secrets
+                                     postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}
+  cais app bucket <nome> [<bucket> | off <bucket>]
+                                     buckets do app: o deploy grava os secrets
+                                     s3_<bucket>_access_key e s3_<bucket>_secret_key
+  cais app secrets <nome>            lista os secrets do app (so nomes)
+  cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
+  cais app restart <nome> [service]  reinicia o app (ou um service)
+  cais app stop <nome>               para o app sem apagar nada
+  cais app logs <nome> <container>   ultimas linhas do log
+  cais app delete <nome> [-volumes] [-yes]
+                                     exclui o app (containers, imagens, codigo, variaveis,
+                                     secrets); -volumes apaga tambem os dados. O database
+                                     da infra fica
+
+Detalhes: cais app <comando> -h.
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais apps -h
+Uso: cais apps
+
+Lista os apps e o estado dos containers.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app create -h
+Uso: cais app create <nome> <dono/repo> [-branch b] [-compose arquivo] [-promote-to app] [-auto on]
+
+Cadastra o app (nao faz deploy).
+
+O repositorio pode vir como dono/repo ou link do GitHub. O codigo e baixado
+pelo GitHub App do cais. Nome do app: minusculas, numeros e -.
+
+Flags:
+  -branch branch     branch do deploy (padrao: a principal do repositorio)
+  -compose arquivo   compose de producao, a partir da raiz (padrao docker-compose.yml)
+  -promote-to app    o app novo e a homologacao deste (mesmo repositorio): o
+                     commit validado nele vai pra producao com cais app promote
+  -auto on           deploy automatico a cada commit novo na branch
+
+Exemplos:
+  cais app create portal trdSystemDev/portal-web -branch main -compose docker-compose.cais.yml
+  cais app create portal-homolog trdSystemDev/portal-web -branch homolog \
+      -compose docker-compose.homolog.yaml -promote-to portal -auto on
+  cais app guide portal                 # como escrever o compose
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app set -h
+Uso: cais app set <nome> [-branch b] [-compose arquivo] [-promote-to <app>|off] [-auto on|off]
+
+Troca branch, compose, producao (homolog)
+e deploy automatico.
+
+So muda o que vier nas flags; vale no proximo deploy.
+
+Deploy automatico: o daemon consulta o GitHub a cada minuto (nenhuma porta
+abre) e faz o deploy quando a branch ganha um commit novo. Um commit que
+falhou nao e tentado de novo; o proximo commit sim.
+
+Combinacoes comuns:
+  so producao, manual             (padrao)
+  so producao, automatica         cais app set portal -auto on
+  homolog automatica, promocao manual
+                                  cais app set portal-homolog -auto on
+  homolog automatica e producao automatica no merge na main
+                                  cais app set portal-homolog -auto on
+                                  cais app set portal -auto on   (branch main)
+
+Exemplos:
+  cais app set portal-homolog -promote-to portal
+  cais app set portal -auto off
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app promote -h
+Uso: cais app promote <homologacao> [-yes]
+
+Sobe na producao o commit validado na homologacao.
+
+Sobe na producao o commit que esta no ar (e de pe) na homologacao, pelo
+deploy normal: build com a versao atual no ar e, se falhar, a anterior volta.
+
+Vale pra homologacao na mesma branch da producao (um commit a frente) ou numa
+branch propria: o commit validado tem que estar na branch da producao (faca o
+merge antes; squash merge tambem vale, pelo conteudo). Assim um deploy futuro
+da branch nao desfaz a promocao.
+
+Flags:
+  -yes   aceita voltar a producao pra um commit mais velho
+
+Exemplos:
+  cais app promote portal-homolog
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app deploy -h
+Uso: cais app deploy <nome> [-ref <branch ou commit>]
+
+Baixa o commit, build com a versao no ar, sobe;
+se o up falhar, a versao anterior volta.
+
+Recusa compose fora do formato do cais antes do build, dizendo o motivo.
+
+Flags:
+  -ref ref   branch ou commit (padrao: o mais novo da branch do app)
+
+Exemplos:
+  cais app deploy portal
+  cais app deploy portal -ref 1910cca
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app history -h
+Uso: cais app history <nome>
+
+Os ultimos deploys: quando, commit, origem e resultado.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app rollback -h
+Uso: cais app rollback <nome> [commit]
+
+Volta pra um deploy anterior que deu certo (sem build).
+
+Sem commit, volta pro deploy anterior ao que esta no ar. O commit tem que
+estar no historico (cais app history) com deploy que deu certo; pra qualquer
+outro, use cais app deploy -ref.
+
+Os ultimos 5 deploys que deram certo guardam as imagens: a volta nao refaz o
+build e passa pela troca sem queda. As variaveis e os secrets sao os de
+agora. Com deploy automatico ligado, ele espera um commit novo na branch (o
+que estava no ar antes do rollback nao sobe sozinho).
+
+Exemplos:
+  cais app rollback portal
+  cais app rollback portal 1910cca
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app guide -h
+Uso: cais app guide <nome>
+
+Modelo de compose: labels do Traefik, redes, secrets.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app env -h
+Uso: cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
+
+Mostra ou muda as variaveis (.env do projeto);
+-import junta um .env (- le do stdin).
+
+Sem mudancas, so mostra. As variaveis viram o .env do projeto no deploy
+(valem no proximo). Senhas e chaves vao em secrets, nao aqui.
+
+Flags:
+  -unset VAR,...      remove as variaveis
+  -import arquivo     junta um .env (- le do stdin); a que ja existe recebe o valor novo
+
+Exemplos:
+  cais app env portal
+  cais app env portal NODE_ENV=production DOMINIO=portal.exemplo.com
+  cais app env portal -unset TESTE
+  cais app env portal -import .env.producao
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app db -h
+Uso: cais app db <nome> [postgres/<db> | off postgres/<db>]
+
+Bancos da infra do app: o deploy grava os secrets
+postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}.
+
+Sem banco, mostra os ligados. O database tem o nome do usuario; o app chega
+por postgres:5432 (ou mysql:3306) e monta a URL. Desligar nao apaga o database.
+
+Exemplos:
+  cais app db portal postgres/portal
+  cais app db portal off postgres/portal
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app bucket -h
+Uso: cais app bucket <nome> [<bucket> | off <bucket>]
+
+Buckets do app: o deploy grava os secrets
+s3_<bucket>_access_key e s3_<bucket>_secret_key.
+
+Sem bucket, mostra os ligados. O - do nome do bucket vira _ nos secrets. O
+app usa o endpoint http://garage:3900, regiao garage, path-style, na rede
+garage_network. Desligar nao apaga o bucket.
+
+Exemplos:
+  cais app bucket portal portal-fotos
+  cais app bucket portal off portal-fotos
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app secrets -h
+Uso: cais app secrets <nome>
+
+Lista os secrets do app (so nomes).
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app secret -h
+Uso: cais app secret <nome> <secret>
+
+Grava um secret (le sem eco, ou do stdin).
+
+Cada secret e um arquivo em ${CAIS_SECRETS}/<secret>; no container, em
+/run/secrets/<secret>. Vale no proximo deploy. Nome: minusculas, numeros e _.
+
+Exemplos:
+  cais app secret portal jwt_secret            # pede o valor sem eco
+  cais app secret portal firebase_key < chave.json
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app restart -h
+Uso: cais app restart <nome> [service]
+
+Reinicia o app (ou um service).
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app stop -h
+Uso: cais app stop <nome>
+
+Para o app sem apagar nada.
+
+Volta com: cais app restart <nome>
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app logs -h
+Uso: cais app logs <nome> <container>
+
+Ultimas linhas do log.
+
+O nome do container aparece em "cais apps" (ex: portal-web-1).
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app delete -h
+Uso: cais app delete <nome> [-volumes] [-yes]
+
+Exclui o app (containers, imagens, codigo, variaveis,
+secrets); -volumes apaga tambem os dados. O database
+da infra fica.
+
+Pede o nome digitado pra confirmar. Bancos e buckets da infra ficam.
+
+Flags:
+  -volumes   apaga tambem os volumes do compose (os dados)
+  -yes       nao pede confirmacao
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.

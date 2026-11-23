@@ -38,7 +38,7 @@ func TestBackupOpenExtraiComPermissoes(t *testing.T) {
 	os.WriteFile(key, []byte(priv+"\n"), 0o600)
 
 	to := filepath.Join(dir, "out")
-	if err := backupOpen([]string{file}, key, to); err != nil {
+	if err := newTestCLI(nil).backupOpen([]string{file}, key, to); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(to, "postgres", "loja.sql")); string(data) != "SELECT 1;" {
@@ -68,7 +68,7 @@ func TestBackupOpenNaoSaiDaPasta(t *testing.T) {
 	os.WriteFile(file, arch.Bytes(), 0o600)
 	key := filepath.Join(dir, "k")
 	os.WriteFile(key, []byte(priv), 0o600)
-	if err := backupOpen([]string{file}, key, filepath.Join(dir, "out")); err == nil {
+	if err := newTestCLI(nil).backupOpen([]string{file}, key, filepath.Join(dir, "out")); err == nil {
 		t.Error("extraiu caminho com ..")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "fora.txt")); err == nil {

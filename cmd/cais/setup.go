@@ -16,7 +16,6 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/github"
-	"github.com/trdSystemDev/cais/internal/rpc"
 )
 
 // subcommand separa "cais setup <sub> ..." do resto dos argumentos.
@@ -27,28 +26,30 @@ func subcommand(args []string) (string, []string) {
 	return "", args
 }
 
-func runSetup(args []string) error {
+func (e *cli) runSetup(args []string) error {
 	sub, args := subcommand(args)
 	switch sub {
 	case "", "plan":
-		return setupPlan(args)
+		return e.setupPlan(args)
 	case "config":
-		return setupConfig(args)
+		return e.setupConfig(args)
 	case "secret":
-		return setupSecret(args)
+		return e.setupSecret(args)
 	case "notify-test":
-		return setupNotifyTest(args)
+		return e.setupNotifyTest(args)
 	case "github-test":
-		return setupGitHubTest(args)
+		return e.setupGitHubTest(args)
 	default:
 		return groupError("setup", sub)
 	}
 }
 
-func setupPlan(args []string) error {
-	fs, socket := newFlags("setup")
-	fs.Parse(args)
-	c, err := connect(*socket)
+func (e *cli) setupPlan(args []string) error {
+	fs, socket := e.newFlags("setup")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -63,7 +64,7 @@ func setupPlan(args []string) error {
 	if err != nil {
 		return err
 	}
-	printPlan(os.Stdout, info, p)
+	printPlan(e.out, info, p)
 	return nil
 }
 
@@ -168,8 +169,8 @@ func printTrust(out io.Writer, p bootstrap.Plan) {
 	fmt.Fprintf(out, "\n  # pra desfazer: sudo trust anchor --remove %s\n", p.CAFile)
 }
 
-func setupConfig(args []string) error {
-	fs, socket := newFlags("setup config")
+func (e *cli) setupConfig(args []string) error {
+	fs, socket := e.newFlags("setup config")
 	testDomain := fs.String("test-domain", "", "dominio do modo de teste (--tls selfsigned), ex: trd.localhost")
 	email := fs.String("email", "", "e-mail do Let's Encrypt")
 	tls := fs.String("tls", "", "letsencrypt (padrao) ou selfsigned (teste local)")
@@ -180,9 +181,11 @@ func setupConfig(args []string) error {
 	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (obrigatorio com o Garage ligado)")
 	notifyFrom := fs.String("notify-from", "", "remetente dos avisos por e-mail (validado na Brevo)")
 	notifyTo := fs.String("notify-to", "", "destinatarios dos avisos, separados por virgula (vazio desliga)")
-	fs.Parse(args)
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
 
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -222,7 +225,7 @@ func setupConfig(args []string) error {
 	if err := c.SaveConfig(ctx, cfg); err != nil {
 		return err
 	}
-	fmt.Printf("Config gravada em %s.\n\n", info.Path)
+	fmt.Fprintf(e.out, "Config gravada em %s.\n\n", info.Path)
 
 	info, err = c.LoadConfig(ctx)
 	if err != nil {
@@ -232,7 +235,7 @@ func setupConfig(args []string) error {
 	if err != nil {
 		return err
 	}
-	printPlan(os.Stdout, info, p)
+	printPlan(e.out, info, p)
 	return nil
 }
 
@@ -246,19 +249,21 @@ func splitList(s string) []string {
 	return out
 }
 
-func setupSecret(args []string) error {
-	fs, socket := newFlags("setup secret")
-	fs.Parse(args)
+func (e *cli) setupSecret(args []string) error {
+	fs, socket := e.newFlags("setup secret")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
 	if fs.NArg() != 1 {
 		return errors.New("uso: cais setup secret <nome> (o valor vem pelo stdin)")
 	}
 	name := fs.Arg(0)
 
-	value, err := readSecret("Valor de " + name + ": ")
+	value, err := e.readSecret("Valor de " + name + ": ")
 	if err != nil {
 		return err
 	}
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -266,29 +271,31 @@ func setupSecret(args []string) error {
 	if err := c.SetSecret(context.Background(), name, value); err != nil {
 		return err
 	}
-	fmt.Printf("%s gravado.\n", name)
+	fmt.Fprintf(e.out, "%s gravado.\n", name)
 	return nil
 }
 
 // readSecret le do terminal sem eco, ou do stdin inteiro quando vem de um
 // pipe (cais setup secret x < arquivo). Nunca por argumento, que ficaria no
 // historico do shell e no ps.
-func readSecret(prompt string) (string, error) {
-	fd := int(os.Stdin.Fd())
-	if term.IsTerminal(fd) {
-		fmt.Fprint(os.Stderr, prompt)
-		b, err := term.ReadPassword(fd)
-		fmt.Fprintln(os.Stderr)
+func (e *cli) readSecret(prompt string) (string, error) {
+	// no terminal, sem eco; por pipe (ou nos testes), le tudo
+	if f, ok := e.in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fmt.Fprint(e.err, prompt)
+		b, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(e.err)
 		return strings.TrimSpace(string(b)), err
 	}
-	b, err := io.ReadAll(os.Stdin)
+	b, err := io.ReadAll(e.in)
 	return strings.TrimRight(string(b), "\r\n"), err
 }
 
-func setupNotifyTest(args []string) error {
-	fs, socket := newFlags("setup notify-test")
-	fs.Parse(args)
-	c, err := connect(*socket)
+func (e *cli) setupNotifyTest(args []string) error {
+	fs, socket := e.newFlags("setup notify-test")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -296,14 +303,16 @@ func setupNotifyTest(args []string) error {
 	if err := c.TestNotify(context.Background()); err != nil {
 		return err
 	}
-	fmt.Println("E-mail de teste enviado.")
+	fmt.Fprintln(e.out, "E-mail de teste enviado.")
 	return nil
 }
 
-func setupGitHubTest(args []string) error {
-	fs, socket := newFlags("setup github-test")
-	fs.Parse(args)
-	c, err := connect(*socket)
+func (e *cli) setupGitHubTest(args []string) error {
+	fs, socket := e.newFlags("setup github-test")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -312,7 +321,7 @@ func setupGitHubTest(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(githubCheckText(r))
+	fmt.Fprintln(e.out, githubCheckText(r))
 	return nil
 }
 
@@ -324,14 +333,16 @@ func githubCheckText(r github.Check) string {
 	return fmt.Sprintf("GitHub App %q ok, instalado em: %s.", r.Name, strings.Join(r.Installations, ", "))
 }
 
-func runService(args []string) error {
-	fs, socket := newFlags("service")
-	fs.Parse(args)
+func (e *cli) runService(args []string) error {
+	fs, socket := e.newFlags("service")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
 	actions := map[string]string{"start": core.ServiceStart, "stop": core.ServiceStop, "restart": core.ServiceRestart}
 	if fs.NArg() != 2 || (fs.Arg(1) != "on" && fs.Arg(1) != "off" && actions[fs.Arg(1)] == "") {
 		return errors.New("uso: cais service <proxy|postgres|mysql|garage> on|off|start|stop|restart")
 	}
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -340,10 +351,10 @@ func runService(args []string) error {
 		if err := c.ControlService(context.Background(), fs.Arg(0), action); err != nil {
 			return err
 		}
-		fmt.Printf("%s: %s ok\n", fs.Arg(0), fs.Arg(1))
+		fmt.Fprintf(e.out, "%s: %s ok\n", fs.Arg(0), fs.Arg(1))
 		return nil
 	}
-	return withProgress(c, func(ctx context.Context) error {
+	return e.withProgress(c, func(ctx context.Context) error {
 		_, err := c.SetService(ctx, fs.Arg(0), fs.Arg(1) == "on")
 		return err
 	})
@@ -351,7 +362,7 @@ func runService(args []string) error {
 
 // withProgress roda uma acao que dispara o Setup e imprime os passos dele
 // ao vivo; no fim, as instrucoes de acesso.
-func withProgress(c *rpc.Client, action func(context.Context) error) error {
+func (e *cli) withProgress(c daemonAPI, action func(context.Context) error) error {
 	ctx := context.Background()
 
 	// o Subscribe entrega primeiro o estado atual, que pode ter os passos
@@ -384,10 +395,10 @@ func withProgress(c *rpc.Client, action func(context.Context) error) error {
 	if runErr != nil {
 		return runErr
 	}
-	fmt.Println("\nPronto.")
+	fmt.Fprintln(e.out, "\nPronto.")
 	if p, err := c.PlanSetup(ctx); err == nil {
-		printDBAccess(os.Stdout, p)
-		printTrust(os.Stdout, p)
+		printDBAccess(e.out, p)
+		printTrust(e.out, p)
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -24,8 +25,51 @@ import (
 // version e preenchido no build via -ldflags "-X main.version=..."
 var version = "dev"
 
+// cli e o que os comandos usam do mundo de fora: o daemon, a saida e a
+// entrada. O main usa os de verdade; os testes trocam por um core falso e
+// buffers.
+type cli struct {
+	out, err io.Writer
+	in       io.Reader
+	// dial abre a conexao com o daemon (padrao: o socket, pelo connect)
+	dial func(socket string) (daemonAPI, error)
+}
+
+// daemonAPI e o daemon como os comandos usam: a core.API e o Close.
+type daemonAPI interface {
+	core.API
+	Close() error
+}
+
 func main() {
-	cmd, args := "tui", os.Args[1:]
+	e := &cli{out: os.Stdout, err: os.Stderr, in: os.Stdin, dial: func(socket string) (daemonAPI, error) {
+		return connect(socket)
+	}}
+	os.Exit(e.run(os.Args[1:]))
+}
+
+func (e *cli) connect(socket string) (daemonAPI, error) { return e.dial(socket) }
+
+// usageError e flag ou argumento invalido: o pacote flag ja mostrou o erro
+// e a ajuda; sai com 2, como antes.
+type usageError struct{ err error }
+
+func (u *usageError) Error() string { return u.err.Error() }
+func (u *usageError) Unwrap() error { return u.err }
+
+// parse le as flags: -h devolve flag.ErrHelp (a ajuda ja saiu) e flag
+// invalida vira usageError.
+func (e *cli) parse(fs *flag.FlagSet, args []string) error {
+	err := fs.Parse(args)
+	if err != nil && !errors.Is(err, flag.ErrHelp) {
+		return &usageError{err}
+	}
+	return err
+}
+
+// run roda o comando de args e devolve o codigo de saida.
+func (e *cli) run(args []string) int {
+	cmd := "tui"
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		cmd, args = args[0], args[1:]
 	}
@@ -33,58 +77,66 @@ func main() {
 	var err error
 	switch cmd {
 	case "tui":
-		err = runTUI(args)
+		err = e.runTUI(args)
 	case "daemon":
-		err = runDaemon(args)
+		err = e.runDaemon(args)
 	case "state":
-		err = runState(args)
+		err = e.runState(args)
 	case "check":
-		err = runCheck(args)
+		err = e.runCheck(args)
 	case "setup":
-		err = runSetup(args)
+		err = e.runSetup(args)
 	case "apps":
-		err = runApps(args)
+		err = e.runApps(args)
 	case "app":
-		err = runApp(args)
+		err = e.runApp(args)
 	case "db":
-		err = runDB(args)
+		err = e.runDB(args)
 	case "bucket":
-		err = runBucket(args)
+		err = e.runBucket(args)
 	case "service":
-		err = runService(args)
+		err = e.runService(args)
 	case "backup":
-		err = runBackup(args)
+		err = e.runBackup(args)
 	case "mcp":
-		err = runMCP(args)
+		err = e.runMCP(args)
 	case "version":
-		fmt.Println("cais", version)
+		fmt.Fprintln(e.out, "cais", version)
 	case "help":
-		fmt.Print(helpFor(strings.Join(args, " ")))
+		fmt.Fprint(e.out, helpFor(strings.Join(args, " ")))
 	default:
-		fmt.Fprintf(os.Stderr, "comando desconhecido: %s\n\n%s", cmd, overview())
-		os.Exit(2)
+		fmt.Fprintf(e.err, "comando desconhecido: %s\n\n%s", cmd, overview())
+		return 2
 	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "cais:", err)
-		os.Exit(1)
+	var usage *usageError
+	switch {
+	case err == nil, errors.Is(err, flag.ErrHelp):
+		return 0
+	case errors.As(err, &usage):
+		return 2
+	default:
+		fmt.Fprintln(e.err, "cais:", err)
+		return 1
 	}
 }
 
-func newFlags(name string) (*flag.FlagSet, *string) {
-	fs := flag.NewFlagSet(name, flag.ExitOnError)
+func (e *cli) newFlags(name string) (*flag.FlagSet, *string) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	// -h mostra a ajuda do comando (ou do grupo, sem o subcomando)
-	fs.SetOutput(os.Stdout)
-	fs.Usage = func() { fmt.Print(helpFor(name)) }
+	fs.SetOutput(e.out)
+	fs.Usage = func() { fmt.Fprint(e.out, helpFor(name)) }
 	socket := fs.String("socket", rpc.DefaultSocketPath(), "caminho do socket do daemon")
 	return fs, socket
 }
 
-func runDaemon(args []string) error {
-	fs, socket := newFlags("daemon")
+func (e *cli) runDaemon(args []string) error {
+	fs, socket := e.newFlags("daemon")
 	group := fs.String("group", "", "grupo que pode usar o cais (alem do root)")
 	autoEvery := fs.Duration("auto-every", time.Minute, "intervalo da consulta do deploy automatico ao GitHub")
 	deployTimeout := fs.Duration("deploy-timeout", core.DefaultDeployTimeout, "limite de um deploy (download, build e troca); passou, cancela e volta a versao anterior")
-	fs.Parse(args)
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -141,10 +193,12 @@ func connect(socket string) (*rpc.Client, error) {
 
 // runMCP e o servidor MCP pelo stdin/stdout (o cliente roda: ssh vps cais mcp).
 // O stdout e so do protocolo: avisos e erros vao pro stderr.
-func runMCP(args []string) error {
-	fs, socket := newFlags("mcp")
-	fs.Parse(args)
-	c, err := connect(*socket)
+func (e *cli) runMCP(args []string) error {
+	fs, socket := e.newFlags("mcp")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -154,11 +208,13 @@ func runMCP(args []string) error {
 	return mcpserver.New(c, version).Run(ctx, &mcp.StdioTransport{})
 }
 
-func runTUI(args []string) error {
-	fs, socket := newFlags("tui")
-	fs.Parse(args)
+func (e *cli) runTUI(args []string) error {
+	fs, socket := e.newFlags("tui")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
 
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -166,11 +222,13 @@ func runTUI(args []string) error {
 	return ui.New(c).Run()
 }
 
-func runState(args []string) error {
-	fs, socket := newFlags("state")
-	fs.Parse(args)
+func (e *cli) runState(args []string) error {
+	fs, socket := e.newFlags("state")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
 
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -179,14 +237,16 @@ func runState(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printJSON(st)
+	return e.printJSON(st)
 }
 
-func runCheck(args []string) error {
-	fs, socket := newFlags("check")
-	fs.Parse(args)
+func (e *cli) runCheck(args []string) error {
+	fs, socket := e.newFlags("check")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
 
-	c, err := connect(*socket)
+	c, err := e.connect(*socket)
 	if err != nil {
 		return err
 	}
@@ -195,11 +255,11 @@ func runCheck(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printJSON(env)
+	return e.printJSON(env)
 }
 
-func printJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
+func (e *cli) printJSON(v any) error {
+	enc := json.NewEncoder(e.out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
