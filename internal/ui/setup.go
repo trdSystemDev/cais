@@ -502,6 +502,10 @@ func (m *model) setSetupSec(i int) tea.Cmd {
 
 // setupClick: as sub-abas e o que esta na aberta.
 func (m *model) setupClick(msg tea.MouseMsg) tea.Cmd {
+	if m.setup.sec == secBackups && m.bk.info != nil {
+		m.bk.info = nil // qualquer clique fecha a ajuda
+		return nil
+	}
 	for i, s := range setupSections {
 		if m.zones.Get("setup-sec:" + s.title).InBounds(msg) {
 			return m.setSetupSec(i)
@@ -520,6 +524,13 @@ func (m *model) setupClick(msg tea.MouseMsg) tea.Cmd {
 // dentro, o Tab percorre so a sub-aba e o esc volta.
 func (m *model) setupKey(msg tea.KeyPressMsg) tea.Cmd {
 	k, st, p := msg.String(), m.state.Backup, m.setup
+	if p.sec == secBackups && m.bk.info != nil {
+		switch k {
+		case "esc", "enter", "space", "q":
+			m.bk.info = nil
+		}
+		return nil
+	}
 	if k == "ctrl+s" && p.sec < secBackups {
 		return p.save()
 	}

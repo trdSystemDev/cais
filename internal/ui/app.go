@@ -408,9 +408,9 @@ func (m *model) View() tea.View {
 		body = m.viewSetup(bodyH)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
-	if m.tab == tabApps && m.apps.info != nil {
+	if info := m.openInfo(); info != nil {
 		// sem zona no Fechar: o compositor perde as marcas, e qualquer clique fecha
-		box := m.th.modal(*m.apps.info, m.w, m.th.button("Fechar", btnNormal, true))
+		box := m.th.modal(*info, m.w, m.th.button("Fechar", btnNormal, true))
 		content = lipgloss.NewCompositor(lipgloss.NewLayer(content), lipgloss.NewLayer(box).
 			X(max(0, (m.w-lipgloss.Width(box))/2)).Y(max(0, (m.h-lipgloss.Height(box))/2)).Z(1)).Render()
 	}
@@ -423,6 +423,17 @@ func (m *model) View() tea.View {
 	}
 	v.SetContent(content)
 	return v
+}
+
+// openInfo e a ajuda aberta por um [i] na aba atual (Apps ou Backups).
+func (m *model) openInfo() *infoBox {
+	switch {
+	case m.tab == tabApps:
+		return m.apps.info
+	case m.tab == tabSetup && m.setup.sec == secBackups:
+		return m.bk.info
+	}
+	return nil
 }
 
 func (m *model) viewTabs() string {

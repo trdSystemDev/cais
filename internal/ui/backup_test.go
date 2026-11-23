@@ -59,11 +59,16 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	}
 	click(t, m, "setup-sec:Backups")
 	waitFor(t, m, "1 · OAuth client do Google")
-	// o Tab entra no painel de Backups, pelo destino
+	// o Tab entra no painel de Backups, pelo [i] do titulo e depois o destino
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if !m.bk.active || m.bk.focusID(m.state.Backup) != "bk-provider" {
+	if !m.bk.active || m.bk.focusID(m.state.Backup) != "bk-info" {
 		t.Fatalf("tab na sub-aba Backups: foco %q", m.bk.focusID(m.state.Backup))
 	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.bk.focusID(m.state.Backup) != "bk-provider" {
+		t.Fatalf("tab na sub-aba Backups: foco %q", m.bk.focusID(m.state.Backup))
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if !m.bk.active || m.bk.focusID(m.state.Backup) != "bk-client-id" || m.setup.typing() {
 		t.Fatalf("tab na sub-aba Backups: bk ativo %v, foco %q", m.bk.active, m.bk.focusID(m.state.Backup))
@@ -140,7 +145,16 @@ func TestBackupNoOneDrivePelaTUI(t *testing.T) {
 	waitFor(t, m, "‹ Google Drive ›")
 	click(t, m, "bk-provider")
 	waitFor(t, m, "1 · App no Azure")
+	// o passo a passo do Azure fica no [i] do passo, nao solto no painel
+	if strings.Contains(screen(m), "Permitir fluxos de clientes publicos") {
+		t.Fatalf("ajuda solta no painel:\n%s", screen(m))
+	}
+	click(t, m, "bk-info-client")
 	waitFor(t, m, "Permitir fluxos de clientes publicos")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.bk.info != nil || strings.Contains(screen(m), "Permitir fluxos de clientes publicos") {
+		t.Fatalf("esc nao fechou a ajuda:\n%s", screen(m))
+	}
 	if strings.Contains(screen(m), "Client secret") {
 		t.Fatalf("OneDrive pede secret:\n%s", screen(m))
 	}
