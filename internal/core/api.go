@@ -7,6 +7,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/github"
 )
 
 // API e o contrato que toda interface usa pra falar com o nucleo. *Core
@@ -43,6 +44,10 @@ type API interface {
 	// TestNotify manda agora um e-mail de teste pros destinatarios dos
 	// avisos (config notify, chave no secret brevo_api_key).
 	TestNotify(ctx context.Context) error
+	// TestGitHub confere o GitHub App (o GitHub aceita o App ID com a
+	// chave) e diz em que contas ele esta instalado. appID 0 e key vazia
+	// usam o que esta salvo.
+	TestGitHub(ctx context.Context, appID int64, key string) (github.Check, error)
 
 	// PlanSetup diz como a config salva fica nos servicos ligados (o que
 	// mudaria ao aplicar), sem mudar nada.
@@ -52,6 +57,10 @@ type API interface {
 	// salva nele. O progresso vai pra State.Setup. Salvar a config nunca
 	// sobe nada: so isto.
 	SetService(ctx context.Context, name string, on bool) (Setup, error)
+	// ControlService inicia (start), para (stop) ou reinicia (restart) os
+	// containers de um servico ligado, sem mexer na config: parado, ele
+	// continua ligado e volta no Iniciar (ou no proximo Aplicar).
+	ControlService(ctx context.Context, name, action string) error
 
 	// CheckApps le os apps e os containers deles e publica em State.Apps.
 	CheckApps(ctx context.Context) (Apps, error)

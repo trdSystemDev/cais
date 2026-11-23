@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
@@ -118,6 +119,49 @@ func (c *Core) SetService(ctx context.Context, name string, on bool) (Setup, err
 		return Setup{}, err
 	}
 	return c.runSetupLocked(ctx, name, on)
+}
+
+// Acoes do ControlService.
+const (
+	ServiceStart   = "start"
+	ServiceStop    = "stop"
+	ServiceRestart = "restart"
+)
+
+func (c *Core) ControlService(ctx context.Context, name, action string) error {
+	st, ok := stacks.Get(name)
+	if !ok || !st.Optional {
+		return fmt.Errorf("%q nao e um servico opcional (opcoes: %s)", name, strings.Join(optionalNames(), ", "))
+	}
+	if action != ServiceStart && action != ServiceStop && action != ServiceRestart {
+		return fmt.Errorf("acao %q: use start, stop ou restart", action)
+	}
+	if !c.infra.TryLock() {
+		return ErrBusy
+	}
+	defer c.infra.Unlock()
+
+	cfg, err := config.Load(c.deps.ConfigPath)
+	if err != nil && !errors.Is(err, config.ErrNotFound) {
+		return err
+	}
+	if !cfg.HasStack(name) {
+		return fmt.Errorf("%s esta desligado: ligue antes (cais service %s on)", name, name)
+	}
+	file := c.setupDeps().ComposeFile(name)
+	if _, err := os.Stat(file); err != nil {
+		return fmt.Errorf("%s ainda nao subiu: aplique antes (cais service %s on)", name, name)
+	}
+	switch action {
+	case ServiceStart:
+		err = c.deps.ComposeUp(ctx, file, false)
+	case ServiceStop:
+		err = c.deps.ComposeStop(ctx, file)
+	default:
+		err = c.deps.ComposeRestart(ctx, file)
+	}
+	c.CheckStacks(ctx)
+	return err
 }
 
 func optionalNames() []string {

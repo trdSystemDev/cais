@@ -278,6 +278,43 @@ func (a App) asApp(ctx context.Context, method, path string, body, out any) ([]b
 	return a.do(ctx, request{method: method, path: path, auth: "Bearer " + jwt, body: body, quota: QuotaApp}, out)
 }
 
+// Check e o resultado do teste do GitHub App: o nome dele e as contas
+// (usuarios ou organizacoes) em que esta instalado.
+type Check struct {
+	Name          string   `json:"name"`
+	Installations []string `json:"installations"`
+}
+
+// Check confere o App ID e a chave (o JWT tem que ser aceito) e lista onde
+// o app esta instalado. Nao abre nenhum repositorio.
+func (a App) Check(ctx context.Context) (Check, error) {
+	if a.ID <= 0 || a.Key == nil {
+		return Check{}, errors.New("GitHub App nao configurado: informe o App ID e a chave privada")
+	}
+	var app struct {
+		Name string `json:"name"`
+	}
+	if _, err := a.asApp(ctx, http.MethodGet, "/app", nil, &app); err != nil {
+		if IsUnauthorized(err) || IsNotFound(err) {
+			return Check{}, fmt.Errorf("o GitHub recusou o App ID %d com esta chave: confira o App ID e se a chave privada e deste app (%w)", a.ID, err)
+		}
+		return Check{}, err
+	}
+	var insts []struct {
+		Account struct {
+			Login string `json:"login"`
+		} `json:"account"`
+	}
+	if _, err := a.asApp(ctx, http.MethodGet, "/app/installations?per_page=100", nil, &insts); err != nil {
+		return Check{}, err
+	}
+	c := Check{Name: app.Name}
+	for _, in := range insts {
+		c.Installations = append(c.Installations, in.Account.Login)
+	}
+	return c, nil
+}
+
 // Session e o acesso a um repositorio com um token de instalacao, que vale
 // uma hora e so enxerga esse repositorio. Pode ser usada por varias
 // goroutines (o Sessions guarda uma por repositorio).

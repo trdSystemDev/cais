@@ -427,12 +427,26 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodNotifyTest:
 		return ok(s.api.TestNotify(s.work))
 
+	case MethodGitHubTest:
+		var p githubTestParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(s.api.TestGitHub(s.work, p.AppID, p.Key))
+
 	case MethodServiceSet:
 		var p serviceParams
 		if err := params(m, &p); err != nil {
 			return nil, err
 		}
 		return wrap(s.api.SetService(s.work, p.Name, p.On))
+
+	case MethodServiceControl:
+		var p serviceControlParams
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.ControlService(s.work, p.Name, p.Action))
 
 	case MethodStateSubscribe:
 		if !c.subscribed.CompareAndSwap(false, true) {

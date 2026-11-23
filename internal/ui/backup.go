@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -18,12 +17,10 @@ import (
 	"github.com/trdSystemDev/cais/internal/databases"
 )
 
-// backupCard e a entrada "Backups" no fim da lista da aba Infra.
-const backupCard = "backups"
-
-// bkPanel e o painel de Backups da aba Infra: OAuth client do Google,
-// login no Drive, chave do backup, horario e o backup manual. Ativo
-// (recebe o teclado) depois de enter ou clique no card.
+// bkPanel e o painel de Backups da aba Setup: OAuth client do Google,
+// login no Drive, chave do backup, horario, o backup agora e o proximo e o
+// ultimo backup. Ativo (recebe o teclado) quando o Tab passa do formulario
+// pra ele ou num clique.
 type bkPanel struct {
 	api   core.API
 	zones *zone.Manager
@@ -146,24 +143,6 @@ func (p *bkPanel) setFocus(st core.BackupStatus, i int) tea.Cmd {
 	return cmd
 }
 
-// activate passa o teclado pro painel, no primeiro passo que falta.
-func (p *bkPanel) activate(st core.BackupStatus) tea.Cmd {
-	p.active = true
-	p.fill(st)
-	first := "bk-run"
-	switch {
-	case st.ClientID == "":
-		first = "bk-client-id"
-	case st.Email == "" && st.Login == nil:
-		first = "bk-connect"
-	case st.Recipient == "":
-		first = "bk-key"
-	case st.Time == "":
-		first = "bk-time"
-	}
-	return p.setFocus(st, max(0, slices.Index(p.ids(st), first)))
-}
-
 func (p *bkPanel) deactivate() {
 	p.active, p.confirmKey = false, false
 	for _, ti := range p.inputs() {
@@ -269,9 +248,7 @@ func (p *bkPanel) update(st core.BackupStatus, msg tea.Msg) (tea.Cmd, bool) {
 	p.busy = ""
 	if d.err != nil {
 		p.err = firstLine(d.err.Error())
-		if d.action != "backup" {
-			return nil, true
-		}
+		return nil, true
 	}
 	switch d.action {
 	case "client":
@@ -288,9 +265,7 @@ func (p *bkPanel) update(st core.BackupStatus, msg tea.Msg) (tea.Cmd, bool) {
 			p.done = "Backup automatico desligado (o manual continua)."
 		}
 	case "backup":
-		if d.err == nil {
-			p.done = fmt.Sprintf("Backup %s no Drive (%s).", d.run.File, databases.HumanSize(d.run.Size))
-		}
+		p.done = fmt.Sprintf("Backup %s no Drive (%s).", d.run.File, databases.HumanSize(d.run.Size))
 	}
 	return nil, true
 }
@@ -383,9 +358,6 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int) string {
 
 	var b strings.Builder
 	b.WriteString(t.bold().Render("Backups") + "  " + muted.Render("bancos e estado do cais, criptografados, no Google Drive") + "\n")
-	if !p.active {
-		b.WriteString(muted.Render("enter ou clique pra configurar · esc sai") + "\n")
-	}
 	b.WriteString("\n")
 
 	// 1. OAuth client
@@ -460,7 +432,7 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int) string {
 	b.WriteString(field("bk-days", "Retencao (dias)", 6) + "\n")
 	b.WriteString("  " + btn("bk-schedule", "Salvar horario", btnNormal) + "\n\n")
 
-	// backup agora e o ultimo
+	// backup agora, o proximo e o ultimo
 	label, k := "Fazer backup agora", btnNormal
 	if !st.Ready() {
 		k = btnOff
@@ -496,22 +468,13 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int) string {
 	}
 	b.WriteString("\n" + wrap.Foreground(t.warn).Render(core.BackupGap) + "\n")
 	b.WriteString("\n" + wrap.Inherit(muted).Render("Restaurar: cais backup files e cais backup restore <arquivo> -key <arquivo> postgres/<db> (na VPS).") + "\n")
-	return t.panel(p.active, w-2, h).MaxHeight(h + 2).Render(b.String())
+	return t.panel(p.active, w, h).MaxHeight(h + 2).Render(b.String())
 }
 
-// lastBackupLabel e o status curto do card Backups.
-func lastBackupLabel(st core.BackupStatus, now time.Time) (string, bool) {
-	switch {
-	case st.Running:
-		return "fazendo backup...", true
-	case !st.Ready():
-		return "nao configurado", false
-	case st.Last == nil:
-		return "configurado, sem backup ainda", true
-	case !st.Last.OK():
-		return "ultimo falhou", false
-	case now.Sub(st.Last.At) > 36*time.Hour && st.Time != "":
-		return "atrasado (ultimo " + st.Last.At.Local().Format("02/01") + ")", false
+// backupRefreshCmd pede ao core o estado do backup (chega pelo estado).
+func (m *model) backupRefreshCmd() tea.Cmd {
+	return func() tea.Msg {
+		m.api.RefreshBackup(context.Background())
+		return nil
 	}
-	return "ok · " + st.Last.At.Local().Format("02/01 15:04"), true
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/github"
 )
 
 // Client fala com o daemon pelo socket e implementa core.API: quem usa
@@ -90,6 +91,11 @@ func (c *Client) TestNotify(ctx context.Context) error {
 	return c.call(ctx, MethodNotifyTest, nil, nil)
 }
 
+func (c *Client) TestGitHub(ctx context.Context, appID int64, key string) (r github.Check, err error) {
+	err = c.call(ctx, MethodGitHubTest, githubTestParams{AppID: appID, Key: key}, &r)
+	return
+}
+
 func (c *Client) PlanSetup(ctx context.Context) (p bootstrap.Plan, err error) {
 	err = c.call(ctx, MethodSetupPlan, nil, &p)
 	return
@@ -99,6 +105,10 @@ func (c *Client) PlanSetup(ctx context.Context) (p bootstrap.Plan, err error) {
 func (c *Client) SetService(ctx context.Context, name string, on bool) (st core.Setup, err error) {
 	err = c.call(ctx, MethodServiceSet, serviceParams{Name: name, On: on}, &st)
 	return
+}
+
+func (c *Client) ControlService(ctx context.Context, name, action string) error {
+	return c.call(ctx, MethodServiceControl, serviceControlParams{Name: name, Action: action}, nil)
 }
 
 // Subscribe tem a mesma semantica do core: recebe a foto atual (se o

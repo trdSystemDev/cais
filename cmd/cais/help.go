@@ -110,13 +110,21 @@ Exemplo:
 Usa o remetente e os destinatarios da config (cais setup config
 --notify-from --notify-to) e a chave da Brevo (cais setup secret
 brevo_api_key). Se a Brevo recusar, o motivo aparece aqui.`},
+		{name: "setup github-test", usage: "setup github-test", short: "confere o GitHub App salvo e diz onde ele esta instalado", long: `
+Usa o App ID da config e a chave (cais setup secret github_app_key). Se o
+GitHub recusar, o motivo aparece aqui; nao abre nenhum repositorio.`},
 	}},
 	{title: "Servicos (nada sobe sem ser ligado):", cmds: []command{
-		{name: "service", usage: "service <nome> on|off", short: "liga ou desliga proxy, postgres, mysql ou garage e aplica", long: `
+		{name: "service", usage: "service <nome> on|off|start|stop|restart", short: "liga/desliga, inicia/para ou reinicia um servico", long: `
 Ligar gera os secrets que faltam, grava o compose e sobe o servico (e
 mostra o progresso, tambem na TUI aberta). "on" num servico ja ligado
 aplica nele a config salva no Setup. Desligar derruba os containers e
 preserva os volumes (os dados); ligar de novo traz tudo de volta.
+
+start, stop e restart so mexem nos containers de um servico ligado:
+parado, ele continua ligado na config e volta no start (ou no proximo
+"on"). Parar o postgres ou o mysql derruba os apps que usam o banco e faz
+o backup falhar ate ele voltar.
 
 O proxy (Traefik) publica os apps com HTTPS: sem ele, app com dominio nao
 sobe. O Garage precisa do proxy ligado.
@@ -124,6 +132,7 @@ sobe. O Garage precisa do proxy ligado.
 Exemplos:
   cais service proxy on
   cais service postgres on
+  cais service postgres restart
   cais service garage off`},
 	}},
 	{title: "Bancos (no Postgres/MySQL da infra):", group: "db", cmds: []command{

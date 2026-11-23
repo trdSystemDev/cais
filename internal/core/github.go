@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/github"
@@ -33,6 +34,49 @@ func (c *Core) githubApp() (github.App, error) {
 		return github.App{}, err
 	}
 	return github.App{ID: cfg.GitHub.AppID, Key: key, BaseURL: c.deps.GitHubURL, Now: c.deps.Now}, nil
+}
+
+// TestGitHub confere o GitHub App sem abrir repositorio: o GitHub aceita o
+// App ID com a chave, e em que contas ele esta instalado. appID 0 e key
+// vazia usam o que esta salvo (config e secret), pra testar o formulario
+// antes de salvar.
+func (c *Core) TestGitHub(ctx context.Context, appID int64, key string) (github.Check, error) {
+	if appID < 0 {
+		return github.Check{}, errors.New("App ID invalido: e o numero na pagina do app no GitHub")
+	}
+	saved, err := c.githubApp()
+	app := github.App{ID: appID, BaseURL: c.deps.GitHubURL, Now: c.deps.Now}
+	switch {
+	case key != "":
+		pem, err := github.NormalizeKey(key)
+		if err != nil {
+			return github.Check{}, err
+		}
+		if app.Key, err = github.ParseKey(pem); err != nil {
+			return github.Check{}, err
+		}
+	case saved.Key != nil:
+		app.Key = saved.Key
+	default:
+		if pem, gerr := (secrets.FileStore{Dir: c.deps.SecretsDir}).Get(GitHubKeySecret); gerr == nil {
+			if app.Key, err = github.ParseKey(pem); err != nil {
+				return github.Check{}, err
+			}
+		} else if errors.Is(gerr, secrets.ErrNotFound) {
+			return github.Check{}, errors.New("falta a chave do GitHub App: cole o .pem (ou o caminho dele)")
+		} else {
+			return github.Check{}, gerr
+		}
+	}
+	if app.ID == 0 {
+		if saved.ID == 0 {
+			return github.Check{}, errors.New("falta o App ID do GitHub App")
+		}
+		app.ID = saved.ID
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return app.Check(ctx)
 }
 
 // githubSource e a origem do codigo dos apps pelo GitHub App. As sessoes

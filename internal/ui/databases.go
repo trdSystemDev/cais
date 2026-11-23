@@ -17,16 +17,18 @@ import (
 )
 
 // dbPanel e o "Novo banco" (Postgres/MySQL) e o "Novo bucket" (Garage) da
-// aba Infra: cria o database com usuario e senha nova, ou o bucket com uma
-// chave so dele, e lista os ja criados. O app recebe a credencial pelos
-// secrets ao ligar (Apps -> Secrets). Fica no lugar dos logs enquanto esta
-// aberto.
+// secao Geral do card na aba Infra: cria o database com usuario e senha
+// nova, ou o bucket com uma chave so dele, e lista os ja criados. O app
+// recebe a credencial pelos secrets ao ligar (Apps -> Secrets). Aberto
+// (engine) enquanto o card do servico ligado esta selecionado; active diz
+// se o foco do teclado esta nele.
 type dbPanel struct {
 	api   core.API
 	zones *zone.Manager
 	th    theme
 
 	engine  string // postgres, mysql ou garage; aberto quando nao vazio
+	active  bool   // o foco esta aqui (campos mostram o cursor)
 	name    *textinput.Model
 	exts    *textinput.Model
 	src     *textinput.Model // string de conexao pra importar (tem senha)
@@ -106,12 +108,12 @@ func (p *dbPanel) open() bool { return p.engine != "" }
 // ids na ordem do Tab: o formulario (extensoes so no Postgres), o excluir
 // de cada item da lista e a confirmacao aberta
 func (p *dbPanel) ids() []string {
-	ids := []string{"db-name", "db-create", "db-close"}
+	ids := []string{"db-name", "db-create"}
 	switch p.engine {
 	case "postgres":
-		ids = []string{"db-name", "db-exts", "db-src", "db-create", "db-close"}
+		ids = []string{"db-name", "db-exts", "db-src", "db-create"}
 	case "mysql":
-		ids = []string{"db-name", "db-src", "db-create", "db-close"}
+		ids = []string{"db-name", "db-src", "db-create"}
 	}
 	for _, d := range p.list {
 		ids = append(ids, "db-del:"+d.name)
@@ -142,7 +144,15 @@ func (p *dbPanel) input(id string) *textinput.Model {
 	return nil
 }
 
-func (p *dbPanel) typing() bool { return p.open() && p.input(p.focusID()) != nil }
+func (p *dbPanel) typing() bool { return p.open() && p.active && p.input(p.focusID()) != nil }
+
+// blur tira o foco do painel (foi pros botoes do servico ou saiu do card).
+func (p *dbPanel) blur() {
+	p.active = false
+	for _, ti := range []*textinput.Model{p.name, p.exts, p.src, p.delInput} {
+		ti.Blur()
+	}
+}
 
 func (p *dbPanel) setFocus(i int) tea.Cmd {
 	ids := p.ids()
@@ -150,7 +160,7 @@ func (p *dbPanel) setFocus(i int) tea.Cmd {
 	var cmd tea.Cmd
 	for j, id := range ids {
 		if ti := p.input(id); ti != nil {
-			if j == p.focus {
+			if j == p.focus && p.active {
 				cmd = ti.Focus()
 			} else {
 				ti.Blur()
@@ -161,7 +171,7 @@ func (p *dbPanel) setFocus(i int) tea.Cmd {
 }
 
 func (p *dbPanel) show(engine string) tea.Cmd {
-	p.engine, p.err, p.created, p.busy, p.list, p.done, p.delName = engine, "", nil, false, nil, "", ""
+	p.engine, p.err, p.created, p.busy, p.list, p.done, p.delName, p.active = engine, "", nil, false, nil, "", "", false
 	for _, ti := range []*textinput.Model{p.name, p.exts, p.src, p.delInput} {
 		ti.SetValue("")
 	}
@@ -174,7 +184,7 @@ func (p *dbPanel) show(engine string) tea.Cmd {
 }
 
 func (p *dbPanel) close() {
-	p.engine, p.delName = "", ""
+	p.engine, p.delName, p.active = "", "", false
 	p.src.SetValue("") // tem senha: nao fica no campo depois de fechar
 	for _, ti := range []*textinput.Model{p.name, p.exts, p.src, p.delInput} {
 		ti.Blur()
@@ -263,8 +273,6 @@ func (p *dbPanel) press(id string) tea.Cmd {
 	switch id {
 	case "db-create":
 		return p.create()
-	case "db-close":
-		p.close()
 	case "db-del-ok":
 		return p.remove()
 	case "db-del-cancel":
@@ -327,20 +335,11 @@ func (p *dbPanel) update(msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+// key: o Tab, as setas e o esc ficam com a aba Infra (passam dos botoes do
+// servico pro painel e saem do card).
 func (p *dbPanel) key(msg tea.KeyPressMsg) tea.Cmd {
 	id := p.focusID()
 	switch k := msg.String(); k {
-	case "esc":
-		if p.delName != "" {
-			p.delName = ""
-			return p.setFocus(0)
-		}
-		p.close()
-		return nil
-	case "tab", "down":
-		return p.setFocus(p.focus + 1)
-	case "shift+tab", "up":
-		return p.setFocus(p.focus - 1)
 	case "enter":
 		if p.input(id) != nil {
 			return p.setFocus(p.focus + 1)
@@ -360,7 +359,7 @@ func (p *dbPanel) key(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (p *dbPanel) paste(msg tea.PasteMsg) tea.Cmd {
-	if ti := p.input(p.focusID()); ti != nil && p.open() {
+	if ti := p.input(p.focusID()); ti != nil && p.open() && p.active {
 		v, cmd := ti.Update(msg)
 		*ti = v
 		return cmd
@@ -368,23 +367,26 @@ func (p *dbPanel) paste(msg tea.PasteMsg) tea.Cmd {
 	return nil
 }
 
-func (p *dbPanel) click(msg tea.MouseMsg) tea.Cmd {
+// click no painel; ok diz se acertou algo dele (e o foco vem pra ca).
+func (p *dbPanel) click(msg tea.MouseMsg) (tea.Cmd, bool) {
 	for i, id := range p.ids() {
 		if p.zones.Get(id).InBounds(msg) {
+			p.active = true
 			cmd := p.setFocus(i)
 			if p.input(id) == nil {
-				return tea.Batch(cmd, p.press(id))
+				return tea.Batch(cmd, p.press(id)), true
 			}
-			return cmd
+			return cmd, true
 		}
 	}
-	return nil
+	return nil, false
 }
 
-func (p *dbPanel) view(w, h int) string {
+// view e o conteudo do painel, sem borda (vai dentro da secao Geral).
+func (p *dbPanel) view(w int) string {
 	t := p.th
 	muted := t.fg(t.muted)
-	wrap := lipgloss.NewStyle().Width(w - 6)
+	wrap := lipgloss.NewStyle().Width(w)
 	what, nameLabel, link := "banco", "Database", "Ligar banco"
 	desc := "Cria o database e um usuario com senha nova, que so acessa esse database. " +
 		"O app chega pela rede " + p.engine + "_network."
@@ -396,10 +398,13 @@ func (p *dbPanel) view(w, h int) string {
 	var b strings.Builder
 	b.WriteString(t.bold().Render("Novo "+what+" no "+p.engine) + "\n")
 	b.WriteString(wrap.Inherit(muted).Render(desc) + "\n\n")
-	focusID := p.focusID()
+	focusID := ""
+	if p.active {
+		focusID = p.focusID()
+	}
 	var buttons []string
 	for _, id := range p.ids() {
-		if id != "db-name" && id != "db-exts" && id != "db-src" && id != "db-create" && id != "db-close" {
+		if id != "db-name" && id != "db-exts" && id != "db-src" && id != "db-create" {
 			continue // excluir: na lista e na confirmacao
 		}
 		focused := id == focusID
@@ -411,19 +416,16 @@ func (p *dbPanel) view(w, h int) string {
 			}
 			b.WriteString(p.zones.Mark(id, marker+ls.Render(label)+t.input(ti, 29)) + "\n")
 			if id == "db-src" {
-				b.WriteString(p.viewSource(w-6) + "\n")
+				b.WriteString(p.viewSource(w) + "\n")
 			}
 			continue
 		}
-		label := map[string]string{"db-create": "Criar", "db-close": "Fechar"}[id]
-		if id == "db-create" && strings.TrimSpace(p.src.Value()) != "" {
+		label := "Criar"
+		if strings.TrimSpace(p.src.Value()) != "" {
 			label = "Criar e importar"
 		}
 		k := btnNormal
-		if id == "db-close" {
-			k = btnNeutral
-		}
-		if p.busy && id == "db-create" {
+		if p.busy {
 			k, label = btnOff, "Criando..."
 			if strings.TrimSpace(p.src.Value()) != "" {
 				label = "Importando..."
@@ -456,7 +458,7 @@ func (p *dbPanel) view(w, h int) string {
 		del := func(name string) string {
 			return p.zones.Mark("db-del:"+name, t.chip("✕ excluir", btnDanger, focusID == "db-del:"+name || p.delName == name))
 		}
-		writeInfraRows(&b, nameLabel, p.list, t, w-6, del)
+		writeInfraRows(&b, nameLabel, p.list, t, w, del)
 	}
 	if p.delName != "" {
 		warn := "Excluir o database " + p.delName + " apaga todos os dados dele e o usuario. Nao tem volta."
@@ -481,7 +483,7 @@ func (p *dbPanel) view(w, h int) string {
 			b.WriteString("\n" + wrap.Foreground(t.danger).Render(p.err) + "\n")
 		}
 	}
-	return t.panel(true, w-2, h).MaxHeight(h + 2).Render(b.String())
+	return b.String()
 }
 
 // viewSource mostra, embaixo do campo Importar de, o que o cais entendeu da

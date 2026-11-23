@@ -78,6 +78,29 @@ func (s *Server) jwtOK(r *http.Request) bool {
 	return rsa.VerifyPKCS1v15(s.pub, crypto.SHA256, sum[:], sig) == nil
 }
 
+// jwtIssuer e o App ID (iss) do JWT.
+func (s *Server) jwtIssuer(r *http.Request) string {
+	parts := strings.Split(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	data, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	var claims struct {
+		Iss string `json:"iss"`
+	}
+	json.Unmarshal(data, &claims)
+	return claims.Iss
+}
+
+func sortedKeys(m map[string]map[string]string) []string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,6 +111,31 @@ func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(s.quota.limit))
 		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(s.quota.remaining))
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+	}
+
+	// /app e /app/installations: o teste do GitHub App (JWT valido e do
+	// App ID certo); instalado nas contas donas dos repositorios
+	if r.Method == http.MethodGet && parts[0] == "app" && len(parts) <= 2 {
+		if !s.jwtOK(r) || s.jwtIssuer(r) != strconv.FormatInt(s.AppID, 10) {
+			w.WriteHeader(401)
+			io.WriteString(w, `{"message":"A JSON web token could not be decoded"}`)
+			return
+		}
+		if len(parts) == 1 {
+			json.NewEncoder(w).Encode(map[string]any{"name": "cais-teste", "id": s.AppID})
+			return
+		}
+		seen := map[string]bool{}
+		var insts []map[string]any
+		for _, repo := range sortedKeys(s.repos) {
+			owner, _, _ := strings.Cut(repo, "/")
+			if !seen[owner] {
+				seen[owner] = true
+				insts = append(insts, map[string]any{"id": s.installID(repo), "account": map[string]string{"login": owner}})
+			}
+		}
+		json.NewEncoder(w).Encode(insts)
+		return
 	}
 
 	// /app/installations/<id>/access_tokens: um id (numerico, como no

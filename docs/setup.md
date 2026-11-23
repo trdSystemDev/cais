@@ -1,6 +1,6 @@
 # Setup e configuracao
 
-O Setup so guarda a configuracao da VPS (e-mail do Let's Encrypt, GitHub App, avisos, host do S3): salvar nao sobe nada. Os servicos (proxy, bancos, S3) se ligam na aba **Infra** ou com `cais service`.
+O Setup so guarda a configuracao da VPS (e-mail do Let's Encrypt, GitHub App, avisos, host do S3, backups): salvar nao sobe nada. Os servicos (proxy, bancos, S3) se ligam na aba **Infra** ou com `cais service`, e as portas do proxy ficam no card dele, na Infra.
 
 ## Comandos
 
@@ -18,17 +18,28 @@ cais service postgres on # liga o Postgres
 cais service garage off  # desliga o S3 e preserva os volumes
 ```
 
-A aba **Setup** concentra o e-mail do Let's Encrypt, os certificados (Let's
-Encrypt, ou a CA local pra teste no PC), o GitHub App, os avisos por e-mail e
-o host do S3.
-A aba **Infra** mostra cada servico com os botoes Ligar/Desligar, o passo em
-andamento e as instrucoes do S3. Quando a config salva muda um servico que ja
-esta ligado (ex: o e-mail do Let's Encrypt muda o proxy), o card mostra
-**Aplicar** (tecla `a`); pelo CLI, `cais service <nome> on` de novo.
-Os cards ficam a esquerda; a direita aparecem os logs do container selecionado
-(ultimas 200 linhas, atualizadas a cada 2 segundos). Clique num card ou use
-↑/↓; ←/→ troca o container nas stacks com mais de um. PgUp/PgDown ou a roda
-do mouse rola os logs, e End volta a acompanhar as mensagens recentes.
+A aba **Setup** e dividida em sub-abas de tela cheia: **Geral** (e-mail do
+Let's Encrypt, certificados — Let's Encrypt, ou a CA local pra teste no PC —,
+o host do S3 e o GitHub App), **Avisos** (e-mail pela Brevo) e **Backups** (a
+configuracao dos [backups](backups.md)). ←/→ troca a sub-aba; enter ou tab
+entra nos campos e esc volta. Geral e Avisos sao o mesmo formulario: o Salvar
+de qualquer uma grava tudo.
+A aba **Infra** funciona como a de Apps: os cards (so o estado) ficam a
+esquerda e, a direita, o servico selecionado em duas secoes. Clique num card
+ou use ↑/↓; ←/→ troca a secao; enter ou tab entra nos botoes e esc volta.
+
+- **Geral**: **Ligar/Desligar** (grava na config e sobe ou derruba o
+  servico), **Aplicar** quando a config salva muda um servico ligado (ex: o
+  e-mail do Let's Encrypt muda o proxy; tecla `a`), **Iniciar/Parar** e
+  **Reiniciar** (so os containers: o servico continua ligado). Embaixo, o do
+  servico: as **portas** no proxy, o **Novo banco** no Postgres/MySQL e o
+  **Novo bucket** no Garage, com a lista dos ja criados.
+- **Logs**: os logs do container (ultimas 200 linhas, atualizadas a cada 2
+  segundos). Enter entra e ←/→ troca o container nas stacks com mais de um;
+  PgUp/PgDown ou a roda do mouse rola, e End volta as mensagens recentes.
+
+Pelo CLI: `cais service <nome> on` de novo aplica, e `start`, `stop` e
+`restart` iniciam, param e reiniciam.
 Ligar e aplicar podem ser repetidos: nada que existe e regenerado e servico
 sem mudanca nao e recriado. O que for ligado pelo CLI aparece ao vivo na TUI
 aberta, e vice-versa.
@@ -98,10 +109,11 @@ tratadas do mesmo jeito.
 ## Portas do proxy
 
 O proxy sobe nas portas 80 e 443 do host. Pra testar (ou numa migracao, com
-outro proxy ainda nas 80/443), da pra usar outras: na aba **Setup**, secao
-**Proxy**, ou pelo CLI. Mudou com o proxy ligado, aplique (aba **Infra** ->
-**Aplicar**, ou `cais service proxy on`): o container sobe de novo na porta
-nova.
+outro proxy ainda nas 80/443), da pra usar outras: na aba **Infra**, secao
+**Geral** do proxy, ou pelo CLI. Na TUI, **Salvar e
+aplicar** ja sobe o proxy de novo nas portas novas; pelo CLI, aplique com
+`cais service proxy on`. Com o proxy desligado, as portas valem quando ele
+ligar.
 
 ```sh
 cais setup config --http-port 8080 --https-port 8443
@@ -111,7 +123,7 @@ cais service proxy on        # aplica: o proxy volta nas portas novas
 Com HTTPS fora da 443, o redirecionamento de HTTP leva pra porta certa
 (`http://site:8080` -> `https://site:8443`). O Let's Encrypt, porem, valida
 pela porta 80 da internet: fora de 80/443 ele nao emite certificado e os
-sites abrem com aviso. A aba Setup e o `cais setup` avisam.
+sites abrem com aviso. O painel de portas, a aba Setup e o `cais setup` avisam.
 
 ## Acesso aos bancos
 

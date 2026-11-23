@@ -24,7 +24,9 @@ const (
 	MethodSecretSet        = "secret.set"  // params: secretParams
 	MethodSetupPlan        = "setup.plan"
 	MethodNotifyTest       = "notify.test"
-	MethodServiceSet       = "service.set" // params: serviceParams
+	MethodGitHubTest       = "github.test"     // params: githubTestParams
+	MethodServiceSet       = "service.set"     // params: serviceParams
+	MethodServiceControl   = "service.control" // params: serviceControlParams
 	MethodAppsCheck        = "apps.check"
 	MethodAppCreate        = "app.create"        // params: apps.App
 	MethodAppUpdate        = "app.update"        // params: apps.App
@@ -120,6 +122,11 @@ type serviceParams struct {
 	On   bool   `json:"on"`
 }
 
+type serviceControlParams struct {
+	Name   string `json:"name"`
+	Action string `json:"action"` // start, stop ou restart
+}
+
 type logsParams struct {
 	Stack     string `json:"stack"`
 	Container string `json:"container"`
@@ -187,4 +194,10 @@ type backupScheduleParams struct {
 
 type textResult struct {
 	Text string `json:"text"`
+}
+
+// githubTestParams e o GitHub App a testar (zero/vazio: o salvo).
+type githubTestParams struct {
+	AppID int64  `json:"app_id,omitempty"`
+	Key   string `json:"key,omitempty"`
 }

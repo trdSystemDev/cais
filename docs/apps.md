@@ -162,7 +162,10 @@ na imagem num `COPY . .` (o deploy avisa).
 O GitHub App do cais e configurado uma vez na aba **Setup** (App ID e a chave:
 cole o .pem ou o caminho do arquivo) ou com `cais setup config --github-app-id`
 e `cais setup secret github_app_key < chave.pem`. O app precisa da permissao
-*Contents: read* e estar instalado nos repositorios.
+*Contents: read* e estar instalado nos repositorios. O **Testar** da secao
+GitHub App (ou `cais setup github-test`) confere se o GitHub aceita o App ID
+com a chave e diz em que contas o app esta instalado; na TUI ele testa o que
+esta no formulario, antes de salvar.
 
 ## Historico e rollback
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,21 +37,40 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 	t.Helper()
 	root := t.TempDir()
 	var ups, pss atomic.Int32
+	// Parar deixa os containers da stack parados ate o proximo up
+	var mu sync.Mutex
+	stopped := map[string]bool{}
+	stack := func(file string) string { return filepath.Base(filepath.Dir(file)) }
 	c := core.New(core.Deps{
 		CheckDocker: check,
 		ConfigPath:  filepath.Join(root, "config.yaml"),
 		SecretsDir:  filepath.Join(root, "secrets"),
 		StackDir:    func(n string) string { return filepath.Join(root, "stacks", n) },
-		ComposeUp: func(context.Context, string, bool) error {
+		ComposeUp: func(_ context.Context, file string, _ bool) error {
 			ups.Add(1)
+			mu.Lock()
+			delete(stopped, stack(file))
+			mu.Unlock()
 			return nil
 		},
-		ContainerLogs: func(context.Context, string) (string, error) { return "container iniciado\nouvindo conexoes", nil },
-		ComposeDown:   func(context.Context, string) error { return nil },
+		ComposeStop: func(_ context.Context, file string) error {
+			mu.Lock()
+			stopped[stack(file)] = true
+			mu.Unlock()
+			return nil
+		},
+		ComposeRestart: func(context.Context, string) error { return nil },
+		ContainerLogs:  func(context.Context, string) (string, error) { return "container iniciado\nouvindo conexoes", nil },
+		ComposeDown:    func(context.Context, string) error { return nil },
 		// toda stack instalada aparece com um container saudavel
 		ComposePS: func(_ context.Context, file string) ([]docker.Container, error) {
 			pss.Add(1)
-			name := filepath.Base(filepath.Dir(file))
+			name := stack(file)
+			mu.Lock()
+			defer mu.Unlock()
+			if stopped[name] {
+				return []docker.Container{{Name: name, Service: name, State: "exited", Status: "Exited (0)"}}, nil
+			}
 			return []docker.Container{{Name: name, Service: name, State: "running", Health: "healthy", Status: "Up 1 minute (healthy)"}}, nil
 		},
 		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
@@ -295,7 +315,7 @@ func TestCliqueTrocaDeAba(t *testing.T) {
 	waitFor(t, m, "+ Novo app")
 
 	click(t, m, "tab:Setup")
-	waitFor(t, m, "Configuracao")
+	waitFor(t, m, "Certificados")
 }
 
 func TestAtalhoNumericoTrocaDeAba(t *testing.T) {
@@ -366,26 +386,34 @@ func TestInfraMostraAsStacks(t *testing.T) {
 	waitFor(t, m, "Ultima verificacao")
 	out := screen(m)
 	for _, want := range []string{
-		"HTTPS dos apps", "✓ proxy", "Logs · proxy",
+		"HTTPS dos apps", "✓ proxy", "Geral", "Logs", "Desligar", "Parar", "Reiniciar", "Portas do proxy",
 		"✓ postgres", "ainda nao subiu", // mysql
-		"· garage", "Ligar", "Desligar",
+		"· garage",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("tela sem %q:\n%s", want, out)
 		}
 	}
-	// todos ligam e desligam, o proxy tambem; o mysql, ligado na config sem
-	// subir, tem o Aplicar
+	// o card so tem o estado; os botoes ficam no Geral do selecionado. Todos
+	// ligam e desligam; o mysql, ligado na config sem subir, tem o Aplicar
+	// e ainda nao tem Parar/Reiniciar
 	for _, name := range []string{"proxy", "postgres", "mysql", "garage"} {
+		click(t, m, "stack:"+name)
+		m.View()
+		time.Sleep(20 * time.Millisecond) // as zonas da tela nova
 		if z := m.zones.Get("toggle:" + name); z == nil || z.IsZero() {
 			t.Errorf("%s sem botao de ligar/desligar", name)
 		}
-	}
-	if z := m.zones.Get("apply:mysql"); z == nil || z.IsZero() {
-		t.Errorf("mysql sem o Aplicar:\n%s", out)
-	}
-	if z := m.zones.Get("apply:proxy"); z != nil && !z.IsZero() {
-		t.Error("proxy em dia com o Aplicar")
+		up := name == "proxy" || name == "postgres"
+		if z := m.zones.Get("ctl:" + name); (z != nil && !z.IsZero()) != up {
+			t.Errorf("%s: Iniciar/Parar aparece = %v, esperava %v", name, !up, up)
+		}
+		if z := m.zones.Get("restart:" + name); (z != nil && !z.IsZero()) != up {
+			t.Errorf("%s: Reiniciar aparece = %v, esperava %v", name, !up, up)
+		}
+		if z := m.zones.Get("apply:" + name); (z != nil && !z.IsZero()) != (name == "mysql") {
+			t.Errorf("%s: Aplicar errado:\n%s", name, screen(m))
+		}
 	}
 }
 
@@ -397,6 +425,7 @@ func TestInfraLigaEDesligaServico(t *testing.T) {
 	waitFor(t, m, "Ultima verificacao")
 
 	before := ups.Load()
+	click(t, m, "stack:postgres")
 	click(t, m, "toggle:postgres")
 	waitFor(t, m, "postgres ligado.")
 	if info, _ := c.LoadConfig(context.Background()); !info.Config.HasStack("postgres") {
@@ -407,7 +436,9 @@ func TestInfraLigaEDesligaServico(t *testing.T) {
 	}
 	waitFor(t, m, "✓ postgres")
 
-	// pelo teclado: postgres e o primeiro servico, ja selecionado
+	// pelo teclado: enter entra nos botoes (o primeiro e o Desligar)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	press(t, m, " ")
 	waitFor(t, m, "postgres desligado")
 	if info, _ := c.LoadConfig(context.Background()); info.Config.HasStack("postgres") {
@@ -420,6 +451,7 @@ func TestInfraSemConfigAvisa(t *testing.T) {
 	m := open(t, c)
 	click(t, m, "tab:Infra")
 	waitFor(t, m, "Ultima verificacao")
+	click(t, m, "stack:mysql")
 	click(t, m, "toggle:mysql")
 	waitFor(t, m, "preencha a aba Setup primeiro")
 }
@@ -491,8 +523,7 @@ func TestInfraNovoBanco(t *testing.T) {
 	setupDone(t, c, "postgres")
 	m := open(t, c)
 	click(t, m, "tab:Infra")
-	waitFor(t, m, "Novo banco")
-	click(t, m, "newdb:postgres")
+	click(t, m, "stack:postgres")
 	waitFor(t, m, "Novo banco no postgres")
 	typeIn(t, m, "db-name", "loja")
 	// numero no campo nao troca de aba
@@ -509,8 +540,6 @@ func TestInfraNovoBanco(t *testing.T) {
 	typeIn(t, m, "db-name", "loja")
 	click(t, m, "db-create")
 	waitFor(t, m, "ja existe")
-	click(t, m, "db-close")
-	waitFor(t, m, "Logs · ")
 }
 
 // Novo bucket no Garage: bucket e chave, e a lista com os secrets do app
@@ -519,8 +548,7 @@ func TestInfraNovoBucket(t *testing.T) {
 	setupDone(t, c, "proxy", "garage")
 	m := open(t, c)
 	click(t, m, "tab:Infra")
-	waitFor(t, m, "Novo bucket")
-	click(t, m, "newdb:garage")
+	click(t, m, "stack:garage")
 	waitFor(t, m, "Novo bucket no garage")
 	typeIn(t, m, "db-name", "portal-fotos")
 	click(t, m, "db-create")
@@ -540,9 +568,7 @@ func TestInfraExcluirBancoEBucket(t *testing.T) {
 	c.CreateBucket(ctx, "loja-fotos")
 	m := open(t, c)
 	click(t, m, "tab:Infra")
-	waitFor(t, m, "Novo bucket")
-
-	click(t, m, "newdb:postgres")
+	click(t, m, "stack:postgres")
 	waitFor(t, m, "Ja criados")
 	click(t, m, "db-del:loja")
 	waitFor(t, m, "apaga todos os dados dele")
@@ -555,9 +581,8 @@ func TestInfraExcluirBancoEBucket(t *testing.T) {
 	if list, _ := c.Databases(ctx); len(list) != 0 {
 		t.Fatalf("banco continua: %+v", list)
 	}
-	click(t, m, "db-close")
 
-	click(t, m, "newdb:garage")
+	click(t, m, "stack:garage")
 	waitFor(t, m, "loja-fotos")
 	click(t, m, "db-del:loja-fotos")
 	waitFor(t, m, "Excluir o bucket loja-fotos apaga")
@@ -581,8 +606,7 @@ func TestInfraImportarBanco(t *testing.T) {
 	setupDone(t, c, "postgres")
 	m := open(t, c)
 	click(t, m, "tab:Infra")
-	waitFor(t, m, "Novo banco")
-	click(t, m, "newdb:postgres")
+	click(t, m, "stack:postgres")
 	waitFor(t, m, "vazio cria o banco vazio")
 	typeIn(t, m, "db-name", "loja")
 	typeIn(t, m, "db-src", "mysql://antigo:S3gredo@db.antigo.com/loja")

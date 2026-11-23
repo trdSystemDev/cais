@@ -15,6 +15,7 @@ func TestSelecionarLogsCopiaSomenteTextoVisivel(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	m.tab = tabInfra
+	m.infraSection = infraLogs
 	m.state.Infra.Stacks = []core.StackStatus{{Name: "proxy", Enabled: true, Installed: true, Containers: []docker.Container{{Name: "proxy", State: "running"}}}}
 	m.logsText = "primeira linha\nsegunda linha"
 	m.View()
@@ -50,7 +51,7 @@ func TestSelecionarLogsCopiaSomenteTextoVisivel(t *testing.T) {
 	if m.logSelection.dragging {
 		t.Fatal("selecao continuou arrastando")
 	}
-	m.infraKey("pgdown")
+	m.infraKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	if len(m.logSelection.lines) > 0 {
 		t.Fatal("rolagem nao limpou selecao")
 	}
@@ -71,6 +72,7 @@ func TestSelecionarLogsComPainelCheio(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	m.tab = tabInfra
+	m.infraSection = infraLogs
 	m.state.Infra.Stacks = []core.StackStatus{{Name: "proxy", Enabled: true, Installed: true, Containers: []docker.Container{{Name: "proxy-docker-proxy", State: "running"}, {Name: "proxy-traefik", State: "running"}}}}
 	for _, size := range []tea.WindowSizeMsg{{Width: 180, Height: 45}, {Width: 130, Height: 34}, {Width: 90, Height: 24}} {
 		m.Update(size)
@@ -117,6 +119,7 @@ func TestSelecaoRolaAteFimDosLogsNosDoisSentidos(t *testing.T) {
 		c, _, _ := testCore(t, okChecker)
 		m := open(t, c)
 		m.tab = tabInfra
+		m.infraSection = infraLogs
 		m.state.Infra.Stacks = []core.StackStatus{{Name: "proxy", Enabled: true, Installed: true, Containers: []docker.Container{{Name: "proxy", State: "running"}}}}
 		var lines []string
 		for i := 0; i < 100; i++ {
@@ -198,6 +201,7 @@ func TestSelecaoNaoRolaDentroDaAreaENaoPrendeAoSoltar(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	m.tab = tabInfra
+	m.infraSection = infraLogs
 	m.state.Infra.Stacks = []core.StackStatus{{Name: "proxy", Enabled: true, Installed: true, Containers: []docker.Container{{Name: "proxy", State: "running"}}}}
 	m.logsText = strings.Repeat("linha de log\n", 100)
 	m.logsOffset = 40
@@ -236,6 +240,7 @@ func TestScrollNormalAlcancaInicioComLinhasLongas(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	m.tab = tabInfra
+	m.infraSection = infraLogs
 	m.state.Infra.Stacks = []core.StackStatus{{Name: "proxy", Enabled: true, Installed: true, Containers: []docker.Container{{Name: "proxy", State: "running"}}}}
 	m.logsText = "INICIO DO LOG\n" + strings.Repeat(strings.Repeat("linha longa ", 30)+"\n", 100) + "FIM DO LOG"
 	m.View()
@@ -244,20 +249,20 @@ func TestScrollNormalAlcancaInicioComLinhasLongas(t *testing.T) {
 		t.Fatal("fixture sem quebra de linhas")
 	}
 	for i := 0; i < total/10+2; i++ {
-		m.infraKey("pgup")
+		m.infraKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
 		m.View()
 	}
 	if m.logArea.start != 0 || !strings.Contains(screen(m), "INICIO DO LOG") {
 		t.Fatal("rolagem normal nao chegou ao inicio")
 	}
 	before := m.logsOffset
-	m.infraKey("pgup")
+	m.infraKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	m.View()
 	if m.logsOffset != before {
 		t.Fatal("ultrapassou inicio")
 	}
 	for i := 0; i < total/10+2; i++ {
-		m.infraKey("pgdown")
+		m.infraKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
 		m.View()
 	}
 	if m.logsOffset != 0 || !strings.Contains(screen(m), "FIM DO LOG") {

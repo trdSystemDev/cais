@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
@@ -174,6 +176,9 @@ func TestSetupAvisosPorEmail(t *testing.T) {
 	m.setup.get("notifyFrom").input.SetValue("cais@exemplo.com.br")
 	m.setup.get("notifyTo").input.SetValue("a@exemplo.com.br, b@exemplo.com.br")
 	m.setup.get("brevoKey").input.SetValue("xkeysib-teste")
+	// os avisos tem sub-aba propria; o Salvar dela grava o formulario todo
+	click(t, m, "setup-sec:Avisos")
+	waitFor(t, m, "Chave da Brevo")
 	click(t, m, "save")
 	waitFor(t, m, "Config salva e chave da Brevo gravada.")
 	if !strings.Contains(screen(m), "Testar e-mail") {
@@ -195,12 +200,12 @@ func TestSetupSemDominio(t *testing.T) {
 	if strings.Contains(screen(m), "Dominio (teste)") {
 		t.Fatal("dominio do teste aparece com Let's Encrypt")
 	}
-	m.setup.setFocus(0)
+	m.setup.enter(false)
 	for range len(m.setup.items) {
 		if m.setup.items[m.setup.focus].id == "testDomain" {
 			t.Fatal("o Tab passa pelo dominio do teste escondido")
 		}
-		m.setup.setFocus(m.setup.focus + 1)
+		m.setup.move(1)
 	}
 	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
 	click(t, m, "save")
@@ -213,35 +218,40 @@ func TestSetupSemDominio(t *testing.T) {
 	waitFor(t, m, "precisa do dominio do")
 }
 
-// trocar a porta do proxy: Setup -> Salvar (nada sobe) -> Infra -> Aplicar
-// (o proxy sobe de novo, com o compose nas portas novas)
-func TestSetupTrocaAPortaDoProxy(t *testing.T) {
+// trocar a porta do proxy: Infra -> Portas no card do proxy -> Salvar e
+// aplicar (o proxy sobe de novo, com o compose nas portas novas)
+func TestInfraTrocaAPortaDoProxy(t *testing.T) {
 	c, ups, _ := testCore(t, okChecker)
 	setupDone(t, c, "proxy")
 	before := ups.Load()
 	m := open(t, c)
 	click(t, m, "tab:Setup")
-	waitFor(t, m, "Porta HTTP")
-	m.setup.get("httpPort").input.SetValue("8080")
-	m.setup.get("httpsPort").input.SetValue("8443")
-	click(t, m, "save")
-	waitFor(t, m, "Config salva.")
-	waitFor(t, m, "Aplicar na aba Infra")
-	if ups.Load() != before {
-		t.Fatal("salvar subiu o proxy")
-	}
-	info, _ := c.LoadConfig(context.Background())
-	if info.Config.Proxy.HTTPPort != 8080 || info.Config.Proxy.HTTPSPort != 8443 || !info.Config.HasStack("proxy") {
-		t.Fatalf("config: %+v", info.Config)
+	waitFor(t, m, "Certificados")
+	if strings.Contains(screen(m), "Porta HTTP") {
+		t.Fatal("as portas do proxy ainda estao no Setup")
 	}
 
 	click(t, m, "tab:Infra")
 	waitFor(t, m, "✓ proxy")
-	waitFor(t, m, ":8080/:8443")
-	click(t, m, "apply:proxy")
+	// o proxy e o primeiro card: as portas ficam no Geral dele
+	waitFor(t, m, "Portas do proxy")
+	waitFor(t, m, "Salvar e aplicar")
+	if v := m.ports.https.Value(); v != "443" {
+		t.Fatalf("porta HTTPS no painel = %q", v)
+	}
+	click(t, m, "ports-http")
+	m.ports.http.SetValue("8080")
+	click(t, m, "ports-https")
+	m.ports.https.SetValue("8443")
+	click(t, m, "ports-save")
 	waitFor(t, m, "config aplicada no proxy.")
+	waitFor(t, m, ":8080/:8443")
 	if ups.Load() != before+1 {
-		t.Fatalf("aplicar nao subiu o proxy de novo (%d -> %d)", before, ups.Load())
+		t.Fatalf("salvar nao subiu o proxy de novo (%d -> %d)", before, ups.Load())
+	}
+	info, _ := c.LoadConfig(context.Background())
+	if info.Config.Proxy.HTTPPort != 8080 || info.Config.Proxy.HTTPSPort != 8443 || !info.Config.HasStack("proxy") {
+		t.Fatalf("config: %+v", info.Config)
 	}
 	plan, _ := c.PlanSetup(context.Background())
 	compose, _ := os.ReadFile(plan.Stacks[0].File)
@@ -250,8 +260,78 @@ func TestSetupTrocaAPortaDoProxy(t *testing.T) {
 	}
 
 	// porta invalida: nao grava e diz por que
-	click(t, m, "tab:Setup")
-	m.setup.get("httpsPort").input.SetValue("8080")
-	click(t, m, "save")
+	click(t, m, "ports-https")
+	m.ports.https.SetValue("8080")
+	click(t, m, "ports-save")
 	waitFor(t, m, "nao podem ser iguais")
+	if ups.Load() != before+1 {
+		t.Fatal("porta invalida subiu o proxy")
+	}
+}
+
+// o Setup e dividido em sub-abas de tela cheia: ←→ trocam de sub-aba, tab
+// entra no formulario dela, esc volta; fora dos campos o numero troca de aba
+func TestSetupSubAbasPeloTeclado(t *testing.T) {
+	m, _ := openSetup(t)
+	key := func(code rune) { m.Update(tea.KeyPressMsg{Code: code}) }
+	// o GitHub App fica no Geral; avisos e backups nas sub-abas deles
+	waitFor(t, m, "GitHub App")
+	if s := screen(m); strings.Contains(s, "Chave da Brevo") || strings.Contains(s, "OAuth client") || strings.Contains(s, "Acesso") {
+		t.Fatalf("a sub-aba Geral mostra outras secoes:\n%s", s)
+	}
+	key(tea.KeyRight)
+	waitFor(t, m, "Chave da Brevo")
+	if strings.Contains(screen(m), "Certificados") {
+		t.Fatal("Avisos ainda mostra o Geral")
+	}
+	key(tea.KeyTab)
+	if !m.setup.typing() || m.setup.items[m.setup.focus].id != "notifyFrom" {
+		t.Fatalf("tab nao entrou no Remetente: foco %q", m.setup.items[m.setup.focus].id)
+	}
+	// o Tab da a volta so na sub-aba: 3 campos, Salvar e Testar e-mail
+	for range 5 {
+		key(tea.KeyTab)
+	}
+	if id := m.setup.items[m.setup.focus].id; id != "notifyFrom" {
+		t.Fatalf("o Tab saiu da sub-aba: foco %q", id)
+	}
+	key(tea.KeyEscape)
+	if m.setup.typing() {
+		t.Fatal("esc nao saiu do formulario")
+	}
+	key(tea.KeyRight)
+	waitFor(t, m, "OAuth client do Google")
+	key(tea.KeyRight)
+	waitFor(t, m, "Certificados")
+	press(t, m, "1")
+	if m.tab != tabDashboard {
+		t.Fatalf("fora dos campos o 1 nao trocou de aba: %d", m.tab)
+	}
+}
+
+// o Testar do GitHub App confere o que esta no formulario, sem salvar: App
+// ID e chave aceitos pelo GitHub, e as contas em que o app esta instalado
+func TestSetupTestaOGitHubApp(t *testing.T) {
+	m, gh := openSetupGitHub(t)
+	click(t, m, "ghTest")
+	waitFor(t, m, "falta a chave do GitHub App")
+
+	m.setup.get("ghKey").input.SetValue(strings.ReplaceAll(string(gh.Key), "\n", " "))
+	m.setup.get("ghAppID").input.SetValue("999")
+	click(t, m, "ghTest")
+	waitFor(t, m, "o GitHub recusou o App ID 999")
+
+	m.setup.get("ghAppID").input.SetValue("5512022")
+	click(t, m, "ghTest")
+	waitFor(t, m, `Conectou no app "cais-teste", instalado em: trdSystemDev.`)
+	if info, _ := m.api.LoadConfig(context.Background()); info.Exists {
+		t.Fatal("o Testar gravou a config")
+	}
+
+	// salvo, o campo da chave fica vazio e o Testar usa a gravada
+	click(t, m, "save")
+	waitFor(t, m, "chave do GitHub App gravada")
+	m.setup.ghMsg = ""
+	click(t, m, "ghTest")
+	waitFor(t, m, "instalado em: trdSystemDev.")
 }

@@ -6,7 +6,7 @@ Databases no Postgres/MySQL compartilhados (vazios ou importados de outro servid
 
 Cada app usa um database proprio no banco compartilhado (o compose de
 producao nao declara banco; o de desenvolvimento pode). Crie na aba **Infra**
-(botao **Novo banco** no card do Postgres/MySQL, ou tecla `b`) ou pelo CLI:
+(card do Postgres/MySQL, secao **Geral**: **Novo banco**) ou pelo CLI:
 
 ```sh
 cais db create postgres meu_app -extensions postgis
@@ -75,7 +75,7 @@ o layout de no unico na primeira subida; execucoes seguintes preservam o
 layout. Os volumes `garage_meta` e `garage_data` persistem ao desligar.
 Esse layout nao oferece redundancia entre maquinas.
 
-Crie os buckets na aba **Infra** (botao **Novo bucket** no card do Garage)
+Crie os buckets na aba **Infra** (card do Garage, secao **Geral**: **Novo bucket**)
 ou pelo CLI. Cada bucket ganha uma chave so dele (leitura, escrita e dono),
 guardada no cais:
 

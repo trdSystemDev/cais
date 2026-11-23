@@ -15,6 +15,7 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/rpc"
 )
 
@@ -37,6 +38,8 @@ func runSetup(args []string) error {
 		return setupSecret(args)
 	case "notify-test":
 		return setupNotifyTest(args)
+	case "github-test":
+		return setupGitHubTest(args)
 	default:
 		return groupError("setup", sub)
 	}
@@ -290,17 +293,49 @@ func setupNotifyTest(args []string) error {
 	return nil
 }
 
+func setupGitHubTest(args []string) error {
+	fs, socket := newFlags("setup github-test")
+	fs.Parse(args)
+	c, err := connect(*socket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	r, err := c.TestGitHub(context.Background(), 0, "")
+	if err != nil {
+		return err
+	}
+	fmt.Println(githubCheckText(r))
+	return nil
+}
+
+// githubCheckText e o resultado do teste do GitHub App em uma frase.
+func githubCheckText(r github.Check) string {
+	if len(r.Installations) == 0 {
+		return fmt.Sprintf("GitHub App %q ok, mas nao esta instalado em nenhuma conta: instale na pagina do app (Install App).", r.Name)
+	}
+	return fmt.Sprintf("GitHub App %q ok, instalado em: %s.", r.Name, strings.Join(r.Installations, ", "))
+}
+
 func runService(args []string) error {
 	fs, socket := newFlags("service")
 	fs.Parse(args)
-	if fs.NArg() != 2 || (fs.Arg(1) != "on" && fs.Arg(1) != "off") {
-		return errors.New("uso: cais service <postgres|mysql|garage> on|off")
+	actions := map[string]string{"start": core.ServiceStart, "stop": core.ServiceStop, "restart": core.ServiceRestart}
+	if fs.NArg() != 2 || (fs.Arg(1) != "on" && fs.Arg(1) != "off" && actions[fs.Arg(1)] == "") {
+		return errors.New("uso: cais service <proxy|postgres|mysql|garage> on|off|start|stop|restart")
 	}
 	c, err := connect(*socket)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
+	if action := actions[fs.Arg(1)]; action != "" {
+		if err := c.ControlService(context.Background(), fs.Arg(0), action); err != nil {
+			return err
+		}
+		fmt.Printf("%s: %s ok\n", fs.Arg(0), fs.Arg(1))
+		return nil
+	}
 	return withProgress(c, func(ctx context.Context) error {
 		_, err := c.SetService(ctx, fs.Arg(0), fs.Arg(1) == "on")
 		return err

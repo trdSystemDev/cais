@@ -30,8 +30,8 @@ const (
 var helps = map[int]string{
 	tabDashboard: "enter/r verifica · ",
 	tabApps:      "↑↓ app · ←→ secao · enter/tab entra no formulario · esc volta · n novo app · ",
-	tabInfra:     "↑↓ card · ←→ container · espaco liga/desliga · a aplica · r atualiza · ",
-	tabSetup:     "tab/↑↓ campo · espaco marca · ctrl+s salva · ",
+	tabInfra:     "↑↓ card · ←→ secao · enter/tab entra nos botoes · esc volta · a aplica · r atualiza · ",
+	tabSetup:     "←→ secao · enter/tab entra · ctrl+s salva · ",
 }
 
 // App e a TUI inteira. Nada e desenhado ate Run ser chamado.
@@ -69,8 +69,9 @@ type model struct {
 	disconnected bool
 	setup        *setupPage
 	apps         *appsPage
-	db           *dbPanel // Novo banco, na aba Infra
-	bk           *bkPanel // Backups, na aba Infra
+	db           *dbPanel    // Novo banco, na aba Infra
+	ports        *portsPanel // Portas do proxy, na aba Infra
+	bk           *bkPanel    // Backups, na aba Setup
 
 	selectionGeneration uint64
 	logSelection        logSelection
@@ -84,7 +85,12 @@ type model struct {
 	logsTarget, logsText, logsError string
 	logsOffset                      int
 	infraSel                        int    // servico opcional selecionado (teclado)
+	infraSection                    int    // Geral ou Logs do servico selecionado
+	infraForm                       bool   // o teclado esta nos botoes/campos do servico, nao nos cards
+	infraFocus                      int    // botao do servico com foco (fora do painel)
+	infraInSub                      bool   // o foco esta no painel do servico (Novo banco, Portas)
 	toggling                        string // servico sendo ligado/desligado daqui
+	controlling, controlAction      string // servico sendo iniciado/parado/reiniciado daqui
 	infraMsg                        string
 	infraMsgC                       string
 	infraMsgStack                   string
@@ -102,6 +108,7 @@ func newModel(api core.API, states <-chan core.State) *model {
 	m.setup = newSetupPage(api, m.zones, m.th)
 	m.apps = newAppsPage(api, m.zones, m.th)
 	m.db = newDBPanel(api, m.zones, m.th)
+	m.ports = newPortsPanel(api, m.zones, m.th)
 	m.bk = newBkPanel(api, m.zones, m.th)
 	return m
 }
@@ -147,6 +154,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setup.setTheme(m.th)
 		m.apps.setTheme(m.th)
 		m.db.setTheme(m.th)
+		m.ports.setTheme(m.th)
 		m.bk.setTheme(m.th)
 		return m, nil
 	case stateMsg:
@@ -183,17 +191,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.tab != tabInfra || m.disconnected {
 			return m, nil
 		}
-		key := "down"
-		if msg.Button == tea.MouseWheelUp {
-			key = "up"
-		}
 		if m.zones.Get("infra-logs").InBounds(msg) {
-			key = "pgdown"
-			if msg.Button == tea.MouseWheelUp {
-				key = "pgup"
-			}
+			m.scrollLogs(msg.Button == tea.MouseWheelUp)
+			return m, nil
 		}
-		return m, m.infraKey(key)
+		n := len(infraOrder())
+		if msg.Button == tea.MouseWheelUp {
+			return m, m.selectInfra((m.infraSel + n - 1) % n)
+		}
+		return m, m.selectInfra((m.infraSel + 1) % n)
 	case tea.MouseReleaseMsg:
 		if m.logSelection.dragging && (msg.Button == tea.MouseLeft || msg.Button == tea.MouseNone) {
 			return m, m.finishLogSelection(msg.X, msg.Y)
@@ -212,12 +218,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.tab {
 		case tabSetup:
+			if m.setup.sec == secBackups {
+				return m, m.bk.paste(m.state.Backup, msg)
+			}
 			return m, m.setup.paste(msg)
 		case tabApps:
 			return m, m.apps.paste(msg)
 		case tabInfra:
-			if m.bk.active {
-				return m, m.bk.paste(m.state.Backup, msg)
+			if m.ports.shown {
+				return m, m.ports.paste(msg)
 			}
 			return m, m.db.paste(msg)
 		}
@@ -247,6 +256,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetchInfraLogs()
 	case serviceDoneMsg:
 		return m, m.onServiceDone(msg)
+	case serviceCtlMsg:
+		return m, m.onServiceCtl(msg)
+	case portsSavedMsg:
+		return m, m.onPortsSaved(msg)
 	case appLogsMsg:
 		return m, m.onAppLogs(msg)
 	case appLogsTick:
@@ -271,7 +284,11 @@ func (m *model) onState(s core.State) tea.Cmd {
 	m.state = s
 	m.db.importing = s.Import
 	appsCmd := m.apps.onState(m.state)
-	return tea.Batch(m.syncInfraLogs(false), appsCmd, m.syncAppLogs(false))
+	var panels tea.Cmd
+	if m.tab == tabInfra {
+		panels = m.syncInfraPanels()
+	}
+	return tea.Batch(m.syncInfraLogs(false), panels, appsCmd, m.syncAppLogs(false))
 }
 
 // setTab troca de aba; a Infra pergunta ao docker toda vez que abre.
@@ -284,7 +301,10 @@ func (m *model) setTab(i int) tea.Cmd {
 	m.tab = i
 	if i == tabInfra && !m.state.Infra.Checking {
 		// o plano diz qual servico ligado tem config salva pra aplicar
-		return tea.Batch(m.stacksCmd(), m.setup.planCmd(), m.backupRefreshCmd(), m.syncInfraLogs(true))
+		return tea.Batch(m.stacksCmd(), m.setup.planCmd(), m.syncInfraPanels(), m.syncInfraLogs(true))
+	}
+	if i == tabSetup {
+		return m.backupRefreshCmd()
 	}
 	if i == tabApps {
 		// bancos e buckets criados na Infra (ou pelo CLI) ja aparecem pra ligar
@@ -315,7 +335,7 @@ func (m *model) click(msg tea.MouseMsg) tea.Cmd {
 	case tabInfra:
 		return m.infraClick(msg)
 	case tabSetup:
-		return m.setup.click(msg)
+		return m.setupClick(msg)
 	}
 	return nil
 }
@@ -332,8 +352,8 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	// numeros trocam de aba, menos quando o foco esta num campo de texto
-	typing := (m.tab == tabSetup && m.setup.typing()) || (m.tab == tabApps && m.apps.typing()) ||
-		(m.tab == tabInfra && (m.db.typing() || m.bk.typing(m.state.Backup)))
+	typing := (m.tab == tabSetup && (m.setup.typing() || m.bk.typing(m.state.Backup))) || (m.tab == tabApps && m.apps.typing()) ||
+		(m.tab == tabInfra && (m.db.typing() || m.ports.typing()))
 	if !typing && len(k) == 1 && k[0] >= '1' && int(k[0]-'1') < len(tabs) {
 		return m.setTab(int(k[0] - '1'))
 	}
@@ -345,15 +365,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case tabApps:
 		return m.appsKey(msg)
 	case tabInfra:
-		if m.db.open() {
-			return m.db.key(msg)
-		}
-		if m.bk.active && m.backupSelected() {
-			return m.bk.key(m.state.Backup, msg)
-		}
-		return m.infraKey(k)
+		return m.infraKey(msg)
 	case tabSetup:
-		return m.setup.key(msg)
+		return m.setupKey(msg)
 	}
 	return nil
 }
@@ -376,6 +390,9 @@ func (m *model) View() tea.View {
 	if m.tab == tabApps && m.apps.inForm {
 		help = "tab/↑↓ campo · ←→ escolhe · enter/espaco ativa · esc volta pra lista · roda rola · "
 	}
+	if m.tab == tabSetup && (m.setup.inForm || m.bk.active) {
+		help = "tab/↑↓ campo · ←→ escolhe · enter/espaco ativa · esc volta pras secoes · ctrl+s salva · "
+	}
 	footer := m.th.fg(m.th.muted).Render(" clique ou 1-" + strconv.Itoa(len(tabs)) + " troca de aba · " + help + "ctrl+q sai")
 	bodyH := m.h - lipgloss.Height(header) - lipgloss.Height(footer)
 
@@ -388,7 +405,7 @@ func (m *model) View() tea.View {
 	case tabInfra:
 		body = m.viewInfra(bodyH)
 	case tabSetup:
-		body = m.setup.view(m.w, bodyH)
+		body = m.viewSetup(bodyH)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 	if m.tab == tabApps && m.apps.info != nil {

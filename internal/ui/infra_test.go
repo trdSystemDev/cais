@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -18,12 +19,15 @@ func TestInfraSelecionaContainerEIgnoraLogsAntigos(t *testing.T) {
 	m.state.Infra = core.Infra{CheckedAt: time.Now(), Stacks: []core.StackStatus{
 		{Name: "proxy", Containers: []docker.Container{{Name: "proxy"}, {Name: "socket-proxy"}}},
 	}}
+	m.infraSection = infraLogs
 	run(t, m, m.syncInfraLogs(true))
 	if !strings.Contains(m.logsText, "container iniciado") {
 		t.Fatal("logs nao carregaram")
 	}
 	old := m.logsGeneration
-	run(t, m, m.infraKey("right"))
+	// na secao Logs, enter entra nos containers e ←→ troca
+	run(t, m, m.infraKey(tea.KeyPressMsg{Code: tea.KeyEnter}))
+	run(t, m, m.infraKey(tea.KeyPressMsg{Code: tea.KeyRight}))
 	if m.logsTarget != "socket-proxy" {
 		t.Fatal("nao trocou container")
 	}
@@ -62,6 +66,7 @@ func TestInfraOperacaoFicaRestritaAoServico(t *testing.T) {
 				{Name: "mysql", Enabled: true, Installed: true, Containers: []docker.Container{{Name: "mysql", State: "running"}}},
 			}}
 			m.state.Setup = core.Setup{Running: true, Service: "mysql", ServiceOn: on}
+			m.infraSection = infraLogs
 			if !remote {
 				m.toggling = "mysql"
 				m.togglingOn = on
@@ -111,6 +116,7 @@ func TestInfraContainerAguardandoHealthcheck(t *testing.T) {
 	m := open(t, c)
 	m.tab = tabInfra
 	m.state.Infra.Stacks = []core.StackStatus{{Name: "proxy", Enabled: true, Installed: true, Containers: []docker.Container{{Name: "traefik", State: "running", Health: "starting"}}}}
+	m.infraSection = infraLogs
 	out := screen(m)
 	if !strings.Contains(out, "ligando...") || !strings.Contains(out, "Iniciando container") || !strings.Contains(out, "Aguardando traefik") {
 		t.Fatalf("nao reconheceu healthcheck: %s", out)
@@ -118,5 +124,43 @@ func TestInfraContainerAguardandoHealthcheck(t *testing.T) {
 	m.state.Infra.Stacks[0].Containers[0].Health = "healthy"
 	if strings.Contains(screen(m), "Iniciando container") {
 		t.Fatal("modal nao saiu apos ficar saudavel")
+	}
+}
+
+// Parar, Iniciar e Reiniciar mexem so nos containers: o servico continua
+// ligado na config
+func TestInfraParaIniciaEReiniciaServico(t *testing.T) {
+	c, ups, _ := testCore(t, okChecker)
+	setupDone(t, c, "postgres")
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	click(t, m, "stack:postgres")
+	waitFor(t, m, "Novo banco no postgres")
+
+	click(t, m, "ctl:postgres")
+	waitFor(t, m, "postgres parado (continua ligado")
+	waitFor(t, m, "■ postgres  parado")
+	waitFor(t, m, "Iniciar")
+	if info, _ := c.LoadConfig(context.Background()); !info.Config.HasStack("postgres") {
+		t.Fatal("parar desligou o postgres na config")
+	}
+
+	before := ups.Load()
+	click(t, m, "ctl:postgres")
+	waitFor(t, m, "postgres iniciado.")
+	waitFor(t, m, "✓ postgres  no ar")
+	if ups.Load() != before+1 {
+		t.Fatal("iniciar nao subiu o compose")
+	}
+
+	click(t, m, "restart:postgres")
+	waitFor(t, m, "postgres reiniciado.")
+
+	// desligado: nem o botao aparece, e o core recusa
+	if err := c.ControlService(context.Background(), "mysql", core.ServiceStop); err == nil || !strings.Contains(err.Error(), "desligado") {
+		t.Fatalf("parar servico desligado: %v", err)
+	}
+	if err := c.ControlService(context.Background(), "postgres", "explodir"); err == nil {
+		t.Fatal("aceitou acao desconhecida")
 	}
 }

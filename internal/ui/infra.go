@@ -45,7 +45,7 @@ func (m *model) stacksCmd() tea.Cmd {
 }
 
 // busy diz se ha uma mudanca sendo aplicada (daqui, do CLI ou do MCP).
-func (m *model) busy() bool { return m.toggling != "" || m.state.Setup.Running }
+func (m *model) busy() bool { return m.toggling != "" || m.controlling != "" || m.state.Setup.Running }
 
 // toggle liga ou desliga um servico. O core grava a config e aplica; o
 // andamento chega pelo estado.
@@ -112,11 +112,34 @@ func (m *model) onServiceDone(msg serviceDoneMsg) tea.Cmd {
 		m.infraMsgC, m.infraMsg = "ok", msg.name+" desligado (os dados ficam no volume)."
 	}
 	// a aba Setup mostra o plano novo (o servico mudou a lista de stacks)
-	return tea.Batch(m.stacksCmd(), m.setup.planCmd())
+	return tea.Batch(m.stacksCmd(), m.setup.planCmd(), m.syncInfraPanels())
 }
 
-// infraOrder agrupa base e opcionais, incluindo ambos na selecao de logs,
-// e termina no card dos Backups.
+// onPortsSaved volta o foco pros botoes do proxy e, com ele ligado, aplica
+// as portas novas (o proxy sobe de novo nelas).
+func (m *model) onPortsSaved(msg portsSavedMsg) tea.Cmd {
+	m.ports.busy = false
+	if msg.err != nil {
+		m.ports.err = msg.err.Error()
+		return nil
+	}
+	if m.infraInSub {
+		m.setInfraPos(0)
+	}
+	m.ports.blur()
+	m.infraMsgStack = "proxy"
+	switch {
+	case !m.serviceOn("proxy"):
+		m.infraMsgC, m.infraMsg = "ok", "Portas salvas: valem quando o proxy ligar."
+	case m.busy():
+		m.infraMsgC, m.infraMsg = "warn", "Portas salvas. Outra mudanca em andamento: Aplicar quando ela terminar."
+	default:
+		return tea.Batch(m.setService("proxy", true, true), m.setup.planCmd())
+	}
+	return m.setup.planCmd()
+}
+
+// infraOrder agrupa base e opcionais, incluindo ambos na selecao de logs.
 func infraOrder() []string {
 	var names []string
 	for _, optional := range []bool{false, true} {
@@ -126,25 +149,11 @@ func infraOrder() []string {
 			}
 		}
 	}
-	return append(names, backupCard)
-}
-
-// backupSelected diz se o card selecionado e o dos Backups.
-func (m *model) backupSelected() bool { return infraOrder()[m.infraSel] == backupCard }
-
-// backupRefreshCmd pede ao core o estado do backup (chega pelo estado).
-func (m *model) backupRefreshCmd() tea.Cmd {
-	return func() tea.Msg {
-		m.api.RefreshBackup(context.Background())
-		return nil
-	}
+	return names
 }
 
 func (m *model) selectedStack() core.StackStatus {
 	name := infraOrder()[m.infraSel]
-	if name == backupCard {
-		return core.StackStatus{Name: name}
-	}
 	for _, st := range m.state.Infra.Stacks {
 		if st.Name == name {
 			return st
@@ -169,85 +178,24 @@ func (m *model) viewInfra(h int) string {
 	start = min(start, max(0, len(order)-count))
 	for i := start; i < min(len(order), start+count); i++ {
 		name := order[i]
-		if name == backupCard {
-			label, ok := lastBackupLabel(m.state.Backup, time.Now())
-			color, mark := t.ok, "✓"
-			if !ok {
-				color, mark = t.danger, "✗"
-			}
-			if m.state.Backup.Running {
-				color, mark = t.warn, "◌"
-			}
-			title := t.bold().Render(mark+" Backups") + "  " + t.fg(color).Render(label)
-			line := t.fg(t.muted).Render("Bancos e estado · Google Drive")
-			card := t.panel(i == m.infraSel, leftW-4, 2).Render(ansi.Truncate(title, leftW-6, "…") + "\n" + ansi.Truncate(line, leftW-6, "…"))
-			cards = append(cards, m.zones.Mark("stack:"+name, card))
-			continue
-		}
 		st := core.StackStatus{Name: name}
 		for _, item := range m.state.Infra.Stacks {
 			if item.Name == name {
 				st = item
 			}
 		}
-		def, _ := stacks.Get(name)
 		selected := i == m.infraSel
-		mark, status := "○", "aguardando"
-		switch {
-		case m.serviceChanging(name):
-			mark, status = "◌", "ligando..."
-			if on, _, _ := m.serviceOperation(name); !on {
-				status = "desligando..."
-			}
-		case st.Error != "":
-			mark, status = "✗", "erro"
-		case !st.Enabled:
-			mark, status = "·", "desligado"
-		case !st.Installed:
-			status = "ainda nao subiu"
-		case st.Healthy():
-			mark, status = "✓", "no ar"
-		default:
-			mark, status = "✗", "com problema"
-		}
-		statusColor := t.muted
-		if m.serviceChanging(name) {
-			statusColor = t.warn
-		}
+		mark, status, statusColor := m.stackStatus(st)
 		title := t.bold().Render(mark+" "+name) + "  " + t.fg(statusColor).Render(status)
 		role := map[string]string{"proxy": "HTTPS dos apps", "postgres": "Banco", "mysql": "Banco", "garage": "S3"}[name]
 		// porta fora do padrao (teste, migracao) fica a vista no card
 		if pc := m.setup.plan.Config.Proxy; name == "proxy" && pc.HTTPPort > 0 && !pc.StandardPorts() {
-			role = fmt.Sprintf(":%d/:%d", pc.HTTPPort, pc.HTTPSPort)
+			role += fmt.Sprintf(" · :%d/:%d", pc.HTTPPort, pc.HTTPSPort)
+		}
+		if st.Enabled && m.needsApply(name) {
+			role += " · " + t.fg(t.warn).Render("Aplicar")
 		}
 		line := t.fg(t.muted).Render(role)
-		if def.Optional {
-			text := "Ligar"
-			if st.Enabled {
-				text = "Desligar"
-			}
-			k := btnNormal
-			if st.Enabled {
-				k = btnDanger
-			}
-			if m.busy() {
-				k = btnOff
-			}
-			line += "  " + m.zones.Mark("toggle:"+name, t.chip(text, k, false))
-			if st.Enabled && m.needsApply(name) {
-				ak := btnNormal
-				if m.busy() {
-					ak = btnOff
-				}
-				line += " " + m.zones.Mark("apply:"+name, t.chip("Aplicar", ak, false))
-			}
-			if (name == "postgres" || name == "mysql") && st.Enabled && st.Installed {
-				line += " " + m.zones.Mark("newdb:"+name, t.chip("+ Novo banco", btnNormal, m.db.engine == name))
-			}
-			if name == "garage" && st.Enabled && st.Installed {
-				line += " " + m.zones.Mark("newdb:"+name, t.chip("+ Novo bucket", btnNormal, m.db.engine == name))
-			}
-		}
 		card := t.panel(selected, leftW-4, 2).Render(ansi.Truncate(title, leftW-6, "…") + "\n" + line)
 		cards = append(cards, m.zones.Mark("stack:"+name, card))
 	}
@@ -261,13 +209,8 @@ func (m *model) viewInfra(h int) string {
 	}
 	left := lipgloss.NewStyle().Width(leftW).Height(h).Render(header + "\n" + strings.Join(cards, "\n") + "\n" + footer)
 	rightW := m.w - leftW - 1
-	var right string
-	switch {
-	case m.db.open():
-		right = m.db.view(rightW, innerH)
-	case m.backupSelected():
-		right = m.bk.view(m.state.Backup, rightW, innerH)
-	default:
+	right := m.viewInfraGeneral(rightW, innerH)
+	if m.infraSection == infraLogs {
 		right = m.zones.Mark("infra-logs", m.viewInfraLogs(rightW, innerH))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
@@ -289,7 +232,7 @@ func (m *model) syncInfraLogs(force bool) tea.Cmd {
 		m.infraContainer = 0
 	}
 	target := ""
-	if len(st.Containers) > 0 {
+	if len(st.Containers) > 0 && m.infraSection == infraLogs {
 		target = st.Containers[m.infraContainer].Name
 	}
 	if !force && target == m.logsTarget {
@@ -324,6 +267,7 @@ func (m *model) viewInfraLogs(w, h int) string {
 		return m.viewServiceModal(w, h, st.Name, on, detail)
 	}
 	var b strings.Builder
+	b.WriteString(m.viewInfraHead(st, w-6))
 	title := "Logs · " + st.Name
 	if pos := m.logPosition(); pos != "" {
 		title = "Logs · " + pos
@@ -345,17 +289,13 @@ func (m *model) viewInfraLogs(w, h int) string {
 				color = t.warn
 			}
 			content := t.bold().Render(ansi.Truncate(c.Name, max(1, tabW-4), "…")) + "\n" + t.fg(color).Render(ansi.Truncate("● "+state, max(1, tabW-4), "…"))
-			tab := t.panel(i == m.infraContainer, tabW-2, 2).Render(content)
+			tab := t.panel(i == m.infraContainer && (m.infraForm || len(st.Containers) == 1), tabW-2, 2).Render(content)
 			row = append(row, m.zones.Mark("container:"+c.Name, tab))
 			if len(row) == columns || i == len(st.Containers)-1 {
 				b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, interleaveTabs(row)...) + "\n")
 				row = nil
 			}
 		}
-	}
-	if st.Name == "garage" && st.Enabled {
-		b.WriteString(t.fg(t.muted).Render(ansi.Truncate("S3: https://"+m.setup.plan.Config.S3Host()+" · regiao garage", w-6, "…")) + "\n")
-		b.WriteString(t.fg(t.warn).Render(ansi.Truncate("Os arquivos dos buckets nao entram no backup do cais.", w-6, "…")) + "\n")
 	}
 	if m.infraMsg != "" && m.infraMsgStack == st.Name {
 		color := t.warn
@@ -370,10 +310,10 @@ func (m *model) viewInfraLogs(w, h int) string {
 	b.WriteString("\n")
 	empty := ""
 	if len(st.Containers) == 0 {
-		empty = "Nenhum container. Ligue o servico (ou Aplicar, se ja estiver ligado)."
+		empty = "Nenhum container. Ligue o servico na secao Geral (ou Aplicar, se ja estiver ligado)."
 	}
 	m.writeLogs(&b, empty, w, h)
-	return t.panel(false, w-2, h).MaxHeight(h + 2).Render(b.String())
+	return t.panel(m.infraForm, w-2, h).MaxHeight(h + 2).Render(b.String())
 }
 
 // logPosition diz quais linhas do log estao na tela durante a selecao
@@ -450,78 +390,58 @@ func (m *model) infraClick(msg tea.MouseMsg) tea.Cmd {
 	if m.zones.Get("infra-refresh").InBounds(msg) && !m.state.Infra.Checking {
 		return tea.Batch(m.stacksCmd(), m.syncInfraLogs(true))
 	}
-	if m.db.open() {
-		if cmd := m.db.click(msg); cmd != nil || !m.db.open() {
-			return cmd
+	for i, s := range infraSections {
+		if m.zones.Get("infra-sec:" + s).InBounds(msg) {
+			m.leaveInfraForm()
+			m.infraSection = i
+			return m.syncInfraLogs(true)
 		}
 	}
-	if m.backupSelected() {
-		if cmd, ok := m.bk.click(m.state.Backup, msg); ok {
-			return cmd
+	st := m.selectedStack()
+	if m.infraSection == infraGeneral {
+		for i, id := range m.serviceActions(st) {
+			if m.zones.Get(id).InBounds(msg) {
+				m.infraForm = true
+				m.setInfraPos(i)
+				return m.pressAction(id)
+			}
+		}
+		if m.db.open() {
+			if cmd, ok := m.db.click(msg); ok {
+				m.infraForm, m.infraInSub = true, true
+				return cmd
+			}
+		}
+		if m.ports.shown {
+			if cmd, ok := m.ports.click(msg); ok {
+				m.infraForm, m.infraInSub = true, true
+				return cmd
+			}
 		}
 	}
 	for i, name := range infraOrder() {
-		if m.zones.Get("newdb:" + name).InBounds(msg) {
-			m.infraSel = i
-			return m.db.show(name)
-		}
-		if m.zones.Get("apply:" + name).InBounds(msg) {
-			m.infraSel = i
-			m.infraContainer = 0
-			return tea.Batch(m.apply(name), m.syncInfraLogs(true))
-		}
-		if m.zones.Get("toggle:" + name).InBounds(msg) {
-			m.infraSel = i
-			m.infraContainer = 0
-			return tea.Batch(m.toggle(name), m.syncInfraLogs(true))
-		}
 		if m.zones.Get("stack:" + name).InBounds(msg) {
-			m.infraSel = i
-			m.infraContainer = 0
-			return m.syncInfraLogs(true)
+			return m.selectInfra(i)
 		}
 	}
-	for i, c := range m.selectedStack().Containers {
-		if m.zones.Get("container:" + c.Name).InBounds(msg) {
-			m.infraContainer = i
-			return m.syncInfraLogs(true)
+	if m.infraSection == infraLogs {
+		for i, c := range st.Containers {
+			if m.zones.Get("container:" + c.Name).InBounds(msg) {
+				m.infraContainer = i
+				return m.syncInfraLogs(true)
+			}
 		}
 	}
 	return nil
 }
 
-func (m *model) infraKey(k string) tea.Cmd {
+// infraKey: fora do formulario, ↑↓ troca o card e ←→ a secao; enter ou tab
+// entra nos botoes do servico (Geral) ou nos containers (Logs, ←→ troca);
+// esc volta pros cards.
+func (m *model) infraKey(msg tea.KeyPressMsg) tea.Cmd {
+	k := msg.String()
 	m.logSelection = logSelection{}
-	n := len(infraOrder())
 	switch k {
-	case "r":
-		return tea.Batch(m.stacksCmd(), m.setup.planCmd(), m.syncInfraLogs(true))
-	case "a":
-		if name := infraOrder()[m.infraSel]; name != backupCard {
-			return m.apply(name)
-		}
-		return nil
-	case "b":
-		// Novo banco no Postgres/MySQL ou Novo bucket no Garage selecionado
-		if st := m.selectedStack(); (st.Name == "postgres" || st.Name == "mysql" || st.Name == "garage") && st.Enabled && st.Installed {
-			return m.db.show(st.Name)
-		}
-		return nil
-	case "down", "tab":
-		m.infraSel = (m.infraSel + 1) % n
-	case "up", "shift+tab":
-		m.infraSel = (m.infraSel + n - 1) % n
-	case "left", "right":
-		count := len(m.selectedStack().Containers)
-		if count == 0 {
-			return nil
-		}
-		delta := 1
-		if k == "left" {
-			delta = -1
-		}
-		m.infraContainer = (m.infraContainer + delta + count) % count
-		return m.syncInfraLogs(true)
 	case "pgup":
 		m.logsOffset = min(m.logsOffset+10, max(0, len(m.logArea.allLines)-m.logArea.height))
 		return nil
@@ -531,21 +451,77 @@ func (m *model) infraKey(k string) tea.Cmd {
 	case "end":
 		m.logsOffset = 0
 		return nil
-	case "enter", "space":
-		name := infraOrder()[m.infraSel]
-		if name == backupCard {
-			return tea.Batch(m.bk.activate(m.state.Backup), m.backupRefreshCmd())
-		}
-		st, _ := stacks.Get(name)
-		if st.Optional {
-			return m.toggle(name)
-		}
+	}
+	if m.infraForm {
+		return m.infraFormKey(msg)
+	}
+	n := len(infraOrder())
+	switch k {
+	case "r":
+		return tea.Batch(m.stacksCmd(), m.setup.planCmd(), m.syncInfraLogs(true))
+	case "a":
+		return m.apply(infraOrder()[m.infraSel])
+	case "down":
+		return m.selectInfra((m.infraSel + 1) % n)
+	case "up":
+		return m.selectInfra((m.infraSel + n - 1) % n)
+	case "left", "right":
+		m.infraSection = 1 - m.infraSection
 		return m.syncInfraLogs(true)
-	default:
+	case "enter", "tab":
+		m.infraForm = true
+		if m.infraSection == infraGeneral {
+			return m.setInfraPos(0)
+		}
+	}
+	return nil
+}
+
+func (m *model) infraFormKey(msg tea.KeyPressMsg) tea.Cmd {
+	k := msg.String()
+	if m.infraSection == infraLogs {
+		switch k {
+		case "esc", "tab", "enter":
+			m.infraForm = false
+		case "left", "right":
+			if count := len(m.selectedStack().Containers); count > 0 {
+				d := 1
+				if k == "left" {
+					d = -1
+				}
+				m.infraContainer = (m.infraContainer + d + count) % count
+				return m.syncInfraLogs(true)
+			}
+		}
 		return nil
 	}
-	m.infraContainer = 0
-	return m.syncInfraLogs(true)
+	switch k {
+	case "esc":
+		if m.infraInSub && m.db.open() && m.db.delName != "" {
+			m.db.delName = ""
+			return m.db.setFocus(0)
+		}
+		m.leaveInfraForm()
+		return nil
+	case "tab", "down":
+		return m.setInfraPos(m.infraPos() + 1)
+	case "shift+tab", "up":
+		return m.setInfraPos(m.infraPos() - 1)
+	}
+	if !m.infraInSub {
+		if k == "enter" || k == "space" {
+			actions := m.serviceActions(m.selectedStack())
+			return m.pressAction(actions[min(m.infraFocus, len(actions)-1)])
+		}
+		return nil
+	}
+	if m.ports.shown {
+		return m.ports.key(msg)
+	}
+	if m.db.open() {
+		return m.db.key(msg)
+	}
+	return nil
 }
 
 // serviceOperation vincula o progresso ao servico, inclusive quando a acao

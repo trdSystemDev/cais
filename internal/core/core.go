@@ -33,10 +33,13 @@ type Deps struct {
 	StackDir   func(name string) string
 
 	// Comandos do docker usados pelo Setup.
-	ComposeUp     func(ctx context.Context, file string, recreate bool) error
-	ComposeDown   func(ctx context.Context, file string) error
-	ContainerLogs func(context.Context, string) (string, error)
-	ComposePS     func(ctx context.Context, file string) ([]docker.Container, error)
+	ComposeUp   func(ctx context.Context, file string, recreate bool) error
+	ComposeDown func(ctx context.Context, file string) error
+	// Parar e Reiniciar um servico ligado (Iniciar e o ComposeUp).
+	ComposeStop    func(ctx context.Context, file string) error
+	ComposeRestart func(ctx context.Context, file string) error
+	ContainerLogs  func(context.Context, string) (string, error)
+	ComposePS      func(ctx context.Context, file string) ([]docker.Container, error)
 	// Backup: pastas do estado (o que entra no backup e onde ficam os
 	// temporarios), o OAuth do Google e o Drive (trocados nos testes) e o
 	// exec com stdin/stdout ligados (dump e restore).
@@ -157,6 +160,12 @@ func New(d Deps) *Core {
 	}
 	if d.ComposeDown == nil {
 		d.ComposeDown = docker.ComposeDown
+	}
+	if d.ComposeStop == nil {
+		d.ComposeStop = docker.ComposeStop
+	}
+	if d.ComposeRestart == nil {
+		d.ComposeRestart = docker.ComposeRestart
 	}
 	if d.ContainerLogs == nil {
 		d.ContainerLogs = docker.ContainerLogs

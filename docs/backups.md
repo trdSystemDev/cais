@@ -27,7 +27,8 @@ que ja estao no Drive. Guarde num gerenciador de senhas; sem ela nenhum
 backup abre. Os mais velhos que a retencao (padrao 30 dias) saem do Drive; o
 mais novo fica sempre. Um database que falha no dump nao impede os outros.
 
-Configuracao (TUI: Infra -> Backups; ou o CLI):
+Configuracao (TUI: aba Setup, sub-aba Backups, que tambem faz um backup agora
+e mostra o proximo e o ultimo; ou o CLI):
 
 1. No [Google Cloud](https://console.cloud.google.com): crie um projeto,
    ative a **Google Drive API**, configure a tela de consentimento e

@@ -8,14 +8,17 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/trdSystemDev/cais/internal/backup/drivetest"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
 
-// a aba Infra configura o backup do zero pela TUI: client, login no Drive
-// pelo codigo, chave (mostrada uma vez), horario e um backup agora
+// a aba Setup configura o backup do zero pela TUI: client, login no Drive
+// pelo codigo, chave (mostrada uma vez), horario e um backup agora; a Infra
+// nao tem mais o card Backups
 func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	s := drivetest.New()
 	defer s.Close()
@@ -42,9 +45,23 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 
 	m := open(t, c)
 	click(t, m, "tab:Infra")
-	click(t, m, "stack:"+backupCard)
-	waitFor(t, m, "nao configurado")
+	waitFor(t, m, "nada sobe sem ligar")
+	if strings.Contains(screen(m), "Backups") {
+		t.Fatalf("a Infra ainda tem o card Backups:\n%s", screen(m))
+	}
+
+	click(t, m, "tab:Setup")
+	// Backups e uma sub-aba propria, fora do formulario da config
+	if strings.Contains(screen(m), "OAuth client do Google") {
+		t.Fatalf("Backups na sub-aba Geral:\n%s", screen(m))
+	}
+	click(t, m, "setup-sec:Backups")
 	waitFor(t, m, "1 · OAuth client do Google")
+	// o Tab entra no painel de Backups
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !m.bk.active || m.bk.focusID(m.state.Backup) != "bk-client-id" || m.setup.typing() {
+		t.Fatalf("tab na sub-aba Backups: bk ativo %v, foco %q", m.bk.active, m.bk.focusID(m.state.Backup))
+	}
 
 	// 1. client
 	m.bk.clientID.SetValue("123-abc.apps.googleusercontent.com")
@@ -84,7 +101,7 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	// backup agora
 	click(t, m, "bk-run")
 	waitFor(t, m, "no Drive (")
-	waitFor(t, m, "ok · ")
+	waitFor(t, m, "Ultimo: ")
 	if len(s.Names()) != 1 || !strings.HasPrefix(s.Names()[0], "cais-vps-teste-") {
 		t.Errorf("no Drive: %v", s.Names())
 	}

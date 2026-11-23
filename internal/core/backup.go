@@ -145,14 +145,14 @@ func (c *Core) changeBackupDisk(fn func(*backupDisk)) error {
 func (c *Core) backupClient() (backup.Client, error) {
 	data, err := c.secretStore().Get(secretGoogleClient)
 	if errors.Is(err, secrets.ErrNotFound) {
-		return backup.Client{}, errors.New("falta o OAuth client do Google (Infra -> Backups)")
+		return backup.Client{}, errors.New("falta o OAuth client do Google (Setup -> Backups)")
 	}
 	if err != nil {
 		return backup.Client{}, err
 	}
 	var cl backup.Client
 	if err := json.Unmarshal(data, &cl); err != nil || cl.ID == "" {
-		return backup.Client{}, errors.New("OAuth client do Google invalido: informe de novo (Infra -> Backups)")
+		return backup.Client{}, errors.New("OAuth client do Google invalido: informe de novo (Setup -> Backups)")
 	}
 	return cl, nil
 }
@@ -165,7 +165,7 @@ func (c *Core) drive() (*backup.Drive, error) {
 	}
 	data, err := c.secretStore().Get(secretDriveToken)
 	if errors.Is(err, secrets.ErrNotFound) {
-		return nil, errors.New("o Drive nao esta conectado (Infra -> Backups -> Conectar)")
+		return nil, errors.New("o Drive nao esta conectado (Setup -> Backups -> Conectar)")
 	}
 	if err != nil {
 		return nil, err

@@ -36,6 +36,22 @@ func ComposeDown(ctx context.Context, file string) error {
 	return nil
 }
 
+// ComposeStop para os containers do projeto do arquivo sem remover nada.
+func ComposeStop(ctx context.Context, file string) error {
+	if _, err := execRunner(ctx, "docker", "compose", "-f", file, "stop"); err != nil {
+		return fmt.Errorf("docker compose stop (%s): %w", file, lastLines(err.Error(), 15))
+	}
+	return nil
+}
+
+// ComposeRestart reinicia os containers do projeto do arquivo.
+func ComposeRestart(ctx context.Context, file string) error {
+	if _, err := execRunner(ctx, "docker", "compose", "-f", file, "restart"); err != nil {
+		return fmt.Errorf("docker compose restart (%s): %w", file, lastLines(err.Error(), 15))
+	}
+	return nil
+}
+
 // Container e um container de um projeto compose, como o "compose ps" ve.
 type Container struct {
 	Name    string `json:"name"`
