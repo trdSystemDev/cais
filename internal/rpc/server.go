@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 
 	"github.com/trdSystemDev/cais/internal/apps"
-	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/inflight"
 )
 
@@ -166,319 +166,204 @@ func (s *server) handle(nc net.Conn) {
 }
 
 func (s *server) dispatch(c *conn, m message) (any, *Error) {
-	switch m.Method {
-	case MethodStateGet:
-		return wrap(s.api.Snapshot(s.work))
+	if m.Method == MethodStateSubscribe {
+		return s.subscribe(c)
+	}
+	h, found := handlers[m.Method]
+	if !found {
+		return nil, &Error{Code: CodeMethodNotFound, Message: "metodo desconhecido: " + m.Method}
+	}
+	return h(s, c, m)
+}
 
-	case MethodEnvironmentCheck:
-		return wrap(s.api.CheckEnvironment(s.work))
+// handler atende um metodo do protocolo.
+type handler func(s *server, c *conn, m message) (any, *Error)
 
-	case MethodSystemStats:
-		return wrap(s.api.SystemStats(s.work))
+// Os handlers rodam a acao com o ctx do daemon (s.work): ela nao morre com
+// o cliente. So o que existe pra quem esta olhando (logs) usa o da conexao.
 
-	case MethodContainerStats:
-		return wrap(s.api.ContainerStats(s.work))
+// get e um metodo sem parametros que devolve um valor.
+func get[R any](fn func(core.API, context.Context) (R, error)) handler {
+	return func(s *server, _ *conn, _ message) (any, *Error) {
+		return wrap(fn(s.api, s.work))
+	}
+}
 
-	case MethodHealthCheck:
-		return wrap(s.api.CheckHealth(s.work))
+// run e um metodo sem parametros que so devolve erro.
+func run(fn func(core.API, context.Context) error) handler {
+	return func(s *server, _ *conn, _ message) (any, *Error) {
+		return ok(fn(s.api, s.work))
+	}
+}
 
-	case MethodContainerLogs:
+// call e um metodo com parametros P que devolve um valor.
+func call[P, R any](fn func(core.API, context.Context, P) (R, error)) handler {
+	return func(s *server, _ *conn, m message) (any, *Error) {
+		var p P
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return wrap(fn(s.api, s.work, p))
+	}
+}
+
+// do e um metodo com parametros P que so devolve erro.
+func do[P any](fn func(core.API, context.Context, P) error) handler {
+	return func(s *server, _ *conn, m message) (any, *Error) {
+		var p P
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(fn(s.api, s.work, p))
+	}
+}
+
+// handlers sao os metodos do protocolo (menos o state.subscribe, que mexe
+// na conexao). Metodo novo: a constante em protocol.go, uma linha aqui e o
+// metodo no client.go; o teste de contrato confere os tres.
+var handlers = map[string]handler{
+	// estado e ambiente
+	MethodStateGet:         get(core.API.Snapshot),
+	MethodEnvironmentCheck: get(core.API.CheckEnvironment),
+	MethodSystemStats:      get(core.API.SystemStats),
+	MethodContainerStats:   get(core.API.ContainerStats),
+	MethodHealthCheck:      get(core.API.CheckHealth),
+	MethodInfraCheck:       get(core.API.CheckStacks),
+	MethodContainerLogs: func(s *server, c *conn, m message) (any, *Error) {
 		var p logsParams
 		if err := params(m, &p); err != nil {
 			return nil, err
 		}
 		return wrap(s.api.ContainerLogs(c.ctx, p.Stack, p.Container))
+	},
 
-	case MethodAppsCheck:
-		return wrap(s.api.CheckApps(s.work))
+	// setup
+	MethodConfigGet:  get(core.API.LoadConfig),
+	MethodConfigSave: do(core.API.SaveConfig),
+	MethodSetupPlan:  get(core.API.PlanSetup),
+	MethodNotifyTest: run(core.API.TestNotify),
+	MethodSecretSet: do(func(a core.API, ctx context.Context, p secretParams) error {
+		return a.SetSecret(ctx, p.Name, p.Value)
+	}),
+	MethodGitHubTest: call(func(a core.API, ctx context.Context, p githubTestParams) (github.Check, error) {
+		return a.TestGitHub(ctx, p.AppID, p.Key)
+	}),
+	MethodServiceSet: call(func(a core.API, ctx context.Context, p serviceParams) (core.Setup, error) {
+		return a.SetService(ctx, p.Name, p.On)
+	}),
+	MethodServiceControl: do(func(a core.API, ctx context.Context, p serviceControlParams) error {
+		return a.ControlService(ctx, p.Name, p.Action)
+	}),
 
-	case MethodAppCreate:
-		var p apps.App
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.CreateApp(s.work, p))
+	// apps
+	MethodAppsCheck: get(core.API.CheckApps),
+	MethodAppCreate: call(core.API.CreateApp),
+	MethodAppUpdate: do(core.API.UpdateApp),
+	MethodAppDeploy: call(func(a core.API, ctx context.Context, p deployParams) (apps.DeployResult, error) {
+		return a.DeployApp(ctx, p.Name, p.Ref)
+	}),
+	MethodAppRollback: call(func(a core.API, ctx context.Context, p deployParams) (apps.DeployResult, error) {
+		return a.RollbackApp(ctx, p.Name, p.Ref)
+	}),
+	MethodAppPromoteCheck: call(func(a core.API, ctx context.Context, p appParams) (apps.Promotion, error) {
+		return a.CheckPromotion(ctx, p.Name)
+	}),
+	MethodAppPromote: call(func(a core.API, ctx context.Context, p promoteParams) (apps.DeployResult, error) {
+		return a.PromoteApp(ctx, p.Name, p.Confirm)
+	}),
+	MethodAppRestart: do(func(a core.API, ctx context.Context, p appParams) error {
+		return a.RestartApp(ctx, p.Name, p.Service)
+	}),
+	MethodAppStop: do(func(a core.API, ctx context.Context, p appParams) error {
+		return a.StopApp(ctx, p.Name)
+	}),
+	MethodAppDelete: do(func(a core.API, ctx context.Context, p deleteParams) error {
+		return a.DeleteApp(ctx, p.Name, p.Volumes)
+	}),
+	MethodAppLogs: call(func(a core.API, ctx context.Context, p appParams) (string, error) {
+		return a.AppLogs(ctx, p.Name, p.Container)
+	}),
+	MethodAppEnvGet: call(func(a core.API, ctx context.Context, p appParams) (map[string]string, error) {
+		return a.AppEnv(ctx, p.Name)
+	}),
+	MethodAppEnvSet: do(func(a core.API, ctx context.Context, p envParams) error {
+		return a.SetAppEnv(ctx, p.Name, p.Env)
+	}),
+	MethodAppSecrets: call(func(a core.API, ctx context.Context, p appParams) ([]apps.Secret, error) {
+		return a.AppSecrets(ctx, p.Name)
+	}),
+	MethodAppSecretSet: do(func(a core.API, ctx context.Context, p appSecretParams) error {
+		return a.SetAppSecret(ctx, p.Name, p.Secret, p.Value)
+	}),
+	MethodAppSecretDel: do(func(a core.API, ctx context.Context, p appSecretParams) error {
+		return a.DeleteAppSecret(ctx, p.Name, p.Secret)
+	}),
+	MethodAppGuide: call(func(a core.API, ctx context.Context, p appParams) (textResult, error) {
+		text, err := a.AppGuide(ctx, p.Name)
+		return textResult{Text: text}, err
+	}),
 
-	case MethodAppUpdate:
-		var p apps.App
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.UpdateApp(s.work, p))
+	// bancos e buckets
+	MethodDatabaseCreate: call(core.API.CreateDatabase),
+	MethodDatabases:      get(core.API.Databases),
+	MethodDatabaseDelete: do(func(a core.API, ctx context.Context, p appDBParams) error {
+		return a.DeleteDatabase(ctx, p.Engine, p.Name)
+	}),
+	MethodAppDBLink: do(func(a core.API, ctx context.Context, p appDBParams) error {
+		return a.LinkAppDatabase(ctx, p.App, p.Engine, p.Name)
+	}),
+	MethodAppDBUnlink: do(func(a core.API, ctx context.Context, p appDBParams) error {
+		return a.UnlinkAppDatabase(ctx, p.App, p.Engine, p.Name)
+	}),
+	MethodBuckets: get(core.API.Buckets),
+	MethodBucketCreate: call(func(a core.API, ctx context.Context, p bucketParams) (core.BucketInfo, error) {
+		return a.CreateBucket(ctx, p.Name)
+	}),
+	MethodBucketDelete: do(func(a core.API, ctx context.Context, p bucketParams) error {
+		return a.DeleteBucket(ctx, p.Name)
+	}),
+	MethodAppBucketLink: do(func(a core.API, ctx context.Context, p appBucketParams) error {
+		return a.LinkAppBucket(ctx, p.App, p.Bucket)
+	}),
+	MethodAppBucketUnlink: do(func(a core.API, ctx context.Context, p appBucketParams) error {
+		return a.UnlinkAppBucket(ctx, p.App, p.Bucket)
+	}),
 
-	case MethodAppRollback:
-		var p deployParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.RollbackApp(s.work, p.Name, p.Ref))
+	// backup
+	MethodBackupRefresh:    get(core.API.RefreshBackup),
+	MethodBackupLogin:      get(core.API.StartDriveLogin),
+	MethodBackupLoginStop:  run(core.API.CancelDriveLogin),
+	MethodBackupDisconnect: run(core.API.DisconnectDrive),
+	MethodBackupRun:        get(core.API.RunBackup),
+	MethodBackupFiles:      get(core.API.BackupFiles),
+	MethodBackupRestore:    call(core.API.RestoreBackup),
+	MethodBackupKey: get(func(a core.API, ctx context.Context) (textResult, error) {
+		key, err := a.NewBackupKey(ctx)
+		return textResult{Text: key}, err
+	}),
+	MethodBackupProvider: do(func(a core.API, ctx context.Context, p textResult) error {
+		return a.SetBackupProvider(ctx, p.Text)
+	}),
+	MethodBackupClient: do(func(a core.API, ctx context.Context, p backupClientParams) error {
+		return a.SetBackupClient(ctx, p.ID, p.Secret)
+	}),
+	MethodBackupSchedule: do(func(a core.API, ctx context.Context, p backupScheduleParams) error {
+		return a.SetBackupSchedule(ctx, p.Time, p.Days)
+	}),
+}
 
-	case MethodAppDeploy:
-		var p deployParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.DeployApp(s.work, p.Name, p.Ref))
-
-	case MethodAppPromoteCheck:
-		var p appParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.CheckPromotion(s.work, p.Name))
-
-	case MethodAppPromote:
-		var p promoteParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.PromoteApp(s.work, p.Name, p.Confirm))
-
-	case MethodAppRestart:
-		var p appParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.RestartApp(s.work, p.Name, p.Service))
-
-	case MethodAppStop:
-		var p appParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.StopApp(s.work, p.Name))
-
-	case MethodAppDelete:
-		var p deleteParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.DeleteApp(s.work, p.Name, p.Volumes))
-
-	case MethodAppLogs:
-		var p appParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.AppLogs(s.work, p.Name, p.Container))
-
-	case MethodAppEnvGet:
-		var p appParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.AppEnv(s.work, p.Name))
-
-	case MethodAppEnvSet:
-		var p envParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.SetAppEnv(s.work, p.Name, p.Env))
-
-	case MethodAppSecrets:
-		var p appParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.AppSecrets(s.work, p.Name))
-
-	case MethodAppSecretSet:
-		var p appSecretParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.SetAppSecret(s.work, p.Name, p.Secret, p.Value))
-
-	case MethodAppSecretDel:
-		var p appSecretParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.DeleteAppSecret(s.work, p.Name, p.Secret))
-
-	case MethodAppGuide:
-		var p appParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		text, err := s.api.AppGuide(s.work, p.Name)
-		return wrap(textResult{Text: text}, err)
-
-	case MethodDatabaseCreate:
-		var p core.DatabaseRequest
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.CreateDatabase(s.work, p))
-
-	case MethodDatabases:
-		return wrap(s.api.Databases(s.work))
-
-	case MethodAppDBLink:
-		var p appDBParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.LinkAppDatabase(s.work, p.App, p.Engine, p.Name))
-
-	case MethodAppDBUnlink:
-		var p appDBParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.UnlinkAppDatabase(s.work, p.App, p.Engine, p.Name))
-
-	case MethodBucketCreate:
-		var p bucketParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.CreateBucket(s.work, p.Name))
-
-	case MethodBuckets:
-		return wrap(s.api.Buckets(s.work))
-
-	case MethodBucketDelete:
-		var p bucketParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.DeleteBucket(s.work, p.Name))
-
-	case MethodDatabaseDelete:
-		var p appDBParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.DeleteDatabase(s.work, p.Engine, p.Name))
-
-	case MethodAppBucketLink:
-		var p appBucketParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.LinkAppBucket(s.work, p.App, p.Bucket))
-
-	case MethodBackupRefresh:
-		return wrap(s.api.RefreshBackup(s.work))
-
-	case MethodBackupProvider:
-		var p textResult
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.SetBackupProvider(s.work, p.Text))
-
-	case MethodBackupClient:
-		var p backupClientParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.SetBackupClient(s.work, p.ID, p.Secret))
-
-	case MethodBackupLogin:
-		return wrap(s.api.StartDriveLogin(s.work))
-
-	case MethodBackupLoginStop:
-		return ok(s.api.CancelDriveLogin(s.work))
-
-	case MethodBackupDisconnect:
-		return ok(s.api.DisconnectDrive(s.work))
-
-	case MethodBackupKey:
-		key, err := s.api.NewBackupKey(s.work)
-		return wrap(textResult{Text: key}, err)
-
-	case MethodBackupSchedule:
-		var p backupScheduleParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.SetBackupSchedule(s.work, p.Time, p.Days))
-
-	case MethodBackupRun:
-		return wrap(s.api.RunBackup(s.work))
-
-	case MethodBackupFiles:
-		return wrap(s.api.BackupFiles(s.work))
-
-	case MethodBackupRestore:
-		var p core.RestoreRequest
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.RestoreBackup(s.work, p))
-
-	case MethodAppBucketUnlink:
-		var p appBucketParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.UnlinkAppBucket(s.work, p.App, p.Bucket))
-
-	case MethodInfraCheck:
-		return wrap(s.api.CheckStacks(s.work))
-
-	case MethodConfigGet:
-		return wrap(s.api.LoadConfig(s.work))
-
-	case MethodConfigSave:
-		var cfg config.Config
-		if err := params(m, &cfg); err != nil {
-			return nil, err
-		}
-		return ok(s.api.SaveConfig(s.work, cfg))
-
-	case MethodSecretSet:
-		var p secretParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.SetSecret(s.work, p.Name, p.Value))
-
-	case MethodSetupPlan:
-		return wrap(s.api.PlanSetup(s.work))
-
-	case MethodNotifyTest:
-		return ok(s.api.TestNotify(s.work))
-
-	case MethodGitHubTest:
-		var p githubTestParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.TestGitHub(s.work, p.AppID, p.Key))
-
-	case MethodServiceSet:
-		var p serviceParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return wrap(s.api.SetService(s.work, p.Name, p.On))
-
-	case MethodServiceControl:
-		var p serviceControlParams
-		if err := params(m, &p); err != nil {
-			return nil, err
-		}
-		return ok(s.api.ControlService(s.work, p.Name, p.Action))
-
-	case MethodStateSubscribe:
-		if !c.subscribed.CompareAndSwap(false, true) {
-			return map[string]bool{"subscribed": true}, nil // ja inscrito
-		}
-		states, unsubscribe, err := s.api.Subscribe(c.ctx)
-		if err != nil {
-			c.subscribed.Store(false)
-			return nil, actionError(err)
-		}
-		go forwardStates(c, states, unsubscribe)
-		return map[string]bool{"subscribed": true}, nil
-
-	default:
-		return nil, &Error{Code: CodeMethodNotFound, Message: "metodo desconhecido: " + m.Method}
+// subscribe inscreve a conexao no estado: cada mudanca vira notificacao.
+func (s *server) subscribe(c *conn) (any, *Error) {
+	if !c.subscribed.CompareAndSwap(false, true) {
+		return map[string]bool{"subscribed": true}, nil // ja inscrito
 	}
+	states, unsubscribe, err := s.api.Subscribe(c.ctx)
+	if err != nil {
+		c.subscribed.Store(false)
+		return nil, actionError(err)
+	}
+	go forwardStates(c, states, unsubscribe)
+	return map[string]bool{"subscribed": true}, nil
 }
 
 // forwardStates repassa cada foto do core como notificacao ate a conexao

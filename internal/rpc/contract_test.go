@@ -32,8 +32,8 @@ import (
 // um metodo novo entra no teste sozinho, e falha se o servidor nao o atende
 // ou se um campo se perde no caminho.
 
-// call e uma chamada que o core falso recebeu.
-type call struct {
+// recCall e uma chamada que o core falso recebeu.
+type recCall struct {
 	method string
 	args   []any
 }
@@ -42,7 +42,7 @@ type call struct {
 // preparou em out (por metodo) e err.
 type recAPI struct {
 	mu    sync.Mutex
-	calls []call
+	calls []recCall
 	out   map[string]any
 	err   error
 	state core.State
@@ -53,10 +53,10 @@ var _ core.API = (*recAPI)(nil)
 func (f *recAPI) record(m string, args ...any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, call{m, args})
+	f.calls = append(f.calls, recCall{m, args})
 }
 
-func (f *recAPI) take() []call {
+func (f *recAPI) take() []recCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.calls
@@ -310,7 +310,7 @@ func (f *filler) fill(v reflect.Value, path string, depth int) {
 }
 
 // startContract sobe o servidor com o core falso e devolve o cliente.
-func startContract(t *testing.T) (*recAPI, *Client) {
+func startContract(t testing.TB) (*recAPI, *Client) {
 	t.Helper()
 	fake := &recAPI{out: map[string]any{}}
 	path := filepath.Join(t.TempDir(), "cais.sock")
@@ -556,3 +556,5 @@ func TestContratoParametroDesconhecidoFalhaAlto(t *testing.T) {
 		}
 	}
 }
+
+var typeOfState = reflect.TypeFor[core.State]()

@@ -56,6 +56,23 @@ Regras:
 - **Nucleo sem tela.** `internal/core/arch_test.go` falha se qualquer pacote
   fora de `internal/ui` importar as libs de tela (Bubble Tea, Lip Gloss).
 
+### Adicionar uma acao
+
+1. O metodo na `core.API` (`internal/core/api.go`) e no `*core.Core`.
+2. A constante em `internal/rpc/protocol.go`, com `// params: <tipo>` ao lado
+   quando recebe parametros (e o tipo dos parametros, se for novo).
+3. Uma linha na tabela `handlers` de `internal/rpc/server.go`:
+   `get`/`run` sem parametros, `call`/`do` com parametros (`call` e `get`
+   devolvem valor; `run` e `do` so erro). Metodo que recebe uma struct inteira
+   usa a expressao de metodo direto (`call(core.API.CreateApp)`); com varios
+   argumentos, um adaptador que desmonta os parametros.
+4. O metodo no `internal/rpc/client.go` (`result[R]` pra quem devolve valor).
+5. No MCP (`internal/mcpserver`), se a IA puder usar.
+
+O teste de contrato (`internal/rpc/contract_test.go`) pega o que faltar: cada
+metodo da `core.API` e chamado pelo cliente e tem que chegar no core com os
+mesmos argumentos, e cada constante do protocolo tem que ter handler.
+
 ## Estrutura
 
 | Caminho | Responsabilidade |
