@@ -160,8 +160,14 @@ type (
 )
 
 func (t tools) register(s *mcp.Server) {
-	// --- leitura -------------------------------------------------------------
+	t.registerRead(s)
+	t.registerApps(s)
+	t.registerAppOps(s)
+	t.registerData(s)
+}
 
+// registerRead registra as ferramentas so de leitura: estado, logs, listas.
+func (t tools) registerRead(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "status", Annotations: readOnly(),
 		Description: "Estado geral da VPS: ambiente (Docker), Setup, stacks da infra e apps com os containers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, core.State, error) {
@@ -222,9 +228,10 @@ func (t tools) register(s *mcp.Server) {
 			list, err := t.api.Buckets(ctx)
 			return nil, list, err
 		})
+}
 
-	// --- apps ----------------------------------------------------------------
-
+// registerApps registra cadastro, deploy, promocao e rollback de apps.
+func (t tools) registerApps(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "app_create", Annotations: action(),
 		Description: "Cadastra um app (nao faz deploy). O codigo vem do GitHub pelo GitHub App do cais no deploy."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in appCreateArgs) (*mcp.CallToolResult, apps.App, error) {
@@ -298,6 +305,10 @@ func (t tools) register(s *mcp.Server) {
 			res, err := t.api.RollbackApp(ctx, in.App, in.Commit)
 			return nil, res, err
 		})
+}
+
+// registerAppOps registra a operacao do dia a dia dos apps: restart, stop, variaveis e secrets.
+func (t tools) registerAppOps(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "app_restart", Annotations: idempotent(),
 		Description: "Reinicia o app, ou so um service do compose."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in restartArgs) (*mcp.CallToolResult, any, error) {
@@ -348,9 +359,10 @@ func (t tools) register(s *mcp.Server) {
 			}
 			return text(in.Name + " gravado em ${CAIS_SECRETS}/" + in.Name + " (vale no proximo deploy)."), nil, nil
 		})
+}
 
-	// --- bancos e buckets ---------------------------------------------------------
-
+// registerData registra bancos e buckets: criar e ligar aos apps.
+func (t tools) registerData(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "database_create", Annotations: action(),
 		Description: "Cria um database e um usuario de mesmo nome com senha nova no Postgres ou MySQL da infra. A senha fica no cais; o app recebe ao ligar com app_link_database."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in dbCreateArgs) (*mcp.CallToolResult, core.DatabaseInfo, error) {
