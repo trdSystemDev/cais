@@ -69,6 +69,11 @@ func (c *Client) CheckEnvironment(ctx context.Context) (env core.Environment, er
 	return
 }
 
+func (c *Client) SystemStats(ctx context.Context) (st core.SystemStats, err error) {
+	err = c.call(ctx, MethodSystemStats, nil, &st)
+	return
+}
+
 func (c *Client) CheckStacks(ctx context.Context) (infra core.Infra, err error) {
 	err = c.call(ctx, MethodInfraCheck, nil, &infra)
 	return

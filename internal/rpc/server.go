@@ -173,6 +173,9 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodEnvironmentCheck:
 		return wrap(s.api.CheckEnvironment(s.work))
 
+	case MethodSystemStats:
+		return wrap(s.api.SystemStats(s.work))
+
 	case MethodContainerLogs:
 		var p logsParams
 		if err := params(m, &p); err != nil {

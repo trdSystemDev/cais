@@ -149,6 +149,9 @@ func run(t *testing.T, m *model, cmd tea.Cmd) tea.Msg {
 		if _, ok := msg.(appLogsMsg); ok {
 			return last
 		}
+		if _, ok := msg.(sysStatsMsg); ok {
+			return last
+		}
 		if _, ok := msg.(stateMsg); ok {
 			return last
 		}

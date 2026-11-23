@@ -95,6 +95,12 @@ type model struct {
 	infraMsgC                       string
 	infraMsgStack                   string
 	togglingOn                      bool
+
+	// uso da maquina no dashboard: a ultima leitura e a geracao do
+	// polling (trocar de aba para o anterior)
+	sys           core.SystemStats
+	sysErr        string
+	sysGeneration uint64
 }
 
 type (
@@ -114,7 +120,7 @@ func newModel(api core.API, states <-chan core.State) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.waitState(), m.checkCmd(), m.setup.load())
+	return tea.Batch(tea.RequestBackgroundColor, m.waitState(), m.checkCmd(), m.setup.load(), m.sysCmd())
 }
 
 // waitState entrega a proxima foto do core; o Update pede a seguinte.
@@ -242,6 +248,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		generation := m.logsGeneration
 		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return infraLogsTick(generation) })
+	case sysStatsMsg:
+		return m, m.onSysStats(msg)
+	case sysTick:
+		if uint64(msg) != m.sysGeneration || m.tab != tabDashboard || m.disconnected {
+			return m, nil
+		}
+		return m, m.sysCmd()
 	case infraLogsTick:
 		if uint64(msg) != m.logsGeneration || m.tab != tabInfra || m.disconnected {
 			return m, nil
@@ -295,6 +308,7 @@ func (m *model) onState(s core.State) tea.Cmd {
 func (m *model) setTab(i int) tea.Cmd {
 	if m.tab != i {
 		m.logsGeneration++
+		m.sysGeneration++
 		m.logsTarget = ""
 	}
 	m.logSelection = logSelection{}
@@ -305,6 +319,9 @@ func (m *model) setTab(i int) tea.Cmd {
 	}
 	if i == tabSetup {
 		return m.backupRefreshCmd()
+	}
+	if i == tabDashboard {
+		return m.sysCmd()
 	}
 	if i == tabApps {
 		// bancos e buckets criados na Infra (ou pelo CLI) ja aparecem pra ligar

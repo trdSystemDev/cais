@@ -19,6 +19,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/inflight"
 	"github.com/trdSystemDev/cais/internal/notify"
+	"github.com/trdSystemDev/cais/internal/sysstat"
 )
 
 // Deps sao as dependencias externas do Core. Campos vazios recebem a
@@ -78,6 +79,9 @@ type Deps struct {
 	Exec          func(ctx context.Context, container string, args ...string) (string, error)
 	// ExecInput e o Exec com stdin: SQL com senha nunca vai na linha de comando.
 	ExecInput func(ctx context.Context, container string, input []byte, args ...string) (string, error)
+	// ReadSystem le o uso da maquina (padrao: /proc e os discos da raiz,
+	// do cais e do docker).
+	ReadSystem func() (sysstat.Sample, error)
 }
 
 // DefaultDeployTimeout e o limite padrao de um deploy. Junto com a volta da
@@ -115,6 +119,8 @@ type Core struct {
 	gh github.Sessions
 
 	backup backupRuntime
+
+	sys systemRuntime
 
 	// work e o trabalho que o daemon dispara sozinho (deploy automatico,
 	// backup, recuperacao): o Close espera ele terminar
@@ -217,6 +223,12 @@ func New(d Deps) *Core {
 	}
 	if d.ExecInput == nil {
 		d.ExecInput = docker.ExecInput
+	}
+	if d.ReadSystem == nil {
+		dataDir := d.DataDir
+		d.ReadSystem = func() (sysstat.Sample, error) {
+			return sysstat.Read("/proc", "/", dataDir, "/var/lib/docker")
+		}
 	}
 	return &Core{deps: d, subs: map[int]chan State{}}
 }

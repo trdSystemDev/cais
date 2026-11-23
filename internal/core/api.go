@@ -27,6 +27,9 @@ type API interface {
 
 	// CheckEnvironment checa Docker e sistema e devolve o resultado.
 	CheckEnvironment(ctx context.Context) (Environment, error)
+	// SystemStats le o uso da maquina (processador, memoria, disco) e
+	// devolve com o historico recente, pros graficos do dashboard.
+	SystemStats(ctx context.Context) (SystemStats, error)
 	// CheckStacks pergunta ao docker o estado das stacks base.
 	CheckStacks(ctx context.Context) (Infra, error)
 
