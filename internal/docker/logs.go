@@ -2,16 +2,15 @@ package docker
 
 import (
 	"context"
-	"os/exec"
 )
 
 // ContainerLogs le stdout e stderr sem seguir o processo. Mantem no maximo
 // 256 KiB, inclusive quando uma linha do container e muito grande.
 func ContainerLogs(ctx context.Context, container string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", "logs", "--tail", "200", "--timestamps", container)
+	cmd := command(ctx, "docker", "logs", "--tail", "200", "--timestamps", container)
 	out := &logTail{}
 	cmd.Stdout, cmd.Stderr = out, out
-	err := cmd.Run()
+	err := run(ctx, cmd)
 	return string(out.data), err
 }
 

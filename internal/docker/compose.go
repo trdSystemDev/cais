@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 )
 
@@ -228,11 +227,11 @@ func (CLI) Down(ctx context.Context, name string, volumes bool) error {
 // pra qualquer coisa com senha (SQL de criar usuario): pela linha de
 // comando ela apareceria no ps do host enquanto o comando roda.
 func ExecInput(ctx context.Context, container string, input []byte, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", "-i", container}, args...)...)
+	cmd := command(ctx, "docker", append([]string{"exec", "-i", container}, args...)...)
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	if err := run(ctx, cmd); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
@@ -249,11 +248,11 @@ func ExecStream(ctx context.Context, container string, stdin io.Reader, stdout i
 	if stdin != nil {
 		flags = append(flags, "-i")
 	}
-	cmd := exec.CommandContext(ctx, "docker", append(append(flags, container), args...)...)
+	cmd := command(ctx, "docker", append(append(flags, container), args...)...)
 	cmd.Stdin, cmd.Stdout = stdin, stdout
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := run(ctx, cmd); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()

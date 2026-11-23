@@ -35,14 +35,11 @@ func (s Status) OK() bool {
 type runner func(ctx context.Context, name string, args ...string) (string, error)
 
 func execRunner(ctx context.Context, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	// pasta neutra: comando do compose sem -f nunca pega um arquivo da
-	// pasta de onde o daemon foi iniciado
-	cmd.Dir = "/"
+	cmd := command(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := run(ctx, cmd)
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			err = fmt.Errorf("%s", msg)
