@@ -61,6 +61,9 @@ type setupPage struct {
 	th    theme
 
 	items  []*item
+	head   []*item            // itens antes da lista de destinatarios
+	tail   []*item            // Salvar e Testar e-mail, depois dela
+	to     []*textinput.Model // destinatarios dos avisos, um por linha
 	focus  int
 	sec    int  // sub-aba aberta
 	inForm bool // o teclado esta nos campos (senao, nas sub-abas)
@@ -122,16 +125,56 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 
 	section = secAvisos
 	input("notifyFrom", "Remetente", "validado na Brevo")
-	input("notifyTo", "Destinatarios", "a@x.com, b@x.com")
-	p.get("notifyTo").input.CharLimit = 1024
 	input("brevoKey", "Chave da Brevo", "xkeysib-...")
 	p.get("brevoKey").input.EchoMode = textinput.EchoPassword
 
-	p.items = append(p.items,
-		&item{id: "save", label: "Salvar", kind: kindButton, section: -1},
-		&item{id: "notifyTest", label: "Testar e-mail", kind: kindButton, section: secAvisos})
+	p.head = p.items
+	p.tail = []*item{
+		{id: "save", label: "Salvar", kind: kindButton, section: -1},
+		{id: "notifyTest", label: "Testar e-mail", kind: kindButton, section: secAvisos}}
+	p.th = th
+	p.rebuild()
 	p.setTheme(th)
 	return p
+}
+
+// newTo e o campo de um destinatario.
+func (p *setupPage) newTo(addr string) *textinput.Model {
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.Placeholder = "e-mail"
+	ti.SetWidth(40)
+	ti.SetValue(addr)
+	p.th.styleInput(&ti)
+	return &ti
+}
+
+// rebuild remonta os itens com as linhas de destinatarios (cada uma com o
+// excluir) e o "+ Novo e-mail", mantendo o foco no mesmo item.
+func (p *setupPage) rebuild() {
+	cur := ""
+	if p.focus < len(p.items) {
+		cur = p.items[p.focus].id
+	}
+	items := slices.Clone(p.head)
+	for i, ti := range p.to {
+		items = append(items,
+			&item{id: fmt.Sprintf("to:%d", i), kind: kindInput, input: ti, section: secAvisos},
+			&item{id: fmt.Sprintf("to-del:%d", i), label: "✕ excluir", kind: kindButton, section: secAvisos})
+	}
+	items = append(items, &item{id: "to-add", label: "+ Novo e-mail", kind: kindButton, section: secAvisos})
+	p.items = append(items, p.tail...)
+	p.focus = 0
+	for i, it := range p.items {
+		if it.id == cur {
+			p.focus = i
+		}
+	}
+}
+
+// index e a posicao do item id (-1: nao existe).
+func (p *setupPage) index(id string) int {
+	return slices.IndexFunc(p.items, func(it *item) bool { return it.id == id })
 }
 
 func (p *setupPage) get(id string) *item {
@@ -253,7 +296,11 @@ func (p *setupPage) fill(c config.Config) {
 	}
 	p.get("hostS3").input.SetValue(c.Hosts.S3)
 	p.get("notifyFrom").input.SetValue(c.Notify.From)
-	p.get("notifyTo").input.SetValue(strings.Join(c.Notify.To, ", "))
+	p.to = nil
+	for _, addr := range c.Notify.To {
+		p.to = append(p.to, p.newTo(addr))
+	}
+	p.rebuild()
 }
 
 // formApply le o formulario agora e devolve o que ele muda numa config: so
@@ -263,8 +310,10 @@ func (p *setupPage) formApply() func(*config.Config) {
 	val := func(id string) string { return strings.TrimSpace(p.get(id).input.Value()) }
 	email, tls, testDomain, appID, s3, from := val("email"), p.tls, val("testDomain"), val("ghAppID"), val("hostS3"), val("notifyFrom")
 	var to []string
-	for _, addr := range strings.FieldsFunc(val("notifyTo"), func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
-		to = append(to, addr)
+	for _, ti := range p.to {
+		if addr := strings.TrimSpace(ti.Value()); addr != "" {
+			to = append(to, addr)
+		}
 	}
 	return func(c *config.Config) {
 		c.Email = email
@@ -433,6 +482,20 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		return p.notifyTest()
 	case it.id == "ghTest":
 		return p.githubTest()
+	case it.id == "to-add":
+		p.to = append(p.to, p.newTo(""))
+		p.rebuild()
+		return p.focusAt(p.index(fmt.Sprintf("to:%d", len(p.to)-1)))
+	case strings.HasPrefix(it.id, "to-del:"):
+		i, _ := strconv.Atoi(strings.TrimPrefix(it.id, "to-del:"))
+		p.to = slices.Delete(p.to, i, i+1)
+		p.rebuild()
+		// o foco fica no excluir da linha que subiu (ou no "+ Novo e-mail")
+		next := p.index(fmt.Sprintf("to-del:%d", min(i, len(p.to)-1)))
+		if next < 0 {
+			next = p.index("to-add")
+		}
+		return p.focusAt(next)
 	}
 	return nil
 }
@@ -547,27 +610,28 @@ func (p *setupPage) key(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// viewSetup: as sub-abas em cima e a aberta em tela cheia.
+// viewSetup: a sub-aba aberta em tela cheia, com as sub-abas no topo do
+// painel, como as secoes de um app na aba Apps.
 func (m *model) viewSetup(h int) string {
 	p, t := m.setup, m.th
-	parts := []string{" "}
+	var parts []string
 	for i, s := range setupSections {
 		parts = append(parts, m.zones.Mark("setup-sec:"+s.title, t.pill(i == p.sec).Render(s.title)), " ")
 	}
 	pills := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-	bodyH := max(1, h-3)
+	bodyH := max(1, h-2)
 	if p.sec == secBackups {
-		return pills + "\n" + m.bk.view(m.state.Backup, m.w, bodyH)
+		return m.bk.view(m.state.Backup, m.w, bodyH, pills)
 	}
-	return pills + "\n" + p.view(m.w, bodyH)
+	return p.view(m.w, bodyH, pills)
 }
 
-func (p *setupPage) view(w, h int) string {
+func (p *setupPage) view(w, h int, pills string) string {
 	t := p.th
 	inner := max(20, w-6)
 	wrap := lipgloss.NewStyle().Width(inner)
 	var b strings.Builder
-	b.WriteString(wrap.Inherit(t.fg(t.muted)).Render(setupSections[p.sec].hint) + "\n")
+	b.WriteString(pills + "\n\n" + wrap.Inherit(t.fg(t.muted)).Render(setupSections[p.sec].hint) + "\n")
 	b.WriteString("\n" + p.viewForm(inner))
 	if p.status != "" {
 		c := map[string]color.Color{"ok": t.ok, "warn": t.warn, "danger": t.danger}[p.statusC]
@@ -596,6 +660,10 @@ func (p *setupPage) viewForm(w int) string {
 			continue
 		}
 		focused := i == p.focus && p.inForm
+		if it.id == "to-add" || strings.HasPrefix(it.id, "to:") || strings.HasPrefix(it.id, "to-del:") {
+			rows = append(rows, p.viewTo(it, i, w)...)
+			continue
+		}
 		if it.id == "ghTest" {
 			// o Testar fica na secao do GitHub App, com o resultado embaixo
 			rows = append(rows, "  "+p.zones.Mark(it.id, t.button(it.label, btnInfo, focused)))
@@ -631,6 +699,38 @@ func (p *setupPage) viewForm(w int) string {
 		rows = append(rows, p.zones.Mark(it.id, marker+label+value))
 	}
 	return strings.Join(rows, "\n") + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, append([]string{"  "}, buttons...)...)
+}
+
+// viewTo desenha a lista de destinatarios, como as Variaveis de um app: um
+// e-mail por linha com o [✕ excluir] ao lado e o "+ Novo e-mail" no fim.
+func (p *setupPage) viewTo(it *item, i, w int) []string {
+	t := p.th
+	focusID := ""
+	if p.inForm {
+		focusID = p.items[p.focus].id
+	}
+	var rows []string
+	// o titulo vem antes da primeira linha (ou do "+ Novo e-mail", sem linhas)
+	if it.id == "to:0" || (it.id == "to-add" && len(p.to) == 0) {
+		rows = append(rows, "", t.rule(w), t.bold().Render("Destinatarios"),
+			t.fg(t.muted).Width(w).Render("recebem os avisos; sem nenhum, os avisos ficam desligados"))
+		if len(p.to) == 0 {
+			rows = append(rows, t.fg(t.muted).Render("  nenhum destinatario"))
+		}
+	}
+	switch {
+	case it.id == "to-add":
+		rows = append(rows, "", "  "+p.zones.Mark(it.id, t.button(it.label, btnInfo, focusID == it.id)))
+	case strings.HasPrefix(it.id, "to:"):
+		del := p.items[i+1] // o to-del da mesma linha
+		marker := "  "
+		if focusID == it.id || focusID == del.id {
+			marker = t.fg(t.accent).Bold(true).Render("› ")
+		}
+		rows = append(rows, marker+p.zones.Mark(it.id, t.input(it.input, 40))+" "+
+			p.zones.Mark(del.id, t.chip(del.label, btnDanger, focusID == del.id)))
+	}
+	return rows
 }
 
 // viewPlan e o resumo da config no Geral: o que falta e o que a Infra

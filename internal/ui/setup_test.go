@@ -174,11 +174,24 @@ func TestSetupAvisosPorEmail(t *testing.T) {
 	m, _ := openSetup(t)
 	fill(t, m, "trd.localhost")
 	m.setup.get("notifyFrom").input.SetValue("cais@exemplo.com.br")
-	m.setup.get("notifyTo").input.SetValue("a@exemplo.com.br, b@exemplo.com.br")
 	m.setup.get("brevoKey").input.SetValue("xkeysib-teste")
 	// os avisos tem sub-aba propria; o Salvar dela grava o formulario todo
 	click(t, m, "setup-sec:Avisos")
-	waitFor(t, m, "Chave da Brevo")
+	waitFor(t, m, "nenhum destinatario")
+	// os destinatarios sao uma lista, como as variaveis de um app: cada
+	// "+ Novo e-mail" abre uma linha com o excluir ao lado
+	for _, addr := range []string{"a@exemplo.com.br", "x@exemplo.com.br", "b@exemplo.com.br"} {
+		click(t, m, "to-add")
+		if !m.setup.typing() {
+			t.Fatal("o + Novo e-mail nao levou o foco pra linha nova")
+		}
+		m.setup.to[len(m.setup.to)-1].SetValue(addr)
+	}
+	waitFor(t, m, "✕ excluir")
+	click(t, m, "to-del:1")
+	if len(m.setup.to) != 2 || m.setup.to[1].Value() != "b@exemplo.com.br" {
+		t.Fatalf("excluir tirou a linha errada: %d linhas", len(m.setup.to))
+	}
 	click(t, m, "save")
 	waitFor(t, m, "Config salva e chave da Brevo gravada.")
 	if !strings.Contains(screen(m), "Testar e-mail") {

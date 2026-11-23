@@ -327,7 +327,7 @@ func (p *bkPanel) click(st core.BackupStatus, msg tea.MouseMsg) (tea.Cmd, bool) 
 	return nil, false
 }
 
-func (p *bkPanel) view(st core.BackupStatus, w, h int) string {
+func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 	t := p.th
 	muted := t.fg(t.muted)
 	wrap := lipgloss.NewStyle().Width(w - 6)
@@ -357,6 +357,7 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int) string {
 	}
 
 	var b strings.Builder
+	b.WriteString(head + "\n\n")
 	b.WriteString(t.bold().Render("Backups") + "  " + muted.Render("bancos e estado do cais, criptografados, no Google Drive") + "\n")
 	b.WriteString("\n")
 
