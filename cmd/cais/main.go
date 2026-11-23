@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -101,7 +102,7 @@ func (e *cli) run(args []string) int {
 	case "mcp":
 		err = e.runMCP(args)
 	case "version":
-		fmt.Fprintln(e.out, "cais", version)
+		fmt.Fprintln(e.out, versionLine())
 	case "help":
 		fmt.Fprint(e.out, helpFor(strings.Join(args, " ")))
 	default:
@@ -295,4 +296,33 @@ func newLogger(w io.Writer, format, level string, journal bool) (*slog.Logger, e
 		return slog.New(slog.NewJSONHandler(w, opts)), nil
 	}
 	return nil, fmt.Errorf("-log-format %q: use text ou json", format)
+}
+
+// versionLine e a linha do cais version: a versao do release e, quando o
+// binario tem, o commit e o Go que o compilaram. Uma linha so: o install.sh
+// compara a do binario novo com a do instalado.
+func versionLine() string {
+	line := "cais " + version
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return line
+	}
+	var extra []string
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+			extra = append(extra, "commit "+s.Value[:7])
+		}
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.modified" && s.Value == "true" && len(extra) > 0 {
+			extra[0] += "+mudancas"
+		}
+	}
+	if info.GoVersion != "" {
+		extra = append(extra, info.GoVersion)
+	}
+	if len(extra) == 0 {
+		return line
+	}
+	return line + " (" + strings.Join(extra, ", ") + ")"
 }

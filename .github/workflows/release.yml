@@ -31,6 +31,13 @@ jobs:
         run: |
           make build VERSION="$GITHUB_REF_NAME"
           ./dist/cais-linux-amd64 version
+          # o release sai com o Go do toolchain do go.mod (o mesmo do PC):
+          # outro Go daria outro binario
+          want=$(sed -n 's/^toolchain //p' go.mod)
+          go version dist/cais-linux-amd64 dist/cais-linux-arm64
+          for f in dist/cais-linux-amd64 dist/cais-linux-arm64; do
+            go version "$f" | grep -q ": $want\$" || { echo "::error::$f nao foi compilado com $want"; exit 1; }
+          done
           cd dist && sha256sum cais-linux-amd64 cais-linux-arm64 > SHA256SUMS && cat SHA256SUMS
 
       - name: Release

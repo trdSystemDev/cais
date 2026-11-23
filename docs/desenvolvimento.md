@@ -183,6 +183,17 @@ Cada tag `v*` no GitHub vira um release pelo GitHub Actions
 make release V=v0.3.0
 ```
 
+O build e reproduzivel: `-trimpath` (nenhum caminho da maquina no binario) e
+o Go fixo no `toolchain` do `go.mod`, que o release confere. O mesmo commit da
+o mesmo binario no PC e no GitHub Actions; pra conferir um release:
+
+```sh
+git checkout v0.3.0 && make build VERSION=v0.3.0
+sha256sum dist/cais-linux-*    # igual ao SHA256SUMS do release
+```
+
+`cais version` mostra a versao, o commit e o Go do binario.
+
 Pra testar numa VPS antes de lancar, uma tag com `-` vira pre-release: o
 GitHub nao a entrega como a mais nova, entao so instala quem pedir.
 

@@ -26,6 +26,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Versao do Go
+        run: go version
+
       - name: Formatacao, vet, staticcheck e govulncheck
         run: make lint
 

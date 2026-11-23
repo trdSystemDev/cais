@@ -1,5 +1,9 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
+# release reproduzivel: sem os caminhos da maquina que compilou (-trimpath) e
+# com o commit gravado no binario (go version -m, cais version). O Go e o
+# do toolchain do go.mod, o mesmo no PC e no GitHub Actions.
+BUILDFLAGS := -trimpath -buildvcs=true
 
 .PHONY: build build-amd64 build-arm64 test test-race lint test-docker release clean dev daemon tui cais
 
@@ -43,10 +47,10 @@ tui: cais
 build: build-amd64 build-arm64
 
 build-amd64:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/cais-linux-amd64 ./cmd/cais
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILDFLAGS) -ldflags "$(LDFLAGS)" -o dist/cais-linux-amd64 ./cmd/cais
 
 build-arm64:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/cais-linux-arm64 ./cmd/cais
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(BUILDFLAGS) -ldflags "$(LDFLAGS)" -o dist/cais-linux-arm64 ./cmd/cais
 
 test:
 	go test ./...

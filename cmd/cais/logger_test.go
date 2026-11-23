@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,5 +41,14 @@ func TestNewLogger(t *testing.T) {
 		if _, err := newLogger(&b, bad[0], bad[1], false); err == nil {
 			t.Errorf("aceitou %v", bad)
 		}
+	}
+}
+
+// cais version: a versao e o Go que compilou, numa linha (o install.sh
+// compara a linha do binario novo com a do instalado).
+func TestVersionLine(t *testing.T) {
+	l := versionLine()
+	if !strings.HasPrefix(l, "cais dev") || !strings.Contains(l, runtime.Version()) || strings.Contains(l, "\n") {
+		t.Fatalf("%q", l)
 	}
 }
