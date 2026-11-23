@@ -56,6 +56,28 @@ Regras:
 - **Nucleo sem tela.** `internal/core/arch_test.go` falha se qualquer pacote
   fora de `internal/ui` importar as libs de tela (Bubble Tea, Lip Gloss).
 
+### Logs
+
+O daemon loga com `log/slog` no stderr, em `chave=valor` (ou JSON com
+`--log-format json`; nivel com `--log-level`). Sob o systemd o horario sai da
+linha, porque o journal ja registra o dele. Campos fixos, pra filtrar:
+
+| Campo | O que e |
+| --- | --- |
+| `acao` | `deploy`, `deploy_automatico`, `rollback`, `promocao`, `recuperacao`, `backup`, `restore`, `aviso`, `limpeza`, `desligamento` |
+| `app` | o app do deploy |
+| `commit` | o commit no ar depois da acao (curto) |
+| `duracao` | quanto a acao levou |
+| `erro` | a falha |
+
+Ex: `journalctl -u cais | grep app=loja` mostra cada deploy do app, do
+comeco ao fim. Nenhum valor de secret, senha ou chave vai pro log (o restore
+registra o arquivo e os databases, nunca a chave); `internal/core/log_test.go`
+confere.
+
+O core recebe o logger em `core.Deps.Logger` (padrao `slog.Default()`, que o
+`cais daemon` configura).
+
 ### Adicionar uma acao
 
 1. O metodo na `core.API` (`internal/core/api.go`) e no `*core.Core`.

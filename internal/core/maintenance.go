@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"log"
 	"time"
 )
 
@@ -26,6 +25,6 @@ func (c *Core) RunMaintenance(ctx context.Context, first, every time.Duration) {
 // MaintenanceOnce faz uma rodada da limpeza.
 func (c *Core) MaintenanceOnce(ctx context.Context) {
 	if err := c.deps.PruneBuildCache(ctx); err != nil {
-		log.Printf("limpeza do cache de build: %v", err)
+		c.deps.Logger.Warn("limpeza do cache de build falhou", "acao", "limpeza", "erro", err)
 	}
 }

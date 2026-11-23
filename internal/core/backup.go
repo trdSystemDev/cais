@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -597,9 +596,6 @@ func (c *Core) RunBackups(ctx context.Context, every time.Duration) {
 		}
 		run, err := c.runBackup(context.WithoutCancel(ctx), true)
 		c.work.End()
-		if err != nil && !errors.Is(err, ErrBusy) {
-			log.Printf("backup automatico: %v", err)
-		}
 		if !errors.Is(err, ErrBusy) {
 			c.notifyBackup(st.Last, run, err)
 		}
@@ -630,10 +626,17 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 	p, name := st.Provider, backup.ProviderName(st.Provider)
 	run = BackupRun{At: start, Auto: auto, Provider: p}
 	c.update(func(s *State) { s.Backup.Running, s.Backup.Step = true, "comecando" })
+	l := c.deps.Logger.With("acao", "backup", "automatico", auto, "destino", p)
+	l.Info("backup comecou")
+	began := time.Now()
 	defer func() {
 		run.Duration = c.deps.Now().Sub(start)
+		fields := []any{"duracao", time.Since(began).Round(time.Millisecond), "databases", run.Databases, "arquivos", run.Files}
 		if err != nil {
 			run.Error = err.Error()
+			l.Error("backup falhou", append(fields, "erro", err)...)
+		} else {
+			l.Info("backup terminou", append(fields, "arquivo", run.File, "tamanho", run.Size, "databases_com_erro", len(run.Errors))...)
 		}
 		saved := run
 		c.changeBackupDisk(func(d *backupDisk) { d.Last = &saved })
@@ -879,6 +882,24 @@ type RestoreResult struct {
 // abertas caem) e recriado com o mesmo usuario e senha antes do dump
 // entrar. O database tem que existir no cais (a senha do usuario e a dele).
 func (c *Core) RestoreBackup(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
+	if len(req.Databases) == 0 { // so lista o que o backup tem: nada muda
+		return c.restoreBackup(ctx, req)
+	}
+	// a chave (req.Identity) nunca vai pro log
+	l := c.deps.Logger.With("acao", "restore", "arquivo", req.File, "databases", strings.Join(req.Databases, ","))
+	l.Warn("restore comecou: os databases pedidos serao substituidos")
+	began := time.Now()
+	res, err := c.restoreBackup(ctx, req)
+	took := time.Since(began).Round(time.Millisecond)
+	if err != nil {
+		l.Error("restore falhou", "duracao", took, "restaurados", strings.Join(res.Restored, ","), "erro", err)
+	} else {
+		l.Info("restore terminou", "duracao", took, "restaurados", strings.Join(res.Restored, ","))
+	}
+	return res, err
+}
+
+func (c *Core) restoreBackup(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
 	if !c.backup.mu.TryLock() {
 		return RestoreResult{}, ErrBusy
 	}

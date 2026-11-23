@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/apps"
@@ -51,7 +50,9 @@ func (c *Core) PromoteApp(ctx context.Context, from string, confirm bool) (apps.
 	defer unlock()
 
 	c.setDeploying(h.PromoteTo, true)
-	res, err := m.Promote(ctx, from, confirm)
+	res, err := c.logDeploy("promocao", h.PromoteTo, func() (apps.DeployResult, error) {
+		return m.Promote(ctx, from, confirm)
+	}, "de", from)
 	c.setDeploying(h.PromoteTo, false)
 	c.CheckApps(ctx)
 	return res, err
@@ -125,20 +126,22 @@ func (c *Core) AutoDeployOnce(ctx context.Context) (started []string, done <-cha
 			defer func() { unlock(); c.work.End(); results <- struct{}{} }()
 			// o deploy nao ve o desligamento do daemon: o Close espera
 			ctx := context.WithoutCancel(ctx)
-			log.Printf("deploy automatico de %s: commit novo %s", name, short(head))
 			c.setDeploying(name, true)
-			_, err := m.AutoDeploy(ctx, name, head)
+			_, err := c.logDeploy("deploy_automatico", name, func() (apps.DeployResult, error) {
+				return m.AutoDeploy(ctx, name, head)
+			}, "commit_novo", short(head))
 			c.setDeploying(name, false)
 			if err != nil {
-				retry := ""
+				retry := false
 				if a, gerr := m.Get(name); gerr == nil {
 					if at, ok := a.AutoRetryAt(); ok {
-						retry = fmt.Sprintf(" (parece passageiro: tenta de novo as %s)", at.Local().Format("15:04"))
+						retry = true
+						c.deps.Logger.Info("deploy automatico tenta de novo (falha parece passageira)",
+							"acao", "deploy_automatico", "app", name, "as", at.Local().Format("15:04"))
 					}
 				}
-				log.Printf("deploy automatico de %s falhou%s: %v", name, retry, err)
 				// falha passageira com nova tentativa marcada ainda nao e aviso
-				if retry == "" {
+				if !retry {
 					c.notifyAutoDeploy(name, head, err)
 				}
 			}
@@ -175,7 +178,7 @@ func (c *Core) autoLog(app string, err error) {
 		if app == "" {
 			app = "apps"
 		}
-		log.Printf("deploy automatico (%s): %s", app, msg)
+		c.deps.Logger.Warn("consulta do deploy automatico falhou", "acao", "deploy_automatico", "app", app, "erro", msg)
 	}
 }
 

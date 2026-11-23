@@ -3,7 +3,7 @@ package backup
 import (
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"sync"
 
 	"golang.org/x/oauth2"
@@ -73,7 +73,7 @@ func (s *savingSource) Token() (*oauth2.Token, error) {
 	defer s.mu.Unlock()
 	if tok.RefreshToken != "" && tok.RefreshToken != s.refresh {
 		if err := s.save(tok); err != nil {
-			log.Printf("backup: gravando o login renovado: %v", err)
+			slog.Warn("gravando o login renovado do destino do backup", "acao", "backup", "erro", err)
 		} else {
 			s.refresh = tok.RefreshToken
 		}

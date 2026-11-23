@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"log"
 	"slices"
 	"strings"
 	"sync"
@@ -152,7 +151,9 @@ func (c *Core) DeployApp(ctx context.Context, name, ref string) (apps.DeployResu
 	defer unlock()
 
 	c.setDeploying(name, true)
-	res, err := c.appManager().Deploy(ctx, name, ref)
+	res, err := c.logDeploy("deploy", name, func() (apps.DeployResult, error) {
+		return c.appManager().Deploy(ctx, name, ref)
+	}, "ref", ref)
 	c.setDeploying(name, false)
 	c.CheckApps(ctx)
 	return res, err
@@ -172,7 +173,9 @@ func (c *Core) RollbackApp(ctx context.Context, name, commit string) (apps.Deplo
 	defer unlock()
 
 	c.setDeploying(name, true)
-	res, err := c.appManager().Rollback(ctx, name, strings.TrimSpace(commit))
+	res, err := c.logDeploy("rollback", name, func() (apps.DeployResult, error) {
+		return c.appManager().Rollback(ctx, name, strings.TrimSpace(commit))
+	}, "para", commit)
 	c.setDeploying(name, false)
 	c.CheckApps(ctx)
 	return res, err
@@ -315,7 +318,7 @@ func (c *Core) RecoverApps(ctx context.Context) {
 	m := c.appManager()
 	list, err := m.List()
 	if err != nil {
-		log.Printf("recuperando deploys interrompidos: %v", err)
+		c.deps.Logger.Error("recuperando deploys interrompidos", "acao", "recuperacao", "erro", err)
 		return
 	}
 	for _, a := range list {
@@ -324,10 +327,10 @@ func (c *Core) RecoverApps(ctx context.Context) {
 		}
 		// ocupado: o deploy que pegou a trava recupera antes de comecar
 		if unlock, err := c.lockApp(a.Name); err == nil {
-			log.Printf("o deploy de %s foi interrompido no meio: voltando a versao anterior", a.Name)
+			c.deps.Logger.Warn("deploy interrompido no meio: voltando a versao anterior", "acao", "recuperacao", "app", a.Name)
 			c.setDeploying(a.Name, true)
 			if _, err := m.Recover(context.WithoutCancel(ctx), a.Name); err != nil {
-				log.Printf("recuperando %s: %v", a.Name, err)
+				c.deps.Logger.Error("recuperacao falhou", "acao", "recuperacao", "app", a.Name, "erro", err)
 			}
 			c.setDeploying(a.Name, false)
 			unlock()

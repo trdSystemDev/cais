@@ -202,6 +202,11 @@ Flags:
   --auto-every tempo       intervalo da consulta do deploy automatico (padrao 1m)
   --deploy-timeout tempo   limite de um deploy (padrao 30m; 0 usa o padrao,
                            negativo nao limita)
+  --log-format text|json   formato do log no stderr (padrao text: chave=valor)
+  --log-level nivel        debug, info, warn ou error (padrao info)
+
+O log tem campos pra filtrar (acao, app, commit, duracao, erro), ex:
+journalctl -u cais | grep app=loja
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 

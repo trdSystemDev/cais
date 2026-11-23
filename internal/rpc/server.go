@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"reflect"
 	"sync"
@@ -40,7 +40,7 @@ func Serve(ctx context.Context, ln net.Listener, api core.API) error {
 		<-ctx.Done()
 		ln.Close()
 		if n := s.calls.Count(); n > 0 {
-			log.Printf("desligando: esperando %d chamadas em andamento terminarem", n)
+			slog.Info("desligando: esperando as chamadas em andamento terminarem", "acao", "desligamento", "em_andamento", n)
 		}
 		s.calls.Close()
 		s.closeAll()

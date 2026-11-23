@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -134,9 +134,17 @@ func (e *cli) runDaemon(args []string) error {
 	group := fs.String("group", "", "grupo que pode usar o cais (alem do root)")
 	autoEvery := fs.Duration("auto-every", time.Minute, "intervalo da consulta do deploy automatico ao GitHub")
 	deployTimeout := fs.Duration("deploy-timeout", core.DefaultDeployTimeout, "limite de um deploy (download, build e troca); passou, cancela e volta a versao anterior")
+	logFormat := fs.String("log-format", "text", "formato do log: text (chave=valor) ou json")
+	logLevel := fs.String("log-level", "info", "nivel minimo do log: debug, info, warn ou error")
 	if err := e.parse(fs, args); err != nil {
 		return err
 	}
+	logger, err := newLogger(e.err, *logFormat, *logLevel, stderrIsJournal())
+	if err != nil {
+		return err
+	}
+	// o log padrao (e o pacote log) passa a sair por ele
+	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -152,7 +160,7 @@ func (e *cli) runDaemon(args []string) error {
 		stop()
 	}()
 
-	c := core.New(core.Deps{DeployTimeout: *deployTimeout, Version: version})
+	c := core.New(core.Deps{DeployTimeout: *deployTimeout, Version: version, Logger: logger})
 	go c.CheckEnvironment(ctx)
 	// deploy que o daemon anterior nao terminou (queda, kill, reboot): volta
 	// a versao que estava no ar
@@ -165,10 +173,10 @@ func (e *cli) runDaemon(args []string) error {
 	// backup diario no horario da config (confere a cada minuto)
 	go c.RunBackups(ctx, time.Minute)
 
-	log.Printf("cais daemon %s ouvindo em %s", version, *socket)
+	logger.Info("daemon no ar", "versao", version, "socket", *socket)
 	err = rpc.Serve(ctx, ln, c)
 	c.Close() // deploy automatico e backup em andamento
-	log.Print("cais daemon encerrado")
+	logger.Info("daemon encerrado")
 	return err
 }
 
@@ -262,4 +270,29 @@ func (e *cli) printJSON(v any) error {
 	enc := json.NewEncoder(e.out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// newLogger monta o log do daemon. Com o journald (journal), o horario sai
+// da linha: o journal ja registra o dele.
+func newLogger(w io.Writer, format, level string, journal bool) (*slog.Logger, error) {
+	var lvl slog.Level
+	if err := lvl.UnmarshalText([]byte(level)); err != nil {
+		return nil, fmt.Errorf("-log-level %q: use debug, info, warn ou error", level)
+	}
+	opts := &slog.HandlerOptions{Level: lvl}
+	if journal {
+		opts.ReplaceAttr = func(groups []string, a slog.Attr) slog.Attr {
+			if len(groups) == 0 && a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		}
+	}
+	switch format {
+	case "text":
+		return slog.New(slog.NewTextHandler(w, opts)), nil
+	case "json":
+		return slog.New(slog.NewJSONHandler(w, opts)), nil
+	}
+	return nil, fmt.Errorf("-log-format %q: use text ou json", format)
 }

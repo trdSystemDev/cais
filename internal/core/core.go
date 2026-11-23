@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +88,8 @@ type Deps struct {
 	// novo); LatestRelease pergunta a tag dele (padrao: o GitHub).
 	Version       string
 	LatestRelease func(ctx context.Context) (string, error)
+	// Logger e o log do daemon (padrao: slog.Default(), que o main configura).
+	Logger *slog.Logger
 }
 
 // DefaultDeployTimeout e o limite padrao de um deploy. Junto com a volta da
@@ -149,7 +151,7 @@ func (c *Core) vpsName() string {
 // deploy no meio deixaria o app metade numa versao, metade na outra.
 func (c *Core) Close() {
 	if n := c.work.Count(); n > 0 {
-		log.Printf("desligando: esperando %d deploys/backups em andamento terminarem", n)
+		c.deps.Logger.Info("desligando: esperando as acoes em andamento terminarem", "acao", "desligamento", "em_andamento", n)
 	}
 	c.work.Close()
 }
@@ -237,6 +239,9 @@ func New(d Deps) *Core {
 	}
 	if d.LatestRelease == nil {
 		d.LatestRelease = latestRelease
+	}
+	if d.Logger == nil {
+		d.Logger = slog.Default()
 	}
 	if d.ReadSystem == nil {
 		dataDir := d.DataDir

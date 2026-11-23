@@ -45,7 +45,12 @@ Flags:
   --group grupo            grupo que tambem pode usar o cais, alem do root
   --auto-every tempo       intervalo da consulta do deploy automatico (padrao 1m)
   --deploy-timeout tempo   limite de um deploy (padrao 30m; 0 usa o padrao,
-                           negativo nao limita)`},
+                           negativo nao limita)
+  --log-format text|json   formato do log no stderr (padrao text: chave=valor)
+  --log-level nivel        debug, info, warn ou error (padrao info)
+
+O log tem campos pra filtrar (acao, app, commit, duracao, erro), ex:
+journalctl -u cais | grep app=loja`},
 		{name: "state", usage: "state [--socket]", short: "imprime o estado atual em JSON"},
 		{name: "check", usage: "check [--socket]", short: "checa o ambiente e imprime o resultado em JSON", long: `
 Confere Docker e Docker Compose (instalados, versao, daemon no ar).`},

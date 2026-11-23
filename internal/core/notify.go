@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -54,7 +53,7 @@ func (c *Core) mail(msg notify.Message) (m notify.Mail, key string, ok bool, err
 func (c *Core) notify(msg notify.Message) {
 	m, key, ok, err := c.mail(msg)
 	if err != nil {
-		log.Printf("aviso por e-mail (%s): %v", msg.Title, err)
+		c.deps.Logger.Warn("aviso por e-mail falhou", "acao", "aviso", "titulo", msg.Title, "erro", err)
 		return
 	}
 	if !ok || !c.work.Begin() {
@@ -65,7 +64,7 @@ func (c *Core) notify(msg notify.Message) {
 		ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
 		defer cancel()
 		if err := notify.Send(ctx, c.deps.BrevoURL, key, m); err != nil {
-			log.Printf("aviso por e-mail (%s): %v", msg.Title, err)
+			c.deps.Logger.Warn("aviso por e-mail falhou", "acao", "aviso", "titulo", msg.Title, "erro", err)
 		}
 	}()
 }
