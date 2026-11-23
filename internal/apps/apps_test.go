@@ -441,6 +441,27 @@ func TestDeployFalhoVoltaAAnterior(t *testing.T) {
 	}
 }
 
+// O up falha e a volta pra versao anterior tambem: o erro diz as duas
+// coisas e o historico registra que nao voltou.
+func TestDeployFalhoEAVoltaTambemFalha(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	d.failUp["v2"] = true
+	d.failUp["v1"] = true
+
+	_, err := m.Deploy(context.Background(), "web", "c2")
+	if err == nil || !strings.Contains(err.Error(), "unhealthy") || !strings.Contains(err.Error(), "a volta pra versao anterior tambem falhou") {
+		t.Fatalf("erro %v", err)
+	}
+	a, _ := m.Get("web")
+	if a.Commit != "c1" || a.Last.RolledBack || a.Last.Commit != "c2" || a.Last.Error == "" {
+		t.Errorf("app %+v / %+v", a, a.Last)
+	}
+}
+
 func TestPrimeiroDeployFalhoNaoTemPraOndeVoltar(t *testing.T) {
 	m, _, d := newManager(t)
 	d.failUp["v1"] = true
