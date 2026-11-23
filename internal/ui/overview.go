@@ -212,12 +212,31 @@ const maxDashApps = 6
 // renderOverview: os apps na esquerda; servicos, backup e ultimos deploys
 // na direita.
 func (m *model) renderOverview(w int) string {
-	t := m.th
-	muted := t.fg(t.muted)
-	st := m.state
 	now := time.Now()
 	colW := (w - 4) / 2
+	nameW := dashNameWidth(m.state.Apps.List)
+	var right strings.Builder
+	m.overviewServices(&right)
+	m.overviewBackup(&right, now)
+	m.overviewDeploys(&right, now, nameW, colW)
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(colW+4).Render(m.overviewApps(now, nameW, colW)), right.String()) + "\n"
+}
 
+// dashNameWidth e a largura da coluna dos nomes de app (de 4 a 20).
+func dashNameWidth(list []core.AppStatus) int {
+	nameW := 4
+	for _, a := range list {
+		nameW = max(nameW, min(20, len(a.Name)))
+	}
+	return nameW
+}
+
+// overviewApps e a coluna dos apps, os com problema primeiro.
+func (m *model) overviewApps(now time.Time, nameW, colW int) string {
+	t := m.th
+	muted := m.th.fg(m.th.muted)
+	st := m.state
 	// apps
 	var left strings.Builder
 	up, bad := 0, 0
@@ -237,10 +256,6 @@ func (m *model) renderOverview(w int) string {
 		summary = "nenhum (crie na aba Apps)"
 	}
 	left.WriteString(t.bold().Render("Apps") + "  " + muted.Render(summary))
-	nameW := 4
-	for _, a := range st.Apps.List {
-		nameW = max(nameW, min(20, len(a.Name)))
-	}
 	// os com problema primeiro
 	list := append([]core.AppStatus(nil), st.Apps.List...)
 	sort.SliceStable(list, func(i, j int) bool {
@@ -264,9 +279,15 @@ func (m *model) renderOverview(w int) string {
 		}
 		left.WriteString("\n" + m.zones.Mark("dash-app:"+a.Name, truncate(line, colW)))
 	}
+	return left.String()
+}
 
+// overviewServices e a linha dos servicos ligados.
+func (m *model) overviewServices(right *strings.Builder) {
+	t := m.th
+	muted := m.th.fg(m.th.muted)
+	st := m.state
 	// servicos
-	var right strings.Builder
 	right.WriteString(t.bold().Render("Servicos") + "  ")
 	var svcs []string
 	for _, s := range st.Infra.Stacks {
@@ -285,7 +306,13 @@ func (m *model) renderOverview(w int) string {
 		right.WriteString(muted.Render("nenhum ligado (aba Infra)"))
 	}
 	right.WriteString(strings.Join(svcs, "  ") + "\n")
+}
 
+// overviewBackup e a linha do backup: o ultimo e o proximo.
+func (m *model) overviewBackup(right *strings.Builder, now time.Time) {
+	t := m.th
+	muted := m.th.fg(m.th.muted)
+	st := m.state
 	// backup
 	b := st.Backup
 	right.WriteString(t.bold().Render("Backup") + "    ")
@@ -305,7 +332,13 @@ func (m *model) renderOverview(w int) string {
 		right.WriteString(muted.Render(" · proximo " + b.Next.Local().Format("02/01 15:04")))
 	}
 	right.WriteString("\n")
+}
 
+// overviewDeploys sao os ultimos deploys de todos os apps.
+func (m *model) overviewDeploys(right *strings.Builder, now time.Time, nameW, colW int) {
+	t := m.th
+	muted := m.th.fg(m.th.muted)
+	st := m.state
 	// ultimos deploys de todos os apps
 	type dep struct {
 		app string
@@ -352,9 +385,6 @@ func (m *model) renderOverview(w int) string {
 		}
 		right.WriteString("\n" + m.zones.Mark("dash-app:"+d.app, truncate(line, colW)))
 	}
-
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(colW+4).Render(left.String()), right.String()) + "\n"
 }
 
 // dashClick: avisos e apps levam aonde resolve.

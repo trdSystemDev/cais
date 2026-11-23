@@ -362,43 +362,72 @@ func (p *bkPanel) click(st core.BackupStatus, msg tea.MouseMsg) (tea.Cmd, bool) 
 }
 
 func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
-	t := p.th
-	muted := t.fg(t.muted)
-	wrap := lipgloss.NewStyle().Width(w - 6)
-	focusID := ""
-	if p.active {
-		focusID = p.focusID(st)
-	}
-	field := func(id, label string, width int) string {
-		marker, ls := "  ", t.fg(t.text).Width(16)
-		if id == focusID {
-			marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(16)
-		}
-		return p.zones.Mark(id, marker+ls.Render(label)+t.input(p.input(id), width))
-	}
-	btn := func(id, label string, k btnKind) string {
-		if p.busy != "" {
-			k = btnOff
-		}
-		return p.zones.Mark(id, t.button(label, k, id == focusID))
-	}
-	info := func(id string) string {
-		return p.zones.Mark(id, t.chip("i", btnInfo, id == focusID))
-	}
-	// step e o titulo de um passo: feito ou nao, o [i] da ajuda e o resumo
-	step := func(n int, title string, ok bool, detail, infoID string) string {
-		mark := t.fg(t.danger).Render("✗")
-		if ok {
-			mark = t.fg(t.ok).Render("✓")
-		}
-		return mark + " " + t.bold().Render(fmt.Sprintf("%d · %s", n, title)) + " " + info(infoID) + "  " +
-			muted.Render(ansi.Truncate(detail, max(1, w-16-len(title)), "…"))
-	}
-	rule := "\n" + t.rule(w-6) + "\n"
-
-	name := backup.ProviderName(st.Provider)
-	onedrive := st.Provider == backup.ProviderOneDrive
+	v := p.newView(st, w)
 	var b strings.Builder
+	v.viewHeader(&b, head)
+	for _, part := range []func(*strings.Builder){v.viewClient, v.viewLogin, v.viewKey, v.viewSchedule, v.viewRun} {
+		part(&b)
+	}
+	return p.th.panel(p.active, w, h).MaxHeight(h + 2).Render(b.String())
+}
+
+// bkView e o que as partes do painel de backup usam pra se desenhar.
+type bkView struct {
+	p           *bkPanel
+	t           theme
+	st          core.BackupStatus
+	w           int
+	muted, wrap lipgloss.Style
+	focusID     string
+	name        string // o destino (Google Drive ou OneDrive)
+	onedrive    bool
+	rule        string
+}
+
+func (p *bkPanel) newView(st core.BackupStatus, w int) *bkView {
+	t := p.th
+	v := &bkView{p: p, t: t, st: st, w: w, muted: t.fg(t.muted), wrap: lipgloss.NewStyle().Width(w - 6),
+		name: backup.ProviderName(st.Provider), onedrive: st.Provider == backup.ProviderOneDrive, rule: "\n" + t.rule(w-6) + "\n"}
+	if p.active {
+		v.focusID = p.focusID(st)
+	}
+	return v
+}
+
+func (v *bkView) field(id, label string, width int) string {
+	t := v.t
+	marker, ls := "  ", t.fg(t.text).Width(16)
+	if id == v.focusID {
+		marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(16)
+	}
+	return v.p.zones.Mark(id, marker+ls.Render(label)+t.input(v.p.input(id), width))
+}
+
+func (v *bkView) btn(id, label string, k btnKind) string {
+	if v.p.busy != "" {
+		k = btnOff
+	}
+	return v.p.zones.Mark(id, v.t.button(label, k, id == v.focusID))
+}
+
+func (v *bkView) info(id string) string {
+	return v.p.zones.Mark(id, v.t.chip("i", btnInfo, id == v.focusID))
+}
+
+// step e o titulo de um passo: feito ou nao, o [i] da ajuda e o resumo
+func (v *bkView) step(n int, title string, ok bool, detail, infoID string) string {
+	t := v.t
+	mark := t.fg(t.danger).Render("✗")
+	if ok {
+		mark = t.fg(t.ok).Render("✓")
+	}
+	return mark + " " + t.bold().Render(fmt.Sprintf("%d · %s", n, title)) + " " + v.info(infoID) + "  " +
+		v.muted.Render(ansi.Truncate(detail, max(1, v.w-16-len(title)), "…"))
+}
+
+// viewHeader desenha o titulo com o destino e o resultado da ultima acao.
+func (v *bkView) viewHeader(b *strings.Builder, head string) {
+	p, t, wrap, focusID, name, rule := v.p, v.t, v.wrap, v.focusID, v.name, v.rule
 	b.WriteString(head + "\n\n")
 	// destino no titulo, como seletor: trocar nao apaga o client nem o
 	// login do outro
@@ -406,7 +435,7 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 	if focusID == "bk-provider" {
 		dest = t.fg(t.accent).Bold(true).Render("› Destino ")
 	}
-	b.WriteString(t.bold().Render("Backups") + " " + info("bk-info") + "    " +
+	b.WriteString(t.bold().Render("Backups") + " " + v.info("bk-info") + "    " +
 		p.zones.Mark("bk-provider", dest+t.selector("‹ "+name+" ›", focusID == "bk-provider")) + "\n")
 	// o resultado da ultima acao fica no topo: no fim do painel ele some
 	// quando o terminal e baixo
@@ -417,50 +446,62 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 		b.WriteString(wrap.Foreground(t.ok).Render(p.done) + "\n")
 	}
 	b.WriteString(rule)
+}
 
+// viewClient desenha o passo 1: o client do Google ou o app do Azure.
+func (v *bkView) viewClient(b *strings.Builder) {
+	p, st, rule, onedrive := v.p, v.st, v.rule, v.onedrive
 	// 1. client
 	if onedrive {
-		b.WriteString(step(1, "App no Azure", st.ClientID != "", cmpOrStr(st.ClientID, "falta"), "bk-info-client") + "\n")
+		b.WriteString(v.step(1, "App no Azure", st.ClientID != "", cmpOrStr(st.ClientID, "falta"), "bk-info-client") + "\n")
 		p.clientID.Placeholder = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-		b.WriteString(field("bk-client-id", "ID do aplicativo", 41) + "\n")
+		b.WriteString(v.field("bk-client-id", "ID do aplicativo", 41) + "\n")
 	} else {
-		b.WriteString(step(1, "OAuth client do Google", st.ClientID != "", cmpOrStr(st.ClientID, "falta"), "bk-info-client") + "\n")
+		b.WriteString(v.step(1, "OAuth client do Google", st.ClientID != "", cmpOrStr(st.ClientID, "falta"), "bk-info-client") + "\n")
 		p.clientID.Placeholder = "....apps.googleusercontent.com"
-		b.WriteString(field("bk-client-id", "Client ID", 41) + "\n")
-		b.WriteString(field("bk-client-secret", "Client secret", 41) + "\n")
+		b.WriteString(v.field("bk-client-id", "Client ID", 41) + "\n")
+		b.WriteString(v.field("bk-client-secret", "Client secret", 41) + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString("  " + btn("bk-client-save", "Gravar client", btnNormal) + "\n" + rule)
+	b.WriteString("  " + v.btn("bk-client-save", "Gravar client", btnNormal) + "\n" + rule)
+}
 
+// viewLogin desenha o passo 2: o login no destino.
+func (v *bkView) viewLogin(b *strings.Builder) {
+	t, st, muted, wrap, name, rule := v.t, v.st, v.muted, v.wrap, v.name, v.rule
 	// 2. login no destino
 	switch {
 	case st.Login != nil:
-		b.WriteString(step(2, name, false, "aguardando o login", "bk-info-login") + "\n")
+		b.WriteString(v.step(2, name, false, "aguardando o login", "bk-info-login") + "\n")
 		b.WriteString("  Abra " + t.fg(t.accent).Bold(true).Render(st.Login.URL) + " em qualquer aparelho e digite:\n")
 		b.WriteString("    " + t.fg(t.accent).Bold(true).Render(st.Login.Code) + "  " + muted.Render("(expira as "+st.Login.Expires.Local().Format("15:04")+")") + "\n")
-		b.WriteString("  " + btn("bk-login-cancel", "Cancelar", btnNeutral) + "\n")
+		b.WriteString("  " + v.btn("bk-login-cancel", "Cancelar", btnNeutral) + "\n")
 	case st.Email != "":
-		b.WriteString(step(2, name, true, st.Email, "bk-info-login") + "\n")
-		b.WriteString("  " + btn("bk-disconnect", "Desconectar", btnWarn) + "\n")
+		b.WriteString(v.step(2, name, true, st.Email, "bk-info-login") + "\n")
+		b.WriteString("  " + v.btn("bk-disconnect", "Desconectar", btnWarn) + "\n")
 	default:
-		b.WriteString(step(2, name, false, "nao conectado", "bk-info-login") + "\n")
+		b.WriteString(v.step(2, name, false, "nao conectado", "bk-info-login") + "\n")
 		k := btnNormal
 		if st.ClientID == "" {
 			k = btnOff
 		}
-		b.WriteString("  " + btn("bk-connect", "Conectar", k) + "\n")
+		b.WriteString("  " + v.btn("bk-connect", "Conectar", k) + "\n")
 	}
 	if st.LoginError != "" {
 		b.WriteString(wrap.Foreground(t.danger).Render(st.LoginError) + "\n")
 	}
 	b.WriteString(rule)
+}
 
+// viewKey desenha o passo 3: a chave do backup.
+func (v *bkView) viewKey(b *strings.Builder) {
+	p, t, st, w, muted, wrap, rule := v.p, v.t, v.st, v.w, v.muted, v.wrap, v.rule
 	// 3. chave
 	short := st.Recipient
 	if len(short) > 20 {
 		short = short[:12] + "…" + short[len(short)-6:]
 	}
-	b.WriteString(step(3, "Chave do backup", st.Recipient != "", cmpOrStr(short, "falta"), "bk-info-key") + "\n")
+	b.WriteString(v.step(3, "Chave do backup", st.Recipient != "", cmpOrStr(short, "falta"), "bk-info-key") + "\n")
 	if p.priv != "" {
 		b.WriteString(wrap.Foreground(t.warn).Bold(true).Render("Guarde esta chave privada agora (gerenciador de senhas). Ela NAO fica na VPS: sem ela nenhum backup abre.") + "\n")
 		// a chave e uma linha so: se o painel e estreito ela quebra, e o
@@ -469,7 +510,7 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 		if lipgloss.Width(p.priv) > w-6 {
 			b.WriteString(muted.Render("A chave e uma linha so: use Copiar (selecionar com o mouse leva a quebra junto).") + "\n")
 		}
-		b.WriteString("  " + btn("bk-key-copy", "Copiar", btnInfo) + " " + btn("bk-key-done", "Ja guardei", btnNormal) + "\n")
+		b.WriteString("  " + v.btn("bk-key-copy", "Copiar", btnInfo) + " " + v.btn("bk-key-done", "Ja guardei", btnNormal) + "\n")
 	} else {
 		label, k := "Gerar chave", btnNormal
 		if st.Recipient != "" || p.keyMade {
@@ -478,27 +519,35 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 		if p.confirmKey {
 			label, k = "Confirmar: gerar outra", btnDanger
 		}
-		b.WriteString("  " + btn("bk-key", label, k) + "\n")
+		b.WriteString("  " + v.btn("bk-key", label, k) + "\n")
 		if p.confirmKey {
 			b.WriteString(wrap.Foreground(t.warn).Render("Os backups ja feitos continuam abrindo so com a chave privada antiga.") + "\n")
 		}
 	}
 	b.WriteString(rule)
+}
 
+// viewSchedule desenha o passo 4: o horario e a retencao.
+func (v *bkView) viewSchedule(b *strings.Builder) {
+	st, rule := v.st, v.rule
 	// 4. horario
 	when := "desligado (so manual)"
 	if st.Time != "" {
 		when = fmt.Sprintf("todo dia as %s, guarda %d dias", st.Time, st.RetentionDays)
 	}
-	b.WriteString(step(4, "Horario", st.Time != "", when, "bk-info-schedule") + "\n")
-	b.WriteString(field("bk-time", "Horario (HH:MM)", 6) + "\n")
-	b.WriteString(field("bk-days", "Retencao (dias)", 6) + "\n")
+	b.WriteString(v.step(4, "Horario", st.Time != "", when, "bk-info-schedule") + "\n")
+	b.WriteString(v.field("bk-time", "Horario (HH:MM)", 6) + "\n")
+	b.WriteString(v.field("bk-days", "Retencao (dias)", 6) + "\n")
 	b.WriteString("\n")
-	b.WriteString("  " + btn("bk-schedule", "Salvar horario", btnNormal) + "\n" + rule)
+	b.WriteString("  " + v.btn("bk-schedule", "Salvar horario", btnNormal) + "\n" + rule)
+}
 
+// viewRun desenha o backup agora: o ultimo, o proximo e o botao.
+func (v *bkView) viewRun(b *strings.Builder) {
+	t, st, w, muted, wrap, name := v.t, v.st, v.w, v.muted, v.wrap, v.name
 	// backup agora: o ultimo no titulo (ou a falha dele embaixo) e o
 	// proximo ao lado do botao, pra caber em terminal baixo
-	title := t.bold().Render("Backup agora") + " " + info("bk-info-run")
+	title := t.bold().Render("Backup agora") + " " + v.info("bk-info-run")
 	failed := ""
 	if l := st.Last; l != nil {
 		when := l.At.Local().Format("02/01 15:04")
@@ -517,7 +566,7 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 	if st.Running {
 		label, k = "Fazendo backup...", btnOff
 	}
-	b.WriteString("  " + btn("bk-run", label, k))
+	b.WriteString("  " + v.btn("bk-run", label, k))
 	switch {
 	case st.Running && st.Step != "":
 		b.WriteString("  " + t.fg(t.warn).Render(st.Step))
@@ -532,7 +581,6 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 	if failed != "" {
 		b.WriteString(wrap.Foreground(t.danger).PaddingLeft(2).Render(failed) + "\n")
 	}
-	return t.panel(p.active, w, h).MaxHeight(h + 2).Render(b.String())
 }
 
 // bkInfo e a ajuda de cada [i] do painel (o texto do client depende do destino).
