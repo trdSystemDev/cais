@@ -11,10 +11,16 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // BrevoAPI e o endpoint de envio de e-mail transacional da Brevo.
 const BrevoAPI = "https://api.brevo.com/v3/smtp/email"
+
+// client e o cliente HTTP do envio. O prazo proprio vale mesmo se quem
+// chama esquecer de por um no contexto: um envio preso nao segura o
+// desligamento do daemon. Variavel pros testes.
+var client = &http.Client{Timeout: 30 * time.Second}
 
 // Mail e um e-mail de aviso.
 type Mail struct {
@@ -69,7 +75,7 @@ func Send(ctx context.Context, url, key string, m Mail) error {
 	req.Header.Set("api-key", key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("brevo: %w", err)
 	}
