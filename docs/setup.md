@@ -125,6 +125,90 @@ Com HTTPS fora da 443, o redirecionamento de HTTP leva pra porta certa
 pela porta 80 da internet: fora de 80/443 ele nao emite certificado e os
 sites abrem com aviso. O painel de portas, a aba Setup e o `cais setup` avisam.
 
+### Migrar de um nginx, app por app
+
+Com um nginx ja nas 80/443 da VPS, da pra passar os sites pro cais aos
+poucos: o nginx continua na frente e, a cada app migrado, passa a repassar o
+dominio dele pro Traefik do cais, que entrega pro container.
+
+1. Suba o proxy em outras portas, **atras do nginx** (na Infra, marque
+   **Outro proxy** no painel de portas):
+
+   ```sh
+   cais setup config --http-port 8080 --https-port 8443 --behind-proxy
+   cais service proxy on
+   ```
+
+   Assim as portas escutam so no `127.0.0.1` (nada novo aberto na internet:
+   o docker publica por cima do `ufw`) e o Traefik aceita o `X-Forwarded-For`
+   do nginx, pros apps verem o IP de quem acessa.
+
+2. Faca o deploy do app no cais e troque o site dele no nginx:
+
+   ```nginx
+   server {
+       listen 443 ssl;
+       server_name app.exemplo.com.br;
+       # ssl_certificate ... (o do nginx continua)
+
+       client_max_body_size 0;
+       location / {
+           proxy_pass https://127.0.0.1:8443;
+           proxy_ssl_server_name on;          # o Traefik escolhe o app pelo nome
+           proxy_ssl_name $host;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto https;
+           proxy_http_version 1.1;            # websocket
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection $connection_upgrade;
+           proxy_read_timeout 30m;
+       }
+   }
+
+   server {
+       listen 80;
+       server_name app.exemplo.com.br;
+       # o certbot do nginx acha o arquivo dele; o resto vai pro Traefik
+       location /.well-known/acme-challenge/ {
+           root /var/www/certbot;             # a pasta do seu certbot
+           try_files $uri @cais;
+       }
+       location @cais {
+           proxy_pass http://127.0.0.1:8080;
+           proxy_set_header Host $host;
+       }
+       location / { return 301 https://$host$request_uri; }
+   }
+   ```
+
+   O `$connection_upgrade` vem do `map` padrao de websocket no `http {}`:
+
+   ```nginx
+   map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+   ```
+
+   Repasse so o `/.well-known/acme-challenge/` da porta 80, nunca o site
+   todo: com HTTPS fora da 443 o Traefik redirecionaria o navegador pra
+   `https://site:8443`. Esse repasse e o que deixa o Let's Encrypt emitir o
+   certificado do cais ja durante a migracao; sem ele, as tentativas falham
+   e, depois de 5 falhas numa hora, o Let's Encrypt bloqueia o dominio por
+   uma hora.
+
+3. `nginx -t && systemctl reload nginx`, e o app ja esta no cais. Repita
+   pros outros.
+
+4. Com todos migrados, a virada: desligue o nginx e volte o proxy pras
+   80/443, sem o atras do nginx. O Traefik ja tem os certificados, entao a
+   troca dura so a subida do proxy:
+
+   ```sh
+   systemctl disable --now nginx
+   cais setup config --http-port 80 --https-port 443 --behind-proxy=false
+   cais service proxy on
+   ```
+
 ## Acesso aos bancos
 
 Os bancos nao tem painel web: so escutam no loopback da VPS (`127.0.0.1:5432` e

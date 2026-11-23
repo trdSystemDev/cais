@@ -32,7 +32,15 @@ services:
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls=true
+{{- if .BehindProxy}}
+      # atras de outro proxy da VPS (migracao): ele e quem fala com a
+      # internet, entao vale o X-Forwarded-For dele. Sem HTTP/3: o Alt-Svc
+      # chamaria o navegador pro UDP de uma porta que so escuta no loopback
+      - --entrypoints.web.forwardedheaders.trustedips={{.TrustedIPs}}
+      - --entrypoints.websecure.forwardedheaders.trustedips={{.TrustedIPs}}
+{{- else}}
       - --entrypoints.websecure.http3=true
+{{- end}}
       - --entrypoints.websecure.http.middlewares=cais-headers@docker
       # o padrao de 60s corta upload grande (arquivos, S3)
       - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=30m
@@ -56,9 +64,15 @@ services:
       - --global.checknewversion=false
       - --global.sendanonymoususage=false
     ports:
+{{- if .BehindProxy}}
+      # so no loopback: chega aqui so o proxy da frente, nesta VPS
+      - "127.0.0.1:{{.HTTPPort}}:80"
+      - "127.0.0.1:{{.HTTPSPort}}:443"
+{{- else}}
       - "{{.HTTPPort}}:80"
       - "{{.HTTPSPort}}:443"
       - "{{.HTTPSPort}}:443/udp"
+{{- end}}
     labels:
       # headers aplicados em todo site (middleware do entrypoint websecure).
       # HSTS sem includeSubDomains: nao forca HTTPS em nome que o cais nao

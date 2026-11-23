@@ -234,8 +234,26 @@ func TestAvisoDePortasForaDoPadrao(t *testing.T) {
 	if w := c.PortsWarning(); !strings.Contains(w, "8080/8443") || !strings.Contains(w, "Let's Encrypt") {
 		t.Errorf("aviso: %q", w)
 	}
+	// atras do nginx: o aviso diz o que repassar pro certificado sair
+	c.Proxy.BehindProxy = true
+	if err := c.Validate(); err != nil {
+		t.Fatalf("recusou atras de outro proxy: %v", err)
+	}
+	if w := c.PortsWarning(); !strings.Contains(w, "/.well-known/acme-challenge/") || !strings.Contains(w, "127.0.0.1:8080") {
+		t.Errorf("aviso atras de outro proxy: %q", w)
+	}
+	c.Proxy.BehindProxy = false
 	c.TLS, c.TestDomain = TLSSelfSigned, "trd.localhost"
 	if c.PortsWarning() != "" {
 		t.Error("avisou do Let's Encrypt no modo de teste (CA local)")
+	}
+}
+
+// atras de outro proxy nas 80/443 nao faz sentido: ele e quem esta nelas
+func TestAtrasDeOutroProxyForaDe80e443(t *testing.T) {
+	c := validConfig()
+	c.Proxy.BehindProxy = true
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "fora de 80/443") {
+		t.Errorf("aceitou atras de outro proxy nas 80/443: %v", err)
 	}
 }

@@ -100,6 +100,10 @@ type vars struct {
 	LetsEncrypt bool
 	HTTPPort    int
 	HTTPSPort   int
+	// BehindProxy: portas so no 127.0.0.1, confiando no X-Forwarded-For
+	// do proxy da frente (TrustedIPs)
+	BehindProxy bool
+	TrustedIPs  string
 	S3Host      string
 }
 
@@ -145,6 +149,8 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 		LetsEncrypt: c.LetsEncrypt(),
 		HTTPPort:    c.Proxy.HTTPPort,
 		HTTPSPort:   c.Proxy.HTTPSPort,
+		BehindProxy: c.Proxy.BehindProxy,
+		TrustedIPs:  config.BehindProxyTrustedIPs,
 		S3Host:      c.S3Host(),
 	})
 	if err != nil {

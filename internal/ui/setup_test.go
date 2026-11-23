@@ -280,6 +280,21 @@ func TestInfraTrocaAPortaDoProxy(t *testing.T) {
 	if ups.Load() != before+1 {
 		t.Fatal("porta invalida subiu o proxy")
 	}
+
+	// atras do nginx: so no loopback, e o aviso diz o que o nginx repassa
+	m.ports.https.SetValue("8443")
+	click(t, m, "ports-behind")
+	waitFor(t, m, "[x] atras do nginx desta VPS")
+	click(t, m, "ports-save")
+	waitFor(t, m, ":8080/:8443 atras do nginx")
+	info, _ = c.LoadConfig(context.Background())
+	if !info.Config.Proxy.BehindProxy {
+		t.Fatalf("nao gravou o atras do nginx: %+v", info.Config.Proxy)
+	}
+	compose, _ = os.ReadFile(plan.Stacks[0].File)
+	if !strings.Contains(string(compose), `"127.0.0.1:8443:443"`) {
+		t.Errorf("compose do proxy fora do loopback:\n%s", compose)
+	}
 }
 
 // o Setup e dividido em sub-abas de tela cheia: ←→ trocam de sub-aba, tab

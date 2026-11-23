@@ -191,6 +191,9 @@ func (m *model) viewInfra(h int) string {
 		// porta fora do padrao (teste, migracao) fica a vista no card
 		if pc := m.setup.plan.Config.Proxy; name == "proxy" && pc.HTTPPort > 0 && !pc.StandardPorts() {
 			role += fmt.Sprintf(" · :%d/:%d", pc.HTTPPort, pc.HTTPSPort)
+			if pc.BehindProxy {
+				role += " atras do nginx"
+			}
 		}
 		if st.Enabled && m.needsApply(name) {
 			role += " · " + t.fg(t.warn).Render("Aplicar")

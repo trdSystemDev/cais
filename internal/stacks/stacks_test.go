@@ -159,6 +159,34 @@ func TestProxyNasceVazioComPortasEEmail(t *testing.T) {
 	}
 }
 
+// atras do nginx da VPS (migracao): portas so no loopback, X-Forwarded-For
+// do nginx aceito e sem HTTP/3
+func TestProxyAtrasDeOutroProxy(t *testing.T) {
+	c := validConfig()
+	c.Proxy = config.Proxy{HTTPPort: 8080, HTTPSPort: 8443, BehindProxy: true}
+	_, cf := render(t, "proxy", c)
+	tr := cf.Services["traefik"]
+	want := []string{"127.0.0.1:8080:80", "127.0.0.1:8443:443"}
+	if !slices.Equal(tr.Ports, want) {
+		t.Errorf("portas %v, esperava %v", tr.Ports, want)
+	}
+	for _, ep := range []string{"web", "websecure"} {
+		f := "--entrypoints." + ep + ".forwardedheaders.trustedips=" + config.BehindProxyTrustedIPs
+		if !slices.Contains(tr.Command, f) {
+			t.Errorf("traefik sem %s", f)
+		}
+	}
+	if slices.Contains(tr.Command, "--entrypoints.websecure.http3=true") {
+		t.Error("HTTP/3 ligado atras de outro proxy")
+	}
+	// sem o modo, nada de confiar em X-Forwarded-For de ninguem
+	c.Proxy.BehindProxy = false
+	_, cf = render(t, "proxy", c)
+	if slices.ContainsFunc(cf.Services["traefik"].Command, func(f string) bool { return strings.Contains(f, "trustedips") }) {
+		t.Error("confiando em X-Forwarded-For sem estar atras de outro proxy")
+	}
+}
+
 // nas portas padrao o redirecionamento vai pro entrypoint (443)
 func TestProxyRedirecionaPraPortaHTTPS(t *testing.T) {
 	_, cf := render(t, "proxy", validConfig())

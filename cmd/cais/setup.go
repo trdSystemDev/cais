@@ -85,7 +85,11 @@ func printPlan(out io.Writer, info core.ConfigInfo, p bootstrap.Plan) {
 	} else {
 		fmt.Fprintf(w, "  tls\tCA local, so pra teste (nomes de %s)\n", cfg.TestDomain)
 	}
-	fmt.Fprintf(w, "  portas\t%d (http), %d (https)\n", cfg.Proxy.HTTPPort, cfg.Proxy.HTTPSPort)
+	if cfg.Proxy.BehindProxy {
+		fmt.Fprintf(w, "  portas\t%d (http), %d (https), so no 127.0.0.1: atras de outro proxy da VPS\n", cfg.Proxy.HTTPPort, cfg.Proxy.HTTPSPort)
+	} else {
+		fmt.Fprintf(w, "  portas\t%d (http), %d (https)\n", cfg.Proxy.HTTPPort, cfg.Proxy.HTTPSPort)
+	}
 	defer func() {
 		if warn := cfg.PortsWarning(); warn != "" {
 			fmt.Fprintf(out, "\nAtencao: %s\n", warn)
@@ -171,6 +175,7 @@ func setupConfig(args []string) error {
 	tls := fs.String("tls", "", "letsencrypt (padrao) ou selfsigned (teste local)")
 	httpPort := fs.Int("http-port", 0, "porta http do proxy no host")
 	httpsPort := fs.Int("https-port", 0, "porta https do proxy no host")
+	behind := fs.Bool("behind-proxy", false, "proxy atras de outro desta VPS (nginx), so no 127.0.0.1; =false desliga")
 	ghAppID := fs.Int64("github-app-id", 0, "App ID do GitHub App do cais (baixa o codigo dos repositorios privados)")
 	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (obrigatorio com o Garage ligado)")
 	notifyFrom := fs.String("notify-from", "", "remetente dos avisos por e-mail (validado na Brevo)")
@@ -202,6 +207,8 @@ func setupConfig(args []string) error {
 			cfg.Proxy.HTTPPort = *httpPort
 		case "https-port":
 			cfg.Proxy.HTTPSPort = *httpsPort
+		case "behind-proxy":
+			cfg.Proxy.BehindProxy = *behind
 		case "github-app-id":
 			cfg.GitHub.AppID = *ghAppID
 		case "host-s3":

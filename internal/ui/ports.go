@@ -27,6 +27,7 @@ type portsPanel struct {
 	shown       bool
 	active      bool
 	http, https *textinput.Model
+	behind      bool // atras de outro proxy da VPS (so no 127.0.0.1)
 	focus       int
 	busy        bool
 	err         string // da validacao: varias linhas
@@ -35,7 +36,7 @@ type portsPanel struct {
 // portsSavedMsg e a volta do Salvar das portas.
 type portsSavedMsg struct{ err error }
 
-var portsIDs = []string{"ports-http", "ports-https", "ports-save"}
+var portsIDs = []string{"ports-http", "ports-https", "ports-behind", "ports-save"}
 
 func newPortsPanel(api core.API, zones *zone.Manager, th theme) *portsPanel {
 	p := &portsPanel{api: api, zones: zones}
@@ -106,6 +107,7 @@ func (p *portsPanel) fill(c config.Proxy) {
 	}
 	p.http.SetValue("")
 	p.https.SetValue("")
+	p.behind = c.BehindProxy
 	if c.HTTPPort > 0 {
 		p.http.SetValue(strconv.Itoa(c.HTTPPort))
 	}
@@ -133,6 +135,7 @@ func (p *portsPanel) save() tea.Cmd {
 		return def
 	}
 	httpPort, httpsPort := port(p.http, config.DefaultHTTPPort), port(p.https, config.DefaultHTTPSPort)
+	behind := p.behind
 	p.busy, p.err = true, ""
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -141,7 +144,7 @@ func (p *portsPanel) save() tea.Cmd {
 			return portsSavedMsg{err}
 		}
 		c := info.Config
-		c.Proxy.HTTPPort, c.Proxy.HTTPSPort = httpPort, httpsPort
+		c.Proxy.HTTPPort, c.Proxy.HTTPSPort, c.Proxy.BehindProxy = httpPort, httpsPort, behind
 		return portsSavedMsg{p.api.SaveConfig(ctx, c)}
 	}
 }
@@ -155,6 +158,10 @@ func (p *portsPanel) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "enter", "space":
 		if id == "ports-save" {
 			return p.save()
+		}
+		if id == "ports-behind" {
+			p.behind = !p.behind
+			return nil
 		}
 		if k == "enter" {
 			return p.setFocus(p.focus + 1)
@@ -185,8 +192,11 @@ func (p *portsPanel) click(msg tea.MouseMsg) (tea.Cmd, bool) {
 		}
 		p.active = true
 		cmd := p.setFocus(i)
-		if id == "ports-save" {
+		switch id {
+		case "ports-save":
 			return tea.Batch(cmd, p.save()), true
+		case "ports-behind":
+			p.behind = !p.behind
 		}
 		return cmd, true
 	}
@@ -220,10 +230,24 @@ func (p *portsPanel) view(c config.Config, on bool, w int) string {
 
 	var b strings.Builder
 	b.WriteString(t.bold().Render("Portas do proxy") + "  " + muted.Render("no host; padrao 80 e 443") + "\n\n")
-	b.WriteString(wrap.Inherit(muted).Render("Outras portas so pra testar ou numa migracao, com outro proxy ainda nas 80/443. "+
-		"O HTTP redireciona pra porta HTTPS daqui.") + "\n\n")
+	b.WriteString(wrap.Inherit(muted).Render("Outras portas so pra testar ou numa migracao, com outro proxy ainda nas 80/443 "+
+		"(marque Outro proxy). O HTTP redireciona pra porta HTTPS daqui.") + "\n\n")
 	b.WriteString(field("ports-http", "Porta HTTP") + "\n")
-	b.WriteString(field("ports-https", "Porta HTTPS") + "\n\n")
+	b.WriteString(field("ports-https", "Porta HTTPS") + "\n")
+	marker, ls := "  ", t.fg(t.text).Width(14)
+	if focusID == "ports-behind" {
+		marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(14)
+	}
+	box := "[ ]"
+	if p.behind {
+		box = "[x]"
+	}
+	b.WriteString(p.zones.Mark("ports-behind", marker+ls.Render("Outro proxy")+t.fg(t.text).Render(box+" atras do nginx desta VPS")) + "\n")
+	if p.behind {
+		b.WriteString(muted.Width(max(w-16, 20)).MarginLeft(16).Render("So no 127.0.0.1 (nada aberto na internet); o Traefik "+
+			"aceita o X-Forwarded-For dele, e os apps veem o IP de quem acessa.") + "\n")
+	}
+	b.WriteString("\n")
 	label := "Salvar"
 	if on {
 		label = "Salvar e aplicar"
@@ -235,9 +259,8 @@ func (p *portsPanel) view(c config.Config, on bool, w int) string {
 	if !on {
 		b.WriteString("\n" + wrap.Inherit(muted).Render("O proxy esta desligado: as portas valem quando ele ligar.") + "\n")
 	}
-	if c.LetsEncrypt() {
-		b.WriteString("\n" + wrap.Foreground(t.warn).Render("O Let's Encrypt valida pela porta 80 da internet: fora de 80/443 "+
-			"ele nao emite certificado e os sites abrem com aviso.") + "\n")
+	if w := c.PortsWarning(); w != "" {
+		b.WriteString("\n" + wrap.Foreground(t.warn).Render("Atencao: "+w) + "\n")
 	}
 	if p.err != "" {
 		b.WriteString("\n" + t.fg(t.danger).Bold(true).Render("Nao salvou") + "\n")

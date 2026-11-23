@@ -59,7 +59,19 @@ type Config struct {
 type Proxy struct {
 	HTTPPort  int `yaml:"http_port" json:"http_port"`
 	HTTPSPort int `yaml:"https_port" json:"https_port"`
+	// BehindProxy e a migracao com outro proxy na frente (um nginx da VPS
+	// nas 80/443, repassando os sites ja migrados): as portas escutam so no
+	// 127.0.0.1 (nada aberto na internet) e o Traefik confia no
+	// X-Forwarded-For dele, pros apps verem o IP de quem acessa.
+	BehindProxy bool `yaml:"behind_proxy,omitempty" json:"behind_proxy,omitempty"`
 }
+
+// BehindProxyTrustedIPs sao as origens de quem o Traefik aceita o
+// X-Forwarded-For com BehindProxy: o loopback e as redes privadas, porque o
+// nginx do host chega no container pelo gateway da rede do docker
+// (172.16/12 ou 192.168/16, conforme a VPS). Com as portas so no
+// 127.0.0.1, de fora ninguem chega no Traefik pra mentir o IP.
+const BehindProxyTrustedIPs = "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
 // Portas padrao do proxy no host.
 const (
@@ -78,6 +90,11 @@ func (p Proxy) StandardPorts() bool {
 func (c Config) PortsWarning() string {
 	if c.Proxy.StandardPorts() || !c.LetsEncrypt() {
 		return ""
+	}
+	if c.Proxy.BehindProxy {
+		return fmt.Sprintf("o proxy esta atras de outro (portas %d/%d so no 127.0.0.1): o Let's Encrypt valida pela porta 80, "+
+			"entao o outro proxy precisa repassar /.well-known/acme-challenge/ dos sites migrados pra 127.0.0.1:%d, "+
+			"senao o certificado nao sai.", c.Proxy.HTTPPort, c.Proxy.HTTPSPort, c.Proxy.HTTPPort)
 	}
 	return fmt.Sprintf("o proxy esta nas portas %d/%d: o Let's Encrypt valida pela porta 80 da internet e nao vai emitir "+
 		"certificado (os sites abrem com aviso de certificado). Fora de 80/443 so pra teste ou migracao.", c.Proxy.HTTPPort, c.Proxy.HTTPSPort)
@@ -225,6 +242,10 @@ func (c Config) Validate() error {
 	}
 	if c.Proxy.HTTPPort == c.Proxy.HTTPSPort {
 		errs = append(errs, errors.New("proxy: http_port e https_port nao podem ser iguais"))
+	}
+	if c.Proxy.BehindProxy && (c.Proxy.HTTPPort == DefaultHTTPPort || c.Proxy.HTTPSPort == DefaultHTTPSPort) {
+		errs = append(errs, errors.New("proxy: atras de outro proxy, use portas fora de 80/443 (o outro proxy esta nelas); "+
+			"terminada a migracao, desligue o behind_proxy e volte pra 80/443"))
 	}
 	if b := c.Backup; b.Time != "" {
 		if _, _, ok := parseHHMM(b.Time); !ok {

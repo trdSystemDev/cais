@@ -73,7 +73,7 @@ Exemplos:
 Nao muda nada. Mostra a configuracao, o que falta informar e, dos servicos
 ligados, quais tem config salva ainda nao aplicada (aplique com
 "cais service <nome> on").`},
-		{name: "setup config", usage: "setup config [opcoes]", short: "grava o /etc/cais/config.yaml (so o que for passado)\n    --email --tls letsencrypt|selfsigned --test-domain --http-port --https-port\n    --github-app-id --host-s3 --notify-from --notify-to", long: `
+		{name: "setup config", usage: "setup config [opcoes]", short: "grava o /etc/cais/config.yaml (so o que for passado)\n    --email --tls letsencrypt|selfsigned --test-domain --http-port --https-port\n    --behind-proxy --github-app-id --host-s3 --notify-from --notify-to", long: `
 So o que for passado muda; o resto fica como esta no arquivo. Gravar nao
 sobe nada: vale ao ligar um servico, ou ao aplicar num que ja esta ligado
 ("cais service proxy on" de novo). Nao ha dominio da VPS: cada app traz o
@@ -87,6 +87,10 @@ Flags:
   --http-port porta       porta http do proxy no host (padrao 80)
   --https-port porta      porta https do proxy no host (padrao 443); fora de
                           80/443 o Let's Encrypt nao emite: so pra teste
+  --behind-proxy          migracao com outro proxy da VPS (nginx) nas 80/443:
+                          as portas escutam so no 127.0.0.1 e o Traefik aceita
+                          o X-Forwarded-For dele (=false desliga, pra voltar
+                          pras 80/443). Ver docs/setup.md, "Migrar de um nginx"
   --github-app-id id      App ID do GitHub App do cais (baixa o codigo dos apps)
   --host-s3 host          endpoint S3 do Garage (obrigatorio com o Garage)
   --notify-from e-mail    remetente dos avisos (um remetente validado na Brevo)
@@ -99,7 +103,8 @@ Os avisos sao e-mails pela Brevo quando um deploy automatico falha de vez
 Exemplos:
   cais setup config --email voce@exemplo.com.br --github-app-id 123456
   cais setup config --tls selfsigned --test-domain trd.localhost   # teste no PC
-  cais setup config --http-port 8080 --https-port 8443 && cais service proxy on`},
+  cais setup config --http-port 8080 --https-port 8443 && cais service proxy on
+  cais setup config --http-port 8080 --https-port 8443 --behind-proxy   # atras do nginx`},
 		{name: "setup secret", usage: "setup secret <nome>", short: "grava um secret informado (le do stdin), ex: github_app_key", long: `
 No terminal le sem eco; com stdin redirecionado, le o arquivo.
 
