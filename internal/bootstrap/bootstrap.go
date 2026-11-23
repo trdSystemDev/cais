@@ -351,7 +351,7 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 			if err := d.ComposeDown(ctx, sp.File); err != nil {
 				return "", err
 			}
-			return "", os.Rename(sp.File, sp.File+disabledSuffix)
+			return "", fsx.Rename(sp.File, sp.File+disabledSuffix)
 		}); err != nil {
 			return r.steps, err
 		}

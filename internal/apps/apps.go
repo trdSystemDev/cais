@@ -605,17 +605,17 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	if err := m.markSwap(a, last); err != nil {
 		return fail(err)
 	}
-	defer os.Remove(m.swapPath(name)) // depois do registro
+	defer fsx.Remove(m.swapPath(name)) // depois do registro
 	hadPrev := m.deployed(a)
 	os.RemoveAll(filepath.Join(dir, PrevDir))
 	if hadPrev {
-		if err := os.Rename(filepath.Join(dir, SrcDir), filepath.Join(dir, PrevDir)); err != nil {
+		if err := fsx.Rename(filepath.Join(dir, SrcDir), filepath.Join(dir, PrevDir)); err != nil {
 			return fail(err)
 		}
 	}
-	if err := os.Rename(filepath.Join(dir, next), filepath.Join(dir, SrcDir)); err != nil {
+	if err := fsx.Rename(filepath.Join(dir, next), filepath.Join(dir, SrcDir)); err != nil {
 		if hadPrev {
-			os.Rename(filepath.Join(dir, PrevDir), filepath.Join(dir, SrcDir)) // o no ar volta pro lugar
+			fsx.Rename(filepath.Join(dir, PrevDir), filepath.Join(dir, SrcDir)) // o no ar volta pro lugar
 		}
 		return fail(err)
 	}
@@ -745,10 +745,10 @@ func (m Manager) rollback(ctx context.Context, a App) error {
 	dir := m.dir(a.Name)
 	failed := filepath.Join(dir, FailedDir)
 	os.RemoveAll(failed)
-	if err := os.Rename(filepath.Join(dir, SrcDir), failed); err != nil {
+	if err := fsx.Rename(filepath.Join(dir, SrcDir), failed); err != nil {
 		return err
 	}
-	if err := os.Rename(filepath.Join(dir, PrevDir), filepath.Join(dir, SrcDir)); err != nil {
+	if err := fsx.Rename(filepath.Join(dir, PrevDir), filepath.Join(dir, SrcDir)); err != nil {
 		return err
 	}
 	os.RemoveAll(failed)
@@ -842,7 +842,7 @@ func (m Manager) recover(ctx context.Context, a App, up bool) (bool, error) {
 		if err := os.RemoveAll(filepath.Join(dir, SrcDir)); err != nil {
 			return true, err
 		}
-		if err := os.Rename(filepath.Join(dir, PrevDir), filepath.Join(dir, SrcDir)); err != nil {
+		if err := fsx.Rename(filepath.Join(dir, PrevDir), filepath.Join(dir, SrcDir)); err != nil {
 			return true, err
 		}
 		good = true
@@ -865,7 +865,7 @@ func (m Manager) recover(ctx context.Context, a App, up bool) (bool, error) {
 		}
 	}
 	m.record(a, d)
-	os.Remove(m.swapPath(a.Name))
+	fsx.Remove(m.swapPath(a.Name))
 	return true, upErr
 }
 

@@ -16,20 +16,56 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	defer os.Remove(tmp.Name()) // no-op depois do rename
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(perm)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
+	return Rename(tmp.Name(), path)
+}
+
+// Rename renomeia e faz fsync das pastas envolvidas. Sem isso o rename pode
+// ainda nao estar no disco quando a maquina cai logo depois (ext4, xfs): o
+// arquivo, ou a pasta do app na troca do deploy, volta pro estado antigo.
+func Rename(oldpath, newpath string) error {
+	if err := os.Rename(oldpath, newpath); err != nil {
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+	if err := SyncDir(filepath.Dir(newpath)); err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if od := filepath.Dir(oldpath); od != filepath.Dir(newpath) {
+		return SyncDir(od)
+	}
+	return nil
+}
+
+// Remove apaga o arquivo e faz fsync da pasta, pra remocao sobreviver a uma
+// queda logo depois.
+func Remove(path string) error {
+	if err := os.Remove(path); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return SyncDir(filepath.Dir(path))
+}
+
+// SyncDir grava no disco as entradas da pasta (criacao, rename, remocao).
+func SyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = d.Sync()
+	if cerr := d.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }

@@ -687,7 +687,7 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 		os.Remove(local + ".part")
 		return run, err
 	}
-	if err := os.Rename(local+".part", local); err != nil {
+	if err := fsx.Rename(local+".part", local); err != nil {
 		return run, err
 	}
 	if info, err := os.Stat(local); err == nil {
