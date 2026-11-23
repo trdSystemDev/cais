@@ -74,6 +74,11 @@ func (c *Client) SystemStats(ctx context.Context) (st core.SystemStats, err erro
 	return
 }
 
+func (c *Client) CheckHealth(ctx context.Context) (h core.Health, err error) {
+	err = c.call(ctx, MethodHealthCheck, nil, &h)
+	return
+}
+
 func (c *Client) CheckStacks(ctx context.Context) (infra core.Infra, err error) {
 	err = c.call(ctx, MethodInfraCheck, nil, &infra)
 	return

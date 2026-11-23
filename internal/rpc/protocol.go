@@ -18,6 +18,7 @@ const (
 	MethodStateSubscribe   = "state.subscribe"
 	MethodEnvironmentCheck = "environment.check"
 	MethodSystemStats      = "system.stats"
+	MethodHealthCheck      = "health.check"
 	MethodContainerLogs    = "infra.logs"
 	MethodInfraCheck       = "infra.check"
 	MethodConfigGet        = "config.get"

@@ -22,6 +22,7 @@ type State struct {
 	Infra       Infra        `json:"infra"`
 	Apps        Apps         `json:"apps"`
 	Backup      BackupStatus `json:"backup"`
+	Health      Health       `json:"health"`
 	// Import e a importacao de banco em andamento (nil: nenhuma).
 	Import *DBImport `json:"import,omitempty"`
 }

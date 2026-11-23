@@ -101,6 +101,7 @@ type model struct {
 	sys           core.SystemStats
 	sysErr        string
 	sysGeneration uint64
+	sysTicks      int
 }
 
 type (
@@ -120,7 +121,7 @@ func newModel(api core.API, states <-chan core.State) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.waitState(), m.checkCmd(), m.setup.load(), m.sysCmd())
+	return tea.Batch(tea.RequestBackgroundColor, m.waitState(), m.checkCmd(), m.setup.load(), m.sysCmd(), m.dashRefresh(true))
 }
 
 // waitState entrega a proxima foto do core; o Update pede a seguinte.
@@ -254,6 +255,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if uint64(msg) != m.sysGeneration || m.tab != tabDashboard || m.disconnected {
 			return m, nil
 		}
+		// a visao geral (apps, servicos, backup) a cada 5 leituras (10s)
+		m.sysTicks++
+		if m.sysTicks%5 == 0 {
+			return m, tea.Batch(m.sysCmd(), m.dashRefresh(false))
+		}
 		return m, m.sysCmd()
 	case infraLogsTick:
 		if uint64(msg) != m.logsGeneration || m.tab != tabInfra || m.disconnected {
@@ -321,7 +327,7 @@ func (m *model) setTab(i int) tea.Cmd {
 		return m.backupRefreshCmd()
 	}
 	if i == tabDashboard {
-		return m.sysCmd()
+		return tea.Batch(m.sysCmd(), m.dashRefresh(true))
 	}
 	if i == tabApps {
 		// bancos e buckets criados na Infra (ou pelo CLI) ja aparecem pra ligar
@@ -344,9 +350,7 @@ func (m *model) click(msg tea.MouseMsg) tea.Cmd {
 	}
 	switch m.tab {
 	case tabDashboard:
-		if m.zones.Get("check").InBounds(msg) && !m.state.Environment.Checking {
-			return m.checkCmd()
-		}
+		return m.dashClick(msg)
 	case tabApps:
 		return m.appsClick(msg)
 	case tabInfra:
@@ -377,7 +381,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	switch m.tab {
 	case tabDashboard:
 		if (k == "enter" || k == "r") && !m.state.Environment.Checking {
-			return m.checkCmd()
+			return tea.Batch(m.checkCmd(), m.dashRefresh(true))
 		}
 	case tabApps:
 		return m.appsKey(msg)

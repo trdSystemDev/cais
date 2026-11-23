@@ -100,7 +100,7 @@ func runDaemon(args []string) error {
 		stop()
 	}()
 
-	c := core.New(core.Deps{DeployTimeout: *deployTimeout})
+	c := core.New(core.Deps{DeployTimeout: *deployTimeout, Version: version})
 	go c.CheckEnvironment(ctx)
 	// deploy que o daemon anterior nao terminou (queda, kill, reboot): volta
 	// a versao que estava no ar

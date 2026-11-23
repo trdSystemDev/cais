@@ -176,6 +176,9 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodSystemStats:
 		return wrap(s.api.SystemStats(s.work))
 
+	case MethodHealthCheck:
+		return wrap(s.api.CheckHealth(s.work))
+
 	case MethodContainerLogs:
 		var p logsParams
 		if err := params(m, &p); err != nil {

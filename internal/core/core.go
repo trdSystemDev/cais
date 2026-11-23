@@ -82,6 +82,10 @@ type Deps struct {
 	// ReadSystem le o uso da maquina (padrao: /proc e os discos da raiz,
 	// do cais e do docker).
 	ReadSystem func() (sysstat.Sample, error)
+	// Version e a versao do cais rodando (comparada com o release mais
+	// novo); LatestRelease pergunta a tag dele (padrao: o GitHub).
+	Version       string
+	LatestRelease func(ctx context.Context) (string, error)
 }
 
 // DefaultDeployTimeout e o limite padrao de um deploy. Junto com a volta da
@@ -120,7 +124,8 @@ type Core struct {
 
 	backup backupRuntime
 
-	sys systemRuntime
+	sys    systemRuntime
+	health healthRuntime
 
 	// work e o trabalho que o daemon dispara sozinho (deploy automatico,
 	// backup, recuperacao): o Close espera ele terminar
@@ -223,6 +228,9 @@ func New(d Deps) *Core {
 	}
 	if d.ExecInput == nil {
 		d.ExecInput = docker.ExecInput
+	}
+	if d.LatestRelease == nil {
+		d.LatestRelease = latestRelease
 	}
 	if d.ReadSystem == nil {
 		dataDir := d.DataDir

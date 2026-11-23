@@ -55,29 +55,21 @@ func (m *model) onSysStats(msg sysStatsMsg) tea.Cmd {
 	return tea.Tick(sysEvery, func(time.Time) tea.Msg { return sysTick(generation) })
 }
 
-// viewDashboard mostra o uso da maquina (graficos do processador e da
-// memoria, discos) e o estado do ambiente. Nao guarda estado proprio alem
-// da ultima leitura: o botao so dispara a acao no core.
+// viewDashboard e a saude geral: os avisos do que precisa de atencao, a
+// visao geral (apps, servicos, backup, deploys), o uso da maquina e o
+// ambiente. Nao guarda estado proprio alem da ultima leitura da maquina:
+// o resto sai da foto do core.
 func (m *model) viewDashboard(h int) string {
 	t := m.th
 	w := max(40, m.w-6)
-	e := m.state.Environment
-
-	k := btnNormal
-	if e.Checking {
-		k = btnOff
-	}
-	button := m.zones.Mark("check", t.button("Verificar novamente", k, false))
-	env := t.bold().Render("Ambiente") + "\n\n" + m.renderEnvironment(e, w) + "\n\n" + button
-
+	top := m.renderAlerts(w) + "\n" + m.renderOverview(w) + "\n" + t.rule(w) + "\n"
+	env := m.renderEnvironment(m.state.Environment, w)
 	// os graficos ficam com a altura que sobra (entre 3 e 10 linhas)
-	fixed := lipgloss.Height(env) + 9 + len(m.sys.Now.Disks)
-	if m.sys.Now.SwapTotal > 0 {
-		fixed++
+	body := func(chartH int) string {
+		return top + m.renderSystem(w, chartH) + "\n" + t.rule(w) + "\n" + env
 	}
-	chartH := min(10, max(3, h-2-fixed))
-	body := m.renderSystem(w, chartH) + "\n" + t.rule(w) + "\n" + env
-	return t.panel(false, m.w, h-2).MaxHeight(h).Render(body)
+	chartH := min(10, max(3, 3+h-2-lipgloss.Height(body(3))))
+	return t.panel(false, m.w, h-2).MaxHeight(h).Render(body(chartH))
 }
 
 func (m *model) renderSystem(w, chartH int) string {
@@ -233,11 +225,30 @@ func uptime(d time.Duration) string {
 	return fmt.Sprintf("%dmin", mins)
 }
 
+// renderEnvironment: com o Docker funcionando, uma linha so; com problema,
+// o detalhe de cada parte.
 func (m *model) renderEnvironment(e core.Environment, w int) string {
 	t := m.th
 	muted := t.fg(t.muted)
+	k := btnNormal
+	if e.Checking {
+		k = btnOff
+	}
+	button := m.zones.Mark("check", t.button("Verificar novamente", k, false))
+	title := t.bold().Render("Ambiente") + "  "
 	if e.Checking || !e.Checked() {
-		return t.fg(t.warn).Render("Verificando o ambiente...")
+		return title + t.fg(t.warn).Render("Verificando o ambiente...")
+	}
+	when := muted.Render("Ultima verificacao: " + e.CheckedAt.Local().Format("02/01 15:04:05"))
+	host := e.Host.Hostname + " " + muted.Render("("+e.Host.OS+"/"+e.Host.Arch+")")
+	if e.Ready() && e.Host.Supported() {
+		line := title + t.fg(t.ok).Bold(true).Render("✓ Pronto.") + " Docker " + e.Docker.Daemon.Version +
+			muted.Render(" · compose ") + e.Docker.Compose.Version + muted.Render(" · ") + host
+		when = muted.Render("verificado as " + e.CheckedAt.Local().Format("15:04:05"))
+		if lipgloss.Width(line)+lipgloss.Width(when)+lipgloss.Width(button)+4 > w {
+			return line + "\n" + when + "  " + button
+		}
+		return spread(line, when+"  "+button, w)
 	}
 
 	// Docker e o sistema lado a lado
@@ -252,28 +263,23 @@ func (m *model) renderEnvironment(e core.Environment, w int) string {
 		docker.WriteString(m.component("Daemon", e.Docker.Daemon))
 		docker.WriteString(strings.TrimSuffix(m.component("Compose", e.Docker.Compose), "\n"))
 	}
-
-	n := m.sys.Now
 	var sys strings.Builder
 	sys.WriteString(t.bold().Render("Sistema") + "\n")
 	sys.WriteString("  " + muted.Render("Host     ") + e.Host.Hostname + "\n")
 	sys.WriteString("  " + muted.Render("Sistema  ") + e.Host.OS + "/" + e.Host.Arch)
-	if n.CPUs > 0 {
-		sys.WriteString("\n  " + muted.Render("Maquina  ") + fmt.Sprintf("%d nucleos, %s de memoria", n.CPUs, size(n.MemTotal)))
-	}
 
 	var b strings.Builder
+	b.WriteString(t.bold().Render("Ambiente") + "\n")
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(min(48, w/2)).Render(docker.String()), sys.String()) + "\n")
 	if !e.Host.Supported() {
 		b.WriteString(t.fg(t.warn).Render("! O cais foi feito pra rodar na VPS Linux; aqui so da pra navegar na interface.") + "\n")
 	}
-	b.WriteString("\n")
 	if e.Ready() {
-		b.WriteString(t.fg(t.ok).Bold(true).Render("Pronto.") + " O Docker esta funcionando -- o proximo passo e a aba Setup.\n")
+		b.WriteString(t.fg(t.ok).Bold(true).Render("Pronto.") + " O Docker esta funcionando.\n")
 	} else {
 		b.WriteString(t.fg(t.danger).Bold(true).Render("Resolva os itens em vermelho") + " antes de usar o Setup.\n")
 	}
-	b.WriteString(muted.Render("Ultima verificacao: " + e.CheckedAt.Local().Format("02/01/2006 15:04:05")))
+	b.WriteString(when + "  " + button)
 	return b.String()
 }
 

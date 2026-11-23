@@ -30,6 +30,10 @@ type API interface {
 	// SystemStats le o uso da maquina (processador, memoria, disco) e
 	// devolve com o historico recente, pros graficos do dashboard.
 	SystemStats(ctx context.Context) (SystemStats, error)
+	// CheckHealth confere a validade dos certificados do proxy e se ha
+	// versao nova do cais (com intervalo minimo entre consultas) e publica
+	// em State.Health.
+	CheckHealth(ctx context.Context) (Health, error)
 	// CheckStacks pergunta ao docker o estado das stacks base.
 	CheckStacks(ctx context.Context) (Infra, error)
 

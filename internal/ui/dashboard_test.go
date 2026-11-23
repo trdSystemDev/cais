@@ -47,7 +47,7 @@ func TestDashboardUsoDaMaquina(t *testing.T) {
 	}
 	for _, want := range []string{"Processador 50%", "4 nucleos", "Memoria 25%", "4.0 GB de 16.0 GB",
 		"ligada ha 1d 2h", "carga 0.50 0.40 0.30", "/var/lib/docker", " 95%  95.0 GB de 100.0 GB", "swap", "ultimos 10s",
-		"4 nucleos, 16.0 GB de memoria", "100%┤", "Verificar novamente"} {
+		"100%┤", "Verificar novamente"} {
 		if !strings.Contains(screen(m), want) {
 			t.Fatalf("faltou %q no dashboard:\n%s", want, screen(m))
 		}
