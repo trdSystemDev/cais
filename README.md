@@ -31,19 +31,11 @@ proprio: o acesso e o seu SSH.
 
 ## Instalar
 
-O repositorio ainda e privado, entao o download precisa de um token do GitHub
-so de leitura: em
-[github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens),
-crie um *fine-grained token* com acesso so a `trdSystemDev/cais` e a permissao
-**Contents: read**. Ele so e usado na hora; nao fica na VPS.
-
 Na VPS, com um usuario com sudo:
 
 ```sh
-read -s GH_TOKEN && export GH_TOKEN      # cola o token (sem eco, fora do historico)
-curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
-  https://api.github.com/repos/trdSystemDev/cais/contents/install.sh |
-  sudo --preserve-env=GH_TOKEN sh -s -- --ssh
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
+  sudo sh -s -- --ssh
 ```
 
 Instala o cais, sobe o servico e cria o usuario `cais` do SSH com as suas

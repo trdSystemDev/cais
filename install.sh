@@ -1,11 +1,8 @@
 #!/bin/sh
-# Instala (ou atualiza) o cais nesta VPS, pelo release do GitHub (o
-# repositorio e privado: precisa de um token so de leitura, GH_TOKEN):
+# Instala (ou atualiza) o cais nesta VPS, pelo release do GitHub:
 #
-#   read -s GH_TOKEN && export GH_TOKEN
-#   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw" \
-#     https://api.github.com/repos/trdSystemDev/cais/contents/install.sh |
-#     sudo --preserve-env=GH_TOKEN sh -s -- --ssh
+#   curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
+#     sudo sh -s -- --ssh
 #
 # O mesmo comando atualiza. Baixa o binario desta arquitetura, confere o
 # SHA-256, instala em /usr/local/bin/cais, instala a unidade do systemd e
@@ -14,8 +11,8 @@
 set -eu
 
 REPO=trdSystemDev/cais
-# CAIS_RELEASE_API troca a API (testes, espelho)
-API=${CAIS_RELEASE_API:-https://api.github.com/repos/$REPO}
+# CAIS_RELEASE_URL troca de onde baixa (testes, espelho)
+RELEASES=${CAIS_RELEASE_URL:-https://github.com/$REPO/releases}
 
 BIN=/usr/local/bin/cais
 UNIT=/etc/systemd/system/cais.service
@@ -27,10 +24,9 @@ SSHD_DROPIN=/etc/ssh/sshd_config.d/cais.conf
 
 usage() {
 	cat <<EOF
-Uso: curl ... | sudo --preserve-env=GH_TOKEN sh -s -- [opcoes]
+Uso: curl ... | sudo sh -s -- [opcoes]
 
-Instala ou atualiza o cais pelo release do GitHub (GH_TOKEN: token so de
-leitura do repositorio $REPO, enquanto ele for privado).
+Instala ou atualiza o cais pelo release do GitHub ($REPO).
 
 Opcoes:
   --group NOME      libera o cais pra quem esta no grupo NOME, sem sudo (cria o
@@ -162,49 +158,6 @@ UNITFILE
 	mv -f "$UNIT.new" "$UNIT"
 }
 
-# asset_url acha, na resposta JSON de um release, a URL da API do asset
-# chamado $1. Sem jq nem python (a VPS pode nao ter): le o JSON caractere a
-# caractere e guarda o "url" e o "name" de cada objeto do segundo nivel (os
-# assets), em qualquer ordem; o "url" do uploader, mais fundo, nao conta.
-asset_url() {
-	awk -v want="$1" '
-		{ s = s $0 "\n" }
-		END {
-			n = length(s); depth = 0; instr = 0; val = 0
-			for (i = 1; i <= n; i++) {
-				c = substr(s, i, 1)
-				if (instr) {
-					if (c == "\\") { tok = tok substr(s, i + 1, 1); i++; continue }
-					if (c != "\"") { tok = tok c; continue }
-					instr = 0
-					if (!val) { key = tok; continue }
-					val = 0
-					if (depth == 2 && key == "url") url = tok
-					if (depth == 2 && key == "name") name = tok
-					continue
-				}
-				if (c == "\"") { instr = 1; tok = "" }
-				else if (c == ":") val = 1
-				else if (c == "," || c == "[") val = 0
-				else if (c == "{") { depth++; val = 0; if (depth == 2) { url = ""; name = "" } }
-				else if (c == "}") {
-					if (depth == 2 && name == want && url ~ /\/releases\/assets\/[0-9]+$/) { print url; exit }
-					depth--
-				}
-			}
-		}
-	'
-}
-
-# gh_get baixa da API do GitHub (com o token, se houver) pro arquivo $2.
-gh_get() {
-	if [ -n "${GH_TOKEN:-}" ]; then
-		curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: $3" -o "$2" "$1"
-	else
-		curl -fsSL --retry 3 -H "Accept: $3" -o "$2" "$1"
-	fi
-}
-
 # download baixa o binario desta arquitetura do release (WANT ou o mais
 # novo) e confere o SHA-256 contra o SHA256SUMS do mesmo release.
 download() {
@@ -215,17 +168,14 @@ download() {
 	esac
 	command -v curl >/dev/null 2>&1 || die "curl nao encontrado"
 	command -v sha256sum >/dev/null 2>&1 || die "sha256sum nao encontrado"
-	rel=$API/releases/latest
-	[ -n "$WANT" ] && rel=$API/releases/tags/$WANT
+	# os links diretos do release: o mais novo, ou o da tag pedida
+	base=$RELEASES/latest/download
+	[ -n "$WANT" ] && base=$RELEASES/download/$WANT
 	say "Baixando o cais ${WANT:-mais novo} ($arch) do release do GitHub"
-	gh_get "$rel" "$OUT/release.json" application/vnd.github+json ||
-		die "nao consegui ler o release ${WANT:-mais novo} de $REPO: confira o GH_TOKEN (token com Contents: read nesse repositorio) e se ha release publicado"
 	name=cais-linux-$arch
-	bin_url=$(asset_url "$name" <"$OUT/release.json")
-	sums_url=$(asset_url SHA256SUMS <"$OUT/release.json")
-	[ -n "$bin_url" ] && [ -n "$sums_url" ] || die "o release nao tem $name e SHA256SUMS"
-	gh_get "$bin_url" "$OUT/$name" application/octet-stream || die "falhou o download de $name"
-	gh_get "$sums_url" "$OUT/SHA256SUMS" application/octet-stream || die "falhou o download do SHA256SUMS"
+	curl -fsSL --retry 3 -o "$OUT/SHA256SUMS" "$base/SHA256SUMS" ||
+		die "nao consegui baixar o release ${WANT:-mais novo} de $REPO: confira se ha release publicado${WANT:+ com a tag $WANT}"
+	curl -fsSL --retry 3 -o "$OUT/$name" "$base/$name" || die "falhou o download de $name"
 	(cd "$OUT" && grep " $name\$" SHA256SUMS | sha256sum -c - >/dev/null) ||
 		die "o SHA-256 de $name nao confere com o SHA256SUMS do release: download corrompido, nada foi instalado"
 	mv "$OUT/$name" "$OUT/cais"
@@ -337,7 +287,7 @@ undo_ssh() {
 
 [ "$(uname -s)" = Linux ] || die "o cais roda em Linux"
 if [ -z "$DRY_RUN" ] && [ "$(id -u)" -ne 0 ]; then
-	die "rode como root: ... | sudo --preserve-env=GH_TOKEN sh"
+	die "rode como root: ... | sudo sh"
 fi
 command -v systemctl >/dev/null 2>&1 || die "systemd nao encontrado (o cais roda como servico do systemd)"
 
