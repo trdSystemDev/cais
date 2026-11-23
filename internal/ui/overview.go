@@ -399,7 +399,7 @@ func (m *model) openApp(name string) tea.Cmd {
 // dashRefresh pede ao core o que a visao geral mostra: apps, servicos,
 // backup e (com intervalo minimo no core) certificados e versao nova.
 func (m *model) dashRefresh(all bool) tea.Cmd {
-	cmds := []tea.Cmd{m.apps.checkCmd(), m.backupRefreshCmd()}
+	cmds := []tea.Cmd{m.apps.checkCmd(), m.backupRefreshCmd(), m.containersCmd()}
 	if !m.state.Infra.Checking && !m.state.Setup.Running {
 		cmds = append(cmds, m.stacksCmd())
 	}

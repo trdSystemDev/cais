@@ -82,6 +82,8 @@ type Deps struct {
 	// ReadSystem le o uso da maquina (padrao: /proc e os discos da raiz,
 	// do cais e do docker).
 	ReadSystem func() (sysstat.Sample, error)
+	// DockerStats le o uso de cada container rodando (padrao: docker stats).
+	DockerStats func(ctx context.Context) ([]docker.ContainerStats, error)
 	// Version e a versao do cais rodando (comparada com o release mais
 	// novo); LatestRelease pergunta a tag dele (padrao: o GitHub).
 	Version       string
@@ -124,8 +126,9 @@ type Core struct {
 
 	backup backupRuntime
 
-	sys    systemRuntime
-	health healthRuntime
+	sys        systemRuntime
+	containers containersRuntime
+	health     healthRuntime
 
 	// work e o trabalho que o daemon dispara sozinho (deploy automatico,
 	// backup, recuperacao): o Close espera ele terminar
@@ -228,6 +231,9 @@ func New(d Deps) *Core {
 	}
 	if d.ExecInput == nil {
 		d.ExecInput = docker.ExecInput
+	}
+	if d.DockerStats == nil {
+		d.DockerStats = docker.Stats
 	}
 	if d.LatestRelease == nil {
 		d.LatestRelease = latestRelease

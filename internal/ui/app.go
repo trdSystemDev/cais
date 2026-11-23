@@ -102,6 +102,9 @@ type model struct {
 	sysErr        string
 	sysGeneration uint64
 	sysTicks      int
+	// uso por container (docker stats), lido junto com a visao geral
+	ctrs    core.ContainerUsage
+	ctrsErr string
 }
 
 type (
@@ -249,6 +252,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		generation := m.logsGeneration
 		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return infraLogsTick(generation) })
+	case containersMsg:
+		m.ctrs, m.ctrsErr = msg.usage, ""
+		if msg.err != nil {
+			m.ctrsErr = firstLine(msg.err.Error())
+		}
+		return m, nil
 	case sysStatsMsg:
 		return m, m.onSysStats(msg)
 	case sysTick:

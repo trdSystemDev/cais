@@ -176,6 +176,9 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodSystemStats:
 		return wrap(s.api.SystemStats(s.work))
 
+	case MethodContainerStats:
+		return wrap(s.api.ContainerStats(s.work))
+
 	case MethodHealthCheck:
 		return wrap(s.api.CheckHealth(s.work))
 

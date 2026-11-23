@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/sysstat"
 )
 
@@ -54,5 +55,32 @@ func TestSystemStatsHistorico(t *testing.T) {
 	now, readErr = now.Add(2*time.Second), errors.New("sem /proc")
 	if st, err := c.SystemStats(ctx); err != nil || st.Error != "sem /proc" {
 		t.Fatalf("erro: %+v %v", st, err)
+	}
+}
+
+func TestContainerStatsComIntervalo(t *testing.T) {
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	calls := 0
+	var statsErr error
+	c := New(Deps{
+		Now: func() time.Time { return now },
+		DockerStats: func(context.Context) ([]docker.ContainerStats, error) {
+			calls++
+			return []docker.ContainerStats{{Name: "medko-web-1", CPU: 12}}, statsErr
+		},
+	})
+	ctx := context.Background()
+	u, _ := c.ContainerStats(ctx)
+	if len(u.List) != 1 || u.List[0].CPU != 12 {
+		t.Fatalf("%+v", u)
+	}
+	now = now.Add(2 * time.Second)
+	c.ContainerStats(ctx)
+	if calls != 1 {
+		t.Fatalf("leu %d vezes antes do intervalo", calls)
+	}
+	now, statsErr = now.Add(containersMinGap), errors.New("daemon fora\ndetalhe")
+	if u, err := c.ContainerStats(ctx); err != nil || u.Error != "daemon fora" || calls != 2 {
+		t.Fatalf("erro: %+v %v (%d)", u, err, calls)
 	}
 }

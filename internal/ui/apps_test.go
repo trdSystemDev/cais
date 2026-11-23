@@ -97,6 +97,7 @@ func appsCore(t *testing.T) (*core.Core, *fakeApps, *githubtest.Server) {
 		GitHubURL:     gh.URL,
 		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil },
 		ContainerLogs: func(_ context.Context, name string) (string, error) { return "log do " + name, nil },
+		DockerStats:   func(context.Context) ([]docker.ContainerStats, error) { return nil, nil },
 		ExecInput:     func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 		Exec:          fakeGarage,
 	})

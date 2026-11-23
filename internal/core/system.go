@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/sysstat"
 )
 
@@ -87,4 +88,39 @@ func appendCapped(h []float64, v float64) []float64 {
 		h = append([]float64(nil), h[len(h)-SystemHistory:]...)
 	}
 	return h
+}
+
+// containersMinGap e o intervalo minimo entre leituras do docker stats
+// (cada uma leva uns 2s): quem pede antes recebe a ultima.
+const containersMinGap = 8 * time.Second
+
+// ContainerUsage e o uso de cada container rodando, do docker stats.
+type ContainerUsage struct {
+	At   time.Time               `json:"at,omitzero"`
+	List []docker.ContainerStats `json:"list,omitempty"`
+	// Error e a falha do docker stats (o resto do dashboard continua).
+	Error string `json:"error,omitempty"`
+}
+
+type containersRuntime struct {
+	mu   sync.Mutex
+	last ContainerUsage
+}
+
+// ContainerStats le o uso de cada container rodando (no maximo uma leitura
+// a cada containersMinGap). Falha do docker vira Error, nao erro da chamada.
+func (c *Core) ContainerStats(ctx context.Context) (ContainerUsage, error) {
+	r := &c.containers
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := c.deps.Now()
+	if !r.last.At.IsZero() && now.Sub(r.last.At) < containersMinGap {
+		return r.last, nil
+	}
+	list, err := c.deps.DockerStats(ctx)
+	r.last = ContainerUsage{At: now, List: list}
+	if err != nil {
+		r.last.Error = firstLineErr(err)
+	}
+	return r.last, nil
 }

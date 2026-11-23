@@ -111,16 +111,18 @@ func (m *model) renderSystem(w, chartH int) string {
 	rightCol := memHead + "\n" + m.chart(s.MemHistory, cw, chartH, t.violet) + "\n" + span(s.MemHistory)
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(cw+gap).Render(left), rightCol) + "\n\n")
 
-	// discos (e o swap, quando existe) em barras
-	b.WriteString(t.bold().Render("Disco") + "\n")
+	// discos (e o swap, quando existe) em barras, na coluna do
+	// processador; quem mais usa a maquina na da memoria
+	var disks strings.Builder
+	disks.WriteString(t.bold().Render("Disco") + "\n")
 	labelW := 8
 	for _, d := range n.Disks {
 		labelW = max(labelW, len(d.Path))
 	}
-	barW := max(10, min(50, w-labelW-30))
+	barW := max(8, min(50, cw-labelW-36))
 	line := func(label string, used, total uint64) {
 		p := 100 * float64(used) / float64(max(total, 1))
-		b.WriteString("  " + muted.Render(fmt.Sprintf("%-*s", labelW, label)) + "  " + m.bar(p, barW) + "  " +
+		disks.WriteString("  " + muted.Render(fmt.Sprintf("%-*s", labelW, label)) + "  " + m.bar(p, barW) + "  " +
 			t.fg(m.level(p)).Bold(true).Render(fmt.Sprintf("%3.0f%%", p)) + muted.Render("  "+size(used)+" de "+size(total)) + "\n")
 	}
 	for _, d := range n.Disks {
@@ -129,6 +131,8 @@ func (m *model) renderSystem(w, chartH int) string {
 	if n.SwapTotal > 0 {
 		line("swap", n.SwapUsed, n.SwapTotal)
 	}
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(cw+gap).Render(strings.TrimSuffix(disks.String(), "\n")),
+		m.renderContainers(w-cw-gap)) + "\n")
 	return b.String()
 }
 

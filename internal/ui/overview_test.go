@@ -8,6 +8,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/sysstat"
 )
 
 func dashState(now time.Time) core.State {
@@ -95,5 +96,48 @@ func TestDashboardTudoCerto(t *testing.T) {
 	m.state = st
 	if !strings.Contains(screen(m), "Backup atrasado") {
 		t.Fatalf("backup atrasado:\n%s", screen(m))
+	}
+}
+
+func TestDashboardQuemMaisUsa(t *testing.T) {
+	c, _, _ := testCore(t, okChecker)
+	m := open(t, c)
+	waitFor(t, m, "Pronto.")
+	now := time.Now()
+	st := dashState(now)
+	st.Apps.List[0].Containers = []docker.Container{{Name: "medko-web-1", Service: "web", State: "running"}, {Name: "medko-worker-1", Service: "worker", State: "running"}}
+	st.Infra.Stacks[0].Containers = []docker.Container{{Name: "proxy-traefik", Service: "traefik", State: "running"}}
+	m.state = st
+	m.sys = core.SystemStats{At: now, CPU: 50, Now: sysstat.Sample{CPUs: 4, MemTotal: 16 << 30, MemUsed: 4 << 30,
+		Disks: []sysstat.Disk{{Path: "/", Total: 100 << 30, Used: 10 << 30}}}}
+	m.ctrs = core.ContainerUsage{At: now, List: []docker.ContainerStats{
+		{Name: "medko-web-1", CPU: 100, Mem: 1 << 30}, {Name: "medko-worker-1", CPU: 60, Mem: 512 << 20},
+		{Name: "proxy-traefik", CPU: 4, Mem: 64 << 20}, {Name: "portainer", CPU: 8, Mem: 200 << 20},
+	}}
+
+	list := m.consumers()
+	if len(list) != 3 || list[0].name != "medko" || list[0].cpu != 40 || list[0].mem != 1536<<20 ||
+		list[1].name != "portainer" || list[1].kind != "container" || list[2].kind != "servico" {
+		t.Fatalf("donos: %+v", list)
+	}
+	out := screen(m)
+	for _, want := range []string{"Quem mais usa", "medko      app", "40%", "1.5 GB", "portainer", "proxy      servico"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("faltou %q:\n%s", want, out)
+		}
+	}
+	// o app na tabela abre ele na aba Apps
+	m.apps.list = st.Apps.List
+	m.ctrs.List = m.ctrs.List[:1] // so o medko: o clique nao cai no aviso de outro app
+	click(t, m, "dash-app:medko")
+	if m.tab != tabApps || m.apps.selected().Name != "medko" {
+		t.Fatalf("clique: aba %d", m.tab)
+	}
+
+	// sem o docker stats o resto continua
+	m.setTab(tabDashboard)
+	m.ctrs = core.ContainerUsage{At: now, Error: "permissao negada"}
+	if !strings.Contains(screen(m), "sem o docker stats: permissao negada") {
+		t.Fatalf("erro:\n%s", screen(m))
 	}
 }

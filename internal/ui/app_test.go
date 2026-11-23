@@ -75,7 +75,9 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 		},
 		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 		Exec:      fakeGarage,
-		Hostname:  func() (string, error) { return "vps-teste", nil },
+		// sem docker stats de verdade nos testes
+		DockerStats: func(context.Context) ([]docker.ContainerStats, error) { return nil, nil },
+		Hostname:    func() (string, error) { return "vps-teste", nil },
 		// importacao de banco: o dump escreve um SQL curto, o restore engole
 		ExecStream: func(_ context.Context, _ string, stdin io.Reader, stdout io.Writer, args ...string) error {
 			if strings.Contains(strings.Join(args, " "), "_dump") {
