@@ -17,6 +17,8 @@ type theme struct {
 	text, muted, accent, accentInk color.Color
 	fieldBg, fieldFg, border       color.Color
 	ok, warn, danger, info         color.Color
+	// violet e a segunda cor dos graficos (a primeira e o info)
+	violet color.Color
 }
 
 func newTheme(isDark bool) theme {
@@ -34,6 +36,7 @@ func newTheme(isDark bool) theme {
 		warn:      ld(c("#9a6700"), c("#f0c674")),
 		danger:    ld(c("#b42318"), c("#ff8a80")),
 		info:      ld(c("#1a5fb4"), c("#8ab4f8")),
+		violet:    ld(c("#7b3fb4"), c("#c9a0f5")),
 	}
 }
 

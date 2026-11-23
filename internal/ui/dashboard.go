@@ -115,8 +115,8 @@ func (m *model) renderSystem(w, chartH int) string {
 		}
 		return muted.Render(fmt.Sprintf("     ultimos %ds", secs))
 	}
-	left := cpuHead + "\n" + m.chart(s.CPUHistory, cw, chartH) + "\n" + span(s.CPUHistory)
-	rightCol := memHead + "\n" + m.chart(s.MemHistory, cw, chartH) + "\n" + span(s.MemHistory)
+	left := cpuHead + "\n" + m.chart(s.CPUHistory, cw, chartH, t.info) + "\n" + span(s.CPUHistory)
+	rightCol := memHead + "\n" + m.chart(s.MemHistory, cw, chartH, t.violet) + "\n" + span(s.MemHistory)
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(cw+gap).Render(left), rightCol) + "\n\n")
 
 	// discos (e o swap, quando existe) em barras
@@ -156,8 +156,8 @@ func (m *model) level(p float64) color.Color {
 
 // chart desenha o historico (0 a 100%, do mais velho pro mais novo) em
 // colunas de blocos de w x h, com a escala na esquerda; os mais novos ficam
-// na direita, e cada coluna tem a cor do proprio uso.
-func (m *model) chart(values []float64, w, h int) string {
+// na direita, todos na cor c do grafico.
+func (m *model) chart(values []float64, w, h int, c color.Color) string {
 	t := m.th
 	axis := t.fg(t.border)
 	cols := max(1, w-5)
@@ -193,7 +193,7 @@ func (m *model) chart(values []float64, w, h int) string {
 				line.WriteString(axis.Render(grid))
 				continue
 			}
-			line.WriteString(t.fg(m.level(v)).Render(string(blocks[fill])))
+			line.WriteString(t.fg(c).Render(string(blocks[fill])))
 		}
 		rows[r] = line.String()
 	}
