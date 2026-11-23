@@ -139,16 +139,22 @@ type API interface {
 
 	// RefreshBackup le a config do backup e publica em State.Backup.
 	RefreshBackup(ctx context.Context) (BackupStatus, error)
-	// SetBackupClient grava o OAuth client do Google (do projeto do Google
-	// Cloud da pessoa, tipo "TVs e dispositivos de entrada limitada").
+	// SetBackupProvider troca o destino dos backups: google (Google Drive)
+	// ou onedrive (OneDrive pessoal). Client e login de cada um ficam
+	// guardados.
+	SetBackupProvider(ctx context.Context, provider string) error
+	// SetBackupClient grava o client do destino atual: o OAuth client do
+	// Google (tipo "TVs e dispositivos de entrada limitada", com secret) ou
+	// o ID do app no Azure (sem secret).
 	SetBackupClient(ctx context.Context, id, secret string) error
-	// StartDriveLogin comeca o login no Drive: o codigo pra digitar em
-	// google.com/device aparece em State.Backup.Login, e o resultado
-	// tambem chega pelo estado.
+	// StartDriveLogin comeca o login no destino atual: o codigo pra digitar
+	// (google.com/device ou microsoft.com/link) aparece em
+	// State.Backup.Login, e o resultado tambem chega pelo estado.
 	StartDriveLogin(ctx context.Context) (DriveLogin, error)
 	// CancelDriveLogin desiste do login pendente.
 	CancelDriveLogin(ctx context.Context) error
-	// DisconnectDrive esquece o login no Drive (os backups ficam la).
+	// DisconnectDrive esquece o login no destino atual (os backups ficam
+	// la).
 	DisconnectDrive(ctx context.Context) error
 	// NewBackupKey gera o par de chaves do backup, grava a publica e
 	// devolve a privada, que nao fica na VPS.
@@ -157,11 +163,11 @@ type API interface {
 	// automatico) e a retencao em dias.
 	SetBackupSchedule(ctx context.Context, at string, days int) error
 	// RunBackup faz um backup agora (bancos e estado, criptografado, pro
-	// Drive) e aplica a retencao.
+	// destino) e aplica a retencao.
 	RunBackup(ctx context.Context) (BackupRun, error)
-	// BackupFiles lista os backups no Drive, do mais novo pro mais velho.
+	// BackupFiles lista os backups no destino, do mais novo pro mais velho.
 	BackupFiles(ctx context.Context) ([]backup.File, error)
-	// RestoreBackup devolve databases ao estado de um backup do Drive (o
+	// RestoreBackup devolve databases ao estado de um backup do destino (o
 	// database atual e apagado); sem Databases so lista o que o backup tem.
 	RestoreBackup(ctx context.Context, req RestoreRequest) (RestoreResult, error)
 }

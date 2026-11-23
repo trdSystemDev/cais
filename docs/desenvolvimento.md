@@ -151,7 +151,7 @@ make release V=v0.3.0-rc1
 3. Apps: repositorio do GitHub com compose de producao, deploy com volta, logs, restart
 4. Bancos: database e usuario por app no Postgres/MySQL compartilhado
 5. Deploy automatico (feito: consulta ao GitHub a cada minuto, sem webhook nem porta) e homologacao com promocao
-6. Backups (feito: bancos e estado do cais, criptografados com age, pro Google Drive)
+6. Backups (feito: bancos e estado do cais, criptografados com age, pro Google Drive ou OneDrive)
 7. `install.sh` (feito: por curl, do release do GitHub)
 8. MCP (feito: `cais mcp` pelo SSH, sem exclusoes nem Setup)
 

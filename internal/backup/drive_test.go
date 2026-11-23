@@ -33,7 +33,7 @@ func login(t *testing.T, s *drivetest.Server) *Drive {
 	}
 	// o token expirado e renovado sozinho
 	tok.Expiry = time.Now().Add(-time.Hour)
-	d := NewDrive(ctx, cfg, tok)
+	d := NewDrive(ctx, cfg.TokenSource(ctx, tok))
 	d.API, d.Upload = s.API(), s.Upload()
 	return d
 }

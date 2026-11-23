@@ -1,6 +1,6 @@
 # Backups e disco
 
-Backup diario criptografado pro Google Drive, restore, e o que o cais faz pra o disco nao encher.
+Backup diario criptografado pro Google Drive ou pro OneDrive (conta pessoal), restore, e o que o cais faz pra o disco nao encher.
 
 Todo dia no horario configurado (e no "Fazer backup agora"), o cais faz um
 arquivo so com:
@@ -20,43 +20,68 @@ backup proprio do app.
 
 O arquivo (`cais-<hostname>-<data>.tar.gz.age`) e criptografado com
 [age](https://age-encryption.org) pra uma chave publica e sobe pra uma pasta
-`cais-backups-<hostname>` no seu Google Drive (o cais guarda o id da pasta:
+`cais-backups-<hostname>` no destino escolhido (o cais guarda o id da pasta:
 trocar o hostname depois nao separa os backups). A chave privada aparece uma vez
 quando e gerada e **nao fica na VPS**: quem invade a VPS nao abre os backups
-que ja estao no Drive. Guarde num gerenciador de senhas; sem ela nenhum
-backup abre. Os mais velhos que a retencao (padrao 30 dias) saem do Drive; o
+que ja estao na nuvem. Guarde num gerenciador de senhas; sem ela nenhum
+backup abre. Os mais velhos que a retencao (padrao 30 dias) saem da nuvem; o
 mais novo fica sempre. Um database que falha no dump nao impede os outros.
 
-Configuracao (TUI: aba Setup, sub-aba Backups, que tambem faz um backup agora
-e mostra o proximo e o ultimo; ou o CLI):
+## Destino: Google Drive ou OneDrive
 
-1. No [Google Cloud](https://console.cloud.google.com): crie um projeto,
-   ative a **Google Drive API**, configure a tela de consentimento e
-   **publique** (em "Teste" o login expira em 7 dias) e crie em Credenciais
-   um **ID do cliente OAuth** do tipo **TVs e dispositivos de entrada
-   limitada**. O escopo e `drive.file`: o cais so ve a pasta que ele cria.
-2. `cais backup client <client-id>` (o secret e pedido sem eco).
-3. `cais backup login`: abra google.com/device em qualquer aparelho e digite
-   o codigo (funciona pelo SSH, nada volta colado).
+O destino e um so por vez (`cais backup provider google|onedrive`, ou o
+**Destino** no topo da sub-aba Backups). O client e o login de cada um ficam
+guardados: trocar e voltar nao pede login de novo. Os backups ja feitos ficam
+onde estao; `files`, `restore` e a retencao olham so o destino atual. Nos
+dois, o cais so ve a pasta que ele mesmo cria, nada mais da sua nuvem.
+
+**Google Drive** (padrao): no [Google Cloud](https://console.cloud.google.com),
+crie um projeto, ative a **Google Drive API**, configure a tela de
+consentimento e **publique** (em "Teste" o login expira em 7 dias) e crie em
+Credenciais um **ID do cliente OAuth** do tipo **TVs e dispositivos de
+entrada limitada**. O escopo e `drive.file`. O login e o codigo em
+google.com/device.
+
+**OneDrive** (so conta pessoal: outlook.com, hotmail.com, live.com): no
+[portal do Azure](https://portal.azure.com), em **Registros de aplicativo**,
+registre um app com **Somente contas pessoais da Microsoft** e, em
+**Autenticacao**, ligue **Permitir fluxos de clientes publicos**. Copie o
+**ID do aplicativo (cliente)**: nao tem secret. O escopo e
+`Files.ReadWrite.AppFolder`: os backups ficam em `Aplicativos/<nome do
+app>/cais-backups-<hostname>`. O login e o codigo em microsoft.com/link. A
+Microsoft troca o refresh token a cada renovacao; o cais grava o novo, entao
+o login nao expira enquanto os backups rodarem (parado mais de 90 dias, pede
+login de novo). Backup apagado pela retencao vai pra lixeira do OneDrive,
+que se esvazia sozinha (e ocupa espaco ate la).
+
+## Configuracao
+
+TUI: aba Setup, sub-aba Backups, que tambem faz um backup agora e mostra o
+proximo e o ultimo. Ou o CLI:
+
+1. `cais backup provider onedrive` (so pro OneDrive; o padrao e o Google).
+2. `cais backup client <client-id>` (Google: o secret e pedido sem eco).
+3. `cais backup login`: abra o endereco em qualquer aparelho e digite o
+   codigo (funciona pelo SSH, nada volta colado).
 4. `cais backup key`: guarde a chave privada que aparece.
 5. `cais backup schedule 03:00 -days 30` (fuso da VPS). Se a VPS estava
    desligada na hora, o backup sai assim que o daemon subir. Um backup que
-   nao chega no Drive (Drive fora do ar, rede, disco) e tentado de novo a
-   cada hora ate subir, sem esperar o dia seguinte; o "Proximo" mostra a
-   nova tentativa. Backup que subiu sem algum database nao repete (o
-   database quebrado falharia de novo): o erro fica no ultimo backup.
+   nao chega na nuvem (fora do ar, rede, disco) e tentado de novo a cada
+   hora ate subir, sem esperar o dia seguinte; o "Proximo" mostra a nova
+   tentativa. Backup que subiu sem algum database nao repete (o database
+   quebrado falharia de novo): o erro fica no ultimo backup.
 
-Restaurar:
+## Restaurar
 
 ```sh
-cais backup files                                    # backups no Drive
+cais backup files                                    # backups no destino
 cais backup restore <arquivo> -key chave.txt         # lista o que tem
 cais backup restore <arquivo> -key chave.txt postgres/loja mysql/blog
 ```
 
 O restore apaga o conteudo atual do database (as conexoes abertas caem),
 recria com o mesmo usuario e senha e poe o dump. A chave so passa pela
-memoria do daemon. Numa VPS nova, baixe o arquivo do Drive e extraia sem o
+memoria do daemon. Numa VPS nova, baixe o arquivo do Drive (ou OneDrive) e extraia sem o
 daemon: `cais backup open <arquivo> -key chave.txt -to /root/restore`
 (dumps em `postgres/` e `mysql/`, estado em `state/etc` e `state/data`).
 

@@ -354,6 +354,13 @@ func (s *server) dispatch(c *conn, m message) (any, *Error) {
 	case MethodBackupRefresh:
 		return wrap(s.api.RefreshBackup(s.work))
 
+	case MethodBackupProvider:
+		var p textResult
+		if err := params(m, &p); err != nil {
+			return nil, err
+		}
+		return ok(s.api.SetBackupProvider(s.work, p.Text))
+
 	case MethodBackupClient:
 		var p backupClientParams
 		if err := params(m, &p); err != nil {

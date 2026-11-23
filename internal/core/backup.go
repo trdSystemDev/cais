@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -27,22 +28,58 @@ import (
 	"github.com/trdSystemDev/cais/internal/secrets"
 )
 
-// Secrets do backup: o OAuth client que a pessoa cria no Google Cloud e o
-// token do login no Drive (o refresh token renova o acesso sozinho).
+// Secrets do backup, por destino: o OAuth client que a pessoa cria no
+// Google Cloud (ou o app no Azure, so com o ID) e o token do login (o
+// refresh token renova o acesso sozinho).
 const (
-	secretGoogleClient = "google_oauth_client"
-	secretDriveToken   = "google_drive_token"
+	secretGoogleClient   = "google_oauth_client"
+	secretDriveToken     = "google_drive_token"
+	secretOneDriveClient = "onedrive_oauth_client"
+	secretOneDriveToken  = "onedrive_token"
 )
 
-// BackupStatus e o backup no estado: o que esta configurado, o login no
-// Drive e o ultimo backup. Nunca leva segredo (nem o client secret nem o
+// providerSecrets sao os secrets do client e do login do destino p.
+func providerSecrets(p string) (client, token string) {
+	if p == backup.ProviderOneDrive {
+		return secretOneDriveClient, secretOneDriveToken
+	}
+	return secretGoogleClient, secretDriveToken
+}
+
+// providerOf e o destino da config (vazio: Google Drive).
+func providerOf(cfg config.Config) string {
+	if cfg.Backup.Provider == backup.ProviderOneDrive {
+		return backup.ProviderOneDrive
+	}
+	return backup.ProviderGoogle
+}
+
+// backupProvider e o destino dos backups agora.
+func (c *Core) backupProvider() string {
+	cfg, _ := config.Load(c.deps.ConfigPath)
+	return providerOf(cfg)
+}
+
+// clientLabel e o nome do client de cada destino nas mensagens.
+func clientLabel(p string) string {
+	if p == backup.ProviderOneDrive {
+		return "o app do Azure (ID do aplicativo)"
+	}
+	return "o OAuth client do Google"
+}
+
+// BackupStatus e o backup no estado: o destino (Google Drive ou OneDrive),
+// o que esta configurado, o login e o ultimo backup. Nunca leva segredo (nem o client secret nem o
 // token; a chave publica nao e segredo).
 type BackupStatus struct {
-	// ClientID e o OAuth client informado (vazio: falta criar no Google).
+	// Provider e o destino: google (Google Drive) ou onedrive.
+	Provider string `json:"provider"`
+	// ClientID e o client informado (vazio: falta criar no Google Cloud ou
+	// no Azure).
 	ClientID string `json:"client_id,omitempty"`
-	// Email e a conta do Drive conectada (vazio: sem login).
+	// Email e a conta conectada no destino (vazio: sem login).
 	Email string `json:"email,omitempty"`
-	// Login e o login no Drive esperando a pessoa digitar o codigo.
+	// Login e o login esperando a pessoa digitar o codigo.
 	Login      *DriveLogin `json:"login,omitempty"`
 	LoginError string      `json:"login_error,omitempty"`
 	// Recipient e a chave publica que criptografa os backups.
@@ -52,7 +89,7 @@ type BackupStatus struct {
 	// Next e o proximo backup automatico (zero: desligado ou incompleto).
 	Next time.Time `json:"next,omitzero"`
 	// Retry diz que o Next e a nova tentativa de um backup que nao chegou
-	// no Drive (e nao o horario do dia).
+	// na nuvem (e nao o horario do dia).
 	Retry   bool       `json:"retry,omitempty"`
 	Running bool       `json:"running,omitempty"`
 	Step    string     `json:"step,omitempty"`
@@ -63,7 +100,8 @@ type BackupStatus struct {
 // Ready diz se o backup tem tudo pra rodar: client, login e chave.
 func (b BackupStatus) Ready() bool { return b.ClientID != "" && b.Email != "" && b.Recipient != "" }
 
-// DriveLogin e o codigo que a pessoa digita em URL pra liberar o Drive.
+// DriveLogin e o codigo que a pessoa digita em URL pra liberar o destino
+// (Google Drive ou OneDrive).
 type DriveLogin struct {
 	Code    string    `json:"code"`
 	URL     string    `json:"url"`
@@ -75,30 +113,47 @@ type BackupRun struct {
 	At       time.Time     `json:"at"`
 	Duration time.Duration `json:"duration"`
 	Auto     bool          `json:"auto,omitempty"`
-	// File e o nome no Drive; Size em bytes (criptografado e compactado).
+	// Provider e pra onde foi (google ou onedrive).
+	Provider string `json:"provider,omitempty"`
+	// File e o nome na nuvem; Size em bytes (criptografado e compactado).
 	File      string `json:"file,omitempty"`
 	Size      int64  `json:"size,omitempty"`
 	Databases int    `json:"databases"`
 	Files     int    `json:"files"`
 	// Errors sao os databases que nao entraram (o resto entrou).
 	Errors []string `json:"errors,omitempty"`
-	// Error e o que impediu o backup de chegar no Drive.
+	// Error e o que impediu o backup de chegar na nuvem.
 	Error string `json:"error,omitempty"`
 	// Local e o arquivo que ficou na VPS porque o envio falhou.
 	Local string `json:"local,omitempty"`
-	// Removed sao os backups velhos apagados do Drive pela retencao.
+	// Removed sao os backups velhos apagados da nuvem pela retencao.
 	Removed int `json:"removed,omitempty"`
 }
 
-// OK diz se o backup chegou no Drive com todos os databases.
+// OK diz se o backup chegou na nuvem com todos os databases.
 func (r BackupRun) OK() bool { return r.Error == "" && len(r.Errors) == 0 }
 
-// backupDisk e o que o cais guarda do backup fora da config: a pasta no
-// Drive (o cais cria e so ve ela), a conta e o ultimo backup.
+// backupDisk e o que o cais guarda do backup fora da config: a pasta em
+// cada destino (o cais cria e so ve ela), a conta e o ultimo backup. Folder
+// e Email sao do Google Drive (os nomes de antes do OneDrive).
 type backupDisk struct {
-	Folder string     `json:"folder,omitempty"`
-	Email  string     `json:"email,omitempty"`
-	Last   *BackupRun `json:"last,omitempty"`
+	Folder   string     `json:"folder,omitempty"`
+	Email    string     `json:"email,omitempty"`
+	OneDrive cloudDisk  `json:"onedrive,omitzero"`
+	Last     *BackupRun `json:"last,omitempty"`
+}
+
+type cloudDisk struct {
+	Folder string `json:"folder,omitempty"`
+	Email  string `json:"email,omitempty"`
+}
+
+// at sao a pasta e a conta do destino p.
+func (d *backupDisk) at(p string) (folder, email *string) {
+	if p == backup.ProviderOneDrive {
+		return &d.OneDrive.Folder, &d.OneDrive.Email
+	}
+	return &d.Folder, &d.Email
 }
 
 // BackupGap e o que o backup nao cobre, de proposito por enquanto: aparece
@@ -106,7 +161,7 @@ type backupDisk struct {
 // achar que esta coberto.
 const BackupGap = "Fora do backup: os arquivos do Garage (buckets S3) e os volumes dos apps. Perder a VPS (ou o disco) perde esses dados."
 
-// uploadRetryDelay e a espera entre tentativas de envio pro Drive.
+// uploadRetryDelay e a espera entre tentativas de envio pra nuvem.
 var uploadRetryDelay = 5 * time.Second
 
 type backupRuntime struct {
@@ -142,41 +197,85 @@ func (c *Core) changeBackupDisk(fn func(*backupDisk)) error {
 	return fsx.WriteAtomic(c.backupStatePath(), data, 0o600)
 }
 
-func (c *Core) backupClient() (backup.Client, error) {
-	data, err := c.secretStore().Get(secretGoogleClient)
+func (c *Core) backupClient(p string) (backup.Client, error) {
+	secret, _ := providerSecrets(p)
+	where := map[bool]string{true: "do app do Azure", false: "OAuth client do Google"}[p == backup.ProviderOneDrive]
+	data, err := c.secretStore().Get(secret)
 	if errors.Is(err, secrets.ErrNotFound) {
-		return backup.Client{}, errors.New("falta o OAuth client do Google (Setup -> Backups)")
+		return backup.Client{}, fmt.Errorf("falta %s (Setup -> Backups)", clientLabel(p))
 	}
 	if err != nil {
 		return backup.Client{}, err
 	}
 	var cl backup.Client
 	if err := json.Unmarshal(data, &cl); err != nil || cl.ID == "" {
-		return backup.Client{}, errors.New("OAuth client do Google invalido: informe de novo (Setup -> Backups)")
+		return backup.Client{}, fmt.Errorf("ID %s invalido: informe de novo (Setup -> Backups)", where)
 	}
 	return cl, nil
 }
 
-// drive abre o Drive com o token do login.
-func (c *Core) drive() (*backup.Drive, error) {
-	cl, err := c.backupClient()
+// oauthConfig e o login do destino p com o client dele.
+func (c *Core) oauthConfig(p string, cl backup.Client) *oauth2.Config {
+	if p == backup.ProviderOneDrive {
+		return backup.OneDriveOAuth(cl.ID, c.deps.MicrosoftEndpoint)
+	}
+	return cl.OAuth(c.deps.GoogleEndpoint)
+}
+
+// store abre o destino p com o token do login. O token renovado volta pro
+// secret (a Microsoft troca o refresh token a cada renovacao), a nao ser
+// que o login tenha mudado no meio (desconectou ou entrou de novo).
+func (c *Core) store(p string) (backup.Store, error) {
+	cl, err := c.backupClient(p)
 	if err != nil {
 		return nil, err
 	}
-	data, err := c.secretStore().Get(secretDriveToken)
+	_, tokenSecret := providerSecrets(p)
+	name := backup.ProviderName(p)
+	data, err := c.secretStore().Get(tokenSecret)
 	if errors.Is(err, secrets.ErrNotFound) {
-		return nil, errors.New("o Drive nao esta conectado (Setup -> Backups -> Conectar)")
+		return nil, fmt.Errorf("o %s nao esta conectado (Setup -> Backups -> Conectar)", name)
 	}
 	if err != nil {
 		return nil, err
 	}
 	var tok oauth2.Token
 	if err := json.Unmarshal(data, &tok); err != nil {
-		return nil, fmt.Errorf("login do Drive invalido, conecte de novo: %w", err)
+		return nil, fmt.Errorf("login do %s invalido, conecte de novo: %w", name, err)
+	}
+	var mu sync.Mutex
+	prev := tok.RefreshToken
+	save := func(t *oauth2.Token) error {
+		mu.Lock()
+		defer mu.Unlock()
+		cur, err := c.secretStore().Get(tokenSecret)
+		if errors.Is(err, secrets.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var saved oauth2.Token
+		if json.Unmarshal(cur, &saved) != nil || saved.RefreshToken != prev {
+			return nil
+		}
+		data, _ := json.Marshal(t)
+		if err := c.secretStore().Put(tokenSecret, data); err != nil {
+			return err
+		}
+		prev = t.RefreshToken
+		return nil
 	}
 	// o oauth2 renova o acesso sozinho; o contexto e o do cliente HTTP,
 	// que vive mais que uma chamada
-	d := backup.NewDrive(context.Background(), cl.OAuth(c.deps.GoogleEndpoint), &tok)
+	ctx := context.Background()
+	src := backup.SavingSource(c.oauthConfig(p, cl).TokenSource(ctx, &tok), tok.RefreshToken, save)
+	if p == backup.ProviderOneDrive {
+		o := backup.NewOneDrive(ctx, src)
+		o.API = c.deps.GraphAPI
+		return o, nil
+	}
+	d := backup.NewDrive(ctx, src)
 	d.API, d.Upload = c.deps.DriveAPI, c.deps.DriveUpload
 	return d, nil
 }
@@ -205,13 +304,16 @@ func (c *Core) readBackup() BackupStatus {
 		st.Error = err.Error()
 	}
 	b := cfg.Backup
+	st.Provider = providerOf(cfg)
 	st.Recipient, st.Time, st.RetentionDays = b.Recipient, b.Time, b.Retention()
-	if cl, err := c.backupClient(); err == nil {
+	if cl, err := c.backupClient(st.Provider); err == nil {
 		st.ClientID = cl.ID
 	}
 	disk := c.loadBackupDisk()
-	if _, err := c.secretStore().Get(secretDriveToken); err == nil {
-		st.Email = cmpOr(disk.Email, "(conta conectada)")
+	_, tokenSecret := providerSecrets(st.Provider)
+	if _, err := c.secretStore().Get(tokenSecret); err == nil {
+		_, email := disk.at(st.Provider)
+		st.Email = cmpOr(*email, "(conta conectada)")
 	}
 	st.Last = disk.Last
 	if st.Ready() {
@@ -227,13 +329,13 @@ func cmpOr(a, b string) string {
 	return b
 }
 
-// backupRetry e a espera pra tentar de novo um backup que nao chegou no
-// Drive (Drive fora do ar, rede, disco).
+// backupRetry e a espera pra tentar de novo um backup que nao chegou na
+// nuvem (nuvem fora do ar, rede, disco).
 var backupRetry = time.Hour
 
 // nextBackup e o proximo horario do backup automatico. Se o de hoje ja
 // passou sem backup (VPS desligada as 03:00), e agora. Se o ultimo nao
-// chegou no Drive, tenta de novo backupRetry depois dele (retry), sem
+// chegou na nuvem, tenta de novo backupRetry depois dele (retry), sem
 // esperar o horario do dia seguinte. Backup que subiu sem algum database
 // nao repete: o database quebrado falharia de novo, e cada tentativa sobe
 // um arquivo inteiro.
@@ -265,42 +367,83 @@ func later(a, b time.Time) time.Time {
 	return b
 }
 
-// SetBackupClient grava o OAuth client do Google (tipo "TVs e dispositivos
-// de entrada limitada"). Trocar o client desfaz o login: o token e do
-// client antigo.
+// azureID e o ID do aplicativo (cliente) de um registro no Azure.
+var azureID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// SetBackupProvider troca o destino dos backups (google ou onedrive). O
+// client e o login de cada um ficam guardados: voltar pro outro nao pede
+// login de novo. Um login pendente e cancelado (era do outro destino).
+func (c *Core) SetBackupProvider(ctx context.Context, p string) error {
+	if !slices.Contains(backup.Providers, p) {
+		return fmt.Errorf("destino %q: use %s", p, strings.Join(backup.Providers, " ou "))
+	}
+	if p == c.backupProvider() {
+		return nil
+	}
+	c.CancelDriveLogin(ctx)
+	err := c.changeConfig(func(cfg *config.Config) {
+		cfg.Backup.Provider = p
+		if p == backup.ProviderGoogle {
+			cfg.Backup.Provider = "" // o padrao
+		}
+	})
+	if err != nil {
+		return err
+	}
+	_, err = c.RefreshBackup(ctx)
+	return err
+}
+
+// SetBackupClient grava o client do destino atual: o OAuth client do Google
+// (tipo "TVs e dispositivos de entrada limitada", com secret) ou o ID do app
+// no Azure (cliente publico: o secret e ignorado). Trocar o client desfaz o
+// login: o token e do client antigo.
 func (c *Core) SetBackupClient(ctx context.Context, id, secret string) error {
+	p := c.backupProvider()
 	id, secret = strings.TrimSpace(id), strings.TrimSpace(secret)
-	if !strings.HasSuffix(id, ".apps.googleusercontent.com") {
-		return errors.New("client ID invalido: copie o ID do OAuth client (termina em .apps.googleusercontent.com)")
+	switch p {
+	case backup.ProviderOneDrive:
+		if !azureID.MatchString(id) {
+			return errors.New("ID do aplicativo invalido: copie o \"ID do aplicativo (cliente)\" do registro no Azure (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)")
+		}
+		secret = ""
+	default:
+		if !strings.HasSuffix(id, ".apps.googleusercontent.com") {
+			return errors.New("client ID invalido: copie o ID do OAuth client (termina em .apps.googleusercontent.com)")
+		}
+		if secret == "" {
+			return errors.New("informe o client secret")
+		}
 	}
-	if secret == "" {
-		return errors.New("informe o client secret")
-	}
-	if old, err := c.backupClient(); err != nil || old.ID != id {
-		if err := c.secretStore().Delete(secretDriveToken); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+	clientSecret, tokenSecret := providerSecrets(p)
+	if old, err := c.backupClient(p); err != nil || old.ID != id {
+		if err := c.secretStore().Delete(tokenSecret); err != nil && !errors.Is(err, secrets.ErrNotFound) {
 			return err
 		}
 	}
 	data, _ := json.Marshal(backup.Client{ID: id, Secret: secret})
-	if err := c.secretStore().Put(secretGoogleClient, data); err != nil {
+	if err := c.secretStore().Put(clientSecret, data); err != nil {
 		return err
 	}
 	_, err := c.RefreshBackup(ctx)
 	return err
 }
 
-// StartDriveLogin comeca o login no Drive pelo fluxo de dispositivo: o
-// codigo aparece em State.Backup.Login e o daemon espera a pessoa liberar
-// em google.com/device. O resultado chega pelo estado.
+// StartDriveLogin comeca o login no destino atual pelo fluxo de
+// dispositivo: o codigo aparece em State.Backup.Login e o daemon espera a
+// pessoa liberar (google.com/device ou microsoft.com/link). O resultado
+// chega pelo estado.
 func (c *Core) StartDriveLogin(ctx context.Context) (DriveLogin, error) {
-	cl, err := c.backupClient()
+	p := c.backupProvider()
+	name := backup.ProviderName(p)
+	cl, err := c.backupClient(p)
 	if err != nil {
 		return DriveLogin{}, err
 	}
-	cfg := cl.OAuth(c.deps.GoogleEndpoint)
+	cfg := c.oauthConfig(p, cl)
 	da, err := cfg.DeviceAuth(ctx)
 	if err != nil {
-		return DriveLogin{}, fmt.Errorf("pedindo o codigo ao Google: %w", err)
+		return DriveLogin{}, fmt.Errorf("pedindo o codigo pro login no %s: %w", name, err)
 	}
 	login := DriveLogin{Code: da.UserCode, URL: da.VerificationURI, Expires: da.Expiry}
 	if login.Expires.IsZero() {
@@ -324,10 +467,10 @@ func (c *Core) StartDriveLogin(ctx context.Context) (DriveLogin, error) {
 		}
 		msg := ""
 		if err == nil {
-			err = c.saveDriveLogin(lctx, tok)
+			err = c.saveDriveLogin(lctx, p, tok)
 		}
 		if err != nil {
-			msg = "login no Drive: " + err.Error()
+			msg = "login no " + name + ": " + err.Error()
 			if errors.Is(err, context.DeadlineExceeded) {
 				msg = "o codigo expirou sem login; peca outro"
 			}
@@ -338,23 +481,25 @@ func (c *Core) StartDriveLogin(ctx context.Context) (DriveLogin, error) {
 	return login, nil
 }
 
-func (c *Core) saveDriveLogin(ctx context.Context, tok *oauth2.Token) error {
+func (c *Core) saveDriveLogin(ctx context.Context, p string, tok *oauth2.Token) error {
 	if tok.RefreshToken == "" {
-		return errors.New("o Google nao devolveu o refresh token")
+		return fmt.Errorf("o %s nao devolveu o refresh token", backup.ProviderName(p))
 	}
+	_, tokenSecret := providerSecrets(p)
 	data, _ := json.Marshal(tok)
-	if err := c.secretStore().Put(secretDriveToken, data); err != nil {
+	if err := c.secretStore().Put(tokenSecret, data); err != nil {
 		return err
 	}
 	email := ""
-	if d, err := c.drive(); err == nil {
-		email, _ = d.Email(ctx)
+	if s, err := c.store(p); err == nil {
+		email, _ = s.Email(ctx)
 	}
 	return c.changeBackupDisk(func(d *backupDisk) {
-		if d.Email != email {
-			d.Folder = "" // outra conta: a pasta da anterior nao serve
+		folder, old := d.at(p)
+		if *old != email {
+			*folder = "" // outra conta: a pasta da anterior nao serve
 		}
-		d.Email = email
+		*old = email
 	})
 }
 
@@ -370,12 +515,17 @@ func (c *Core) CancelDriveLogin(context.Context) error {
 	return nil
 }
 
-// DisconnectDrive esquece o login no Drive (os backups ficam la).
+// DisconnectDrive esquece o login no destino atual (os backups ficam la).
 func (c *Core) DisconnectDrive(ctx context.Context) error {
-	if err := c.secretStore().Delete(secretDriveToken); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+	p := c.backupProvider()
+	_, tokenSecret := providerSecrets(p)
+	if err := c.secretStore().Delete(tokenSecret); err != nil && !errors.Is(err, secrets.ErrNotFound) {
 		return err
 	}
-	if err := c.changeBackupDisk(func(d *backupDisk) { d.Email, d.Folder = "", "" }); err != nil {
+	if err := c.changeBackupDisk(func(d *backupDisk) {
+		folder, email := d.at(p)
+		*folder, *email = "", ""
+	}); err != nil {
 		return err
 	}
 	_, err := c.RefreshBackup(ctx)
@@ -457,7 +607,8 @@ func (c *Core) RunBackups(ctx context.Context, every time.Duration) {
 }
 
 // RunBackup faz um backup agora: dumps dos bancos e o estado do cais,
-// criptografados, pro Drive; depois apaga os que passaram da retencao.
+// criptografados, pra nuvem (Google Drive ou OneDrive); depois apaga os que
+// passaram da retencao.
 func (c *Core) RunBackup(ctx context.Context) (BackupRun, error) {
 	return c.runBackup(ctx, false)
 }
@@ -476,7 +627,8 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 		return BackupRun{}, errors.New("backup incompleto: falta " + missingBackup(st))
 	}
 	start := c.deps.Now()
-	run = BackupRun{At: start, Auto: auto}
+	p, name := st.Provider, backup.ProviderName(st.Provider)
+	run = BackupRun{At: start, Auto: auto, Provider: p}
 	c.update(func(s *State) { s.Backup.Running, s.Backup.Step = true, "comecando" })
 	defer func() {
 		run.Duration = c.deps.Now().Sub(start)
@@ -493,7 +645,7 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 	if err != nil {
 		return run, err
 	}
-	d, err := c.drive()
+	d, err := c.store(p)
 	if err != nil {
 		return run, err
 	}
@@ -542,18 +694,19 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 		run.Size = info.Size()
 	}
 
-	c.backupStep("enviando pro Google Drive")
+	c.backupStep("enviando pro " + name)
 	disk := c.loadBackupDisk()
-	folder, err := d.Folder(ctx, disk.Folder, "cais-backups-"+c.vpsName())
-	if err == nil && folder != disk.Folder {
-		err = c.changeBackupDisk(func(d *backupDisk) { d.Folder = folder })
+	saved, _ := disk.at(p)
+	folder, err := d.Folder(ctx, *saved, "cais-backups-"+c.vpsName())
+	if err == nil && folder != *saved {
+		err = c.changeBackupDisk(func(d *backupDisk) { f, _ := d.at(p); *f = folder })
 	}
 	if err == nil {
 		err = upload(ctx, d, folder, local, run.File)
 	}
 	if err != nil {
 		run.Local = local
-		return run, fmt.Errorf("enviando pro Drive (o arquivo ficou em %s): %w", local, err)
+		return run, fmt.Errorf("enviando pro %s (o arquivo ficou em %s): %w", name, local, err)
 	}
 	os.Remove(local)
 
@@ -569,7 +722,7 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 		run.Removed++
 	}
 	if len(run.Errors) > 0 {
-		return run, fmt.Errorf("backup no Drive, mas sem %d databases: %s", len(run.Errors), strings.Join(run.Errors, "; "))
+		return run, fmt.Errorf("backup no %s, mas sem %d databases: %s", name, len(run.Errors), strings.Join(run.Errors, "; "))
 	}
 	return run, nil
 }
@@ -577,10 +730,10 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 func missingBackup(st BackupStatus) string {
 	var miss []string
 	if st.ClientID == "" {
-		miss = append(miss, "o OAuth client do Google")
+		miss = append(miss, clientLabel(st.Provider))
 	}
 	if st.Email == "" {
-		miss = append(miss, "conectar o Drive")
+		miss = append(miss, "conectar o "+backup.ProviderName(st.Provider))
 	}
 	if st.Recipient == "" {
 		miss = append(miss, "a chave do backup")
@@ -589,7 +742,7 @@ func missingBackup(st BackupStatus) string {
 }
 
 // upload envia o arquivo, com ate 3 tentativas (rede instavel).
-func upload(ctx context.Context, d *backup.Drive, folder, local, name string) error {
+func upload(ctx context.Context, d backup.Store, folder, local, name string) error {
 	var err error
 	for i := 0; i < 3; i++ {
 		if i > 0 {
@@ -677,17 +830,20 @@ func (c *Core) stateDirs() []backup.Dir {
 	}
 }
 
-// BackupFiles lista os backups no Drive, do mais novo pro mais velho.
+// BackupFiles lista os backups no destino atual, do mais novo pro mais
+// velho.
 func (c *Core) BackupFiles(ctx context.Context) ([]backup.File, error) {
-	d, err := c.drive()
+	p := c.backupProvider()
+	d, err := c.store(p)
 	if err != nil {
 		return nil, err
 	}
-	folder := c.loadBackupDisk().Folder
-	if folder == "" {
+	disk := c.loadBackupDisk()
+	folder, _ := disk.at(p)
+	if *folder == "" {
 		return nil, nil
 	}
-	files, err := d.List(ctx, folder)
+	files, err := d.List(ctx, *folder)
 	if err != nil {
 		return nil, err
 	}
@@ -700,9 +856,9 @@ func (c *Core) BackupFiles(ctx context.Context) ([]backup.File, error) {
 	return out, nil
 }
 
-// RestoreRequest pede a volta de databases de um backup do Drive.
+// RestoreRequest pede a volta de databases de um backup na nuvem.
 type RestoreRequest struct {
-	// File e o nome do backup no Drive (BackupFiles).
+	// File e o nome do backup no destino atual (BackupFiles).
 	File string `json:"file"`
 	// Identity e a chave privada do backup (AGE-SECRET-KEY-...): so passa
 	// pela memoria do daemon durante o restore.
@@ -741,12 +897,14 @@ func (c *Core) RestoreBackup(ctx context.Context, req RestoreRequest) (RestoreRe
 		}
 		want[db] = true
 	}
-	d, err := c.drive()
+	p := c.backupProvider()
+	d, err := c.store(p)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	folder := c.loadBackupDisk().Folder
-	files, err := d.List(ctx, folder)
+	disk := c.loadBackupDisk()
+	folder, _ := disk.at(p)
+	files, err := d.List(ctx, *folder)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -757,7 +915,7 @@ func (c *Core) RestoreBackup(ctx context.Context, req RestoreRequest) (RestoreRe
 		}
 	}
 	if id == "" {
-		return RestoreResult{}, fmt.Errorf("backup %s nao encontrado no Drive", req.File)
+		return RestoreResult{}, fmt.Errorf("backup %s nao encontrado no %s", req.File, backup.ProviderName(p))
 	}
 	tmp := filepath.Join(c.deps.BackupsDir, "restore")
 	os.RemoveAll(tmp)

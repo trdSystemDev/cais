@@ -193,20 +193,31 @@ pra confirmar.
 Flags:
   -yes   nao pede confirmacao`},
 	}},
-	{title: "Backup (bancos e estado do cais, criptografado, pro Google Drive):", group: "backup", cmds: []command{
+	{title: "Backup (bancos e estado do cais, criptografado, pro Google Drive ou OneDrive):", group: "backup", cmds: []command{
 		{name: "backup status", usage: "backup status", short: "configuracao, proximo e ultimo backup", long: `
 Mostra a configuracao, o proximo e o ultimo backup, e o que fica de fora:
 os arquivos do Garage (buckets S3) e os volumes dos apps nao entram no
 backup do cais.`},
-		{name: "backup client", usage: "backup client <client-id>", short: "grava o OAuth client do Google", long: `
-O client e do seu projeto no Google Cloud: ative a Google Drive API, crie
-em Credenciais -> ID do cliente OAuth do tipo "TVs e dispositivos de entrada
-limitada" e publique a tela de consentimento (em "Teste" o login expira em 7
-dias). O escopo e drive.file: o cais so ve a pasta que ele mesmo cria.
+		{name: "backup provider", usage: "backup provider google|onedrive", short: "escolhe o destino: Google Drive ou OneDrive pessoal", long: `
+Client e login de cada destino ficam guardados: voltar pro outro nao pede
+login de novo. Os backups ja feitos ficam onde estao; files, restore e a
+retencao olham so o destino atual.`},
+		{name: "backup client", usage: "backup client <client-id>", short: "grava o client do destino (Google Cloud ou Azure)", long: `
+Google Drive: o client e do seu projeto no Google Cloud. Ative a Google
+Drive API, crie em Credenciais -> ID do cliente OAuth do tipo "TVs e
+dispositivos de entrada limitada" e publique a tela de consentimento (em
+"Teste" o login expira em 7 dias). O escopo e drive.file: o cais so ve a
+pasta que ele mesmo cria. O secret e lido sem eco, ou do stdin (cais backup
+client <id> < arquivo).
 
-O secret e lido sem eco, ou do stdin (cais backup client <id> < arquivo).`},
-		{name: "backup login", usage: "backup login", short: "conecta o Drive (codigo pra google.com/device)"},
-		{name: "backup logout", usage: "backup logout", short: "desconecta o Drive (os backups ficam la)"},
+OneDrive (conta pessoal): no portal do Azure, em Registros de aplicativo,
+registre um app com "Somente contas pessoais da Microsoft" e, em
+Autenticacao, ligue "Permitir fluxos de clientes publicos". O <client-id> e
+o "ID do aplicativo (cliente)"; nao tem secret. O cais pede so a pasta do
+app (Files.ReadWrite.AppFolder): fica em Aplicativos/<nome do app> e o resto
+do OneDrive nao e visto.`},
+		{name: "backup login", usage: "backup login", short: "conecta o destino (um codigo pra digitar em outro aparelho)"},
+		{name: "backup logout", usage: "backup logout", short: "desconecta o destino (os backups ficam la)"},
 		{name: "backup key", usage: "backup key [-yes]", short: "gera a chave e mostra a privada uma vez", long: `
 A publica fica na config e criptografa os backups; a privada aparece so
 agora e nao fica na VPS: guarde num gerenciador de senhas. Sem ela nenhum
@@ -215,12 +226,12 @@ a privada anterior).`},
 		{name: "backup schedule", usage: "backup schedule HH:MM|off [-days 30]", short: "horario diario (fuso da VPS) e retencao", long: `
 O backup roda todo dia no horario; se a VPS estava desligada na hora, roda
 assim que o daemon subir. Os backups mais velhos que -days dias saem do
-Drive (o mais novo fica sempre). "off" deixa so o backup manual.
+destino (o mais novo fica sempre). "off" deixa so o backup manual.
 
 Exemplo:
   cais backup schedule 03:00 -days 30`},
 		{name: "backup now", usage: "backup now", short: "faz um backup agora"},
-		{name: "backup files", usage: "backup files", short: "lista os backups no Drive"},
+		{name: "backup files", usage: "backup files", short: "lista os backups no destino"},
 		{name: "backup restore", usage: "backup restore <backup> -key <arquivo> [engine/database ...] [-yes]", short: "devolve databases ao estado do backup", long: `
 Sem databases, so lista o que o backup tem. Com databases, apaga o
 conteudo atual de cada um (as conexoes abertas caem), recria com o mesmo
@@ -232,7 +243,7 @@ Exemplos:
   cais backup restore cais-vps-2026-11-13_0300.tar.gz.age -key chave.txt
   cais backup restore cais-vps-2026-11-13_0300.tar.gz.age -key chave.txt postgres/loja`},
 		{name: "backup open", usage: "backup open <arquivo> -key <arquivo> -to <pasta>", short: "extrai um backup baixado (sem o daemon, ate numa VPS nova)", long: `
-Abre um backup baixado do Drive numa pasta: os dumps (postgres/, mysql/) e
+Abre um backup baixado do Drive (ou OneDrive) numa pasta: os dumps (postgres/, mysql/) e
 o estado do cais (state/etc = /etc/cais, state/data = /var/lib/cais, com os
 secrets). Serve pra olhar um dump ou montar uma VPS nova.`},
 	}},

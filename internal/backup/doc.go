@@ -1,5 +1,5 @@
 // Package backup faz o backup dos bancos e do estado do cais e o leva pro
-// Google Drive.
+// Google Drive ou pro OneDrive (Store).
 //
 // Cada backup e um arquivo so (cais-<host>-<data>.tar.gz.age): um tar
 // compactado com os dumps (postgres/<db>.sql, mysql/<db>.sql) e o estado do
@@ -13,8 +13,10 @@
 //     dump e a do servidor.
 //   - Cada dump passa por um arquivo temporario (o tar precisa do tamanho
 //     antes do conteudo) numa pasta 0700 do root, apagada no fim.
-//   - Drive com o escopo drive.file: o cais so ve os arquivos que ele
-//     mesmo criou (a pasta de backups), nada mais do Drive da pessoa.
-//   - Login pelo fluxo de dispositivo (codigo + google.com/device): funciona
-//     pela TUI via SSH sem colar nada de volta.
+//   - Drive com o escopo drive.file e OneDrive com Files.ReadWrite.AppFolder:
+//     o cais so ve o que ele mesmo criou (a pasta de backups), nada mais da
+//     nuvem da pessoa.
+//   - Login pelo fluxo de dispositivo (codigo + google.com/device ou
+//     microsoft.com/devicelogin): funciona pela TUI via SSH sem colar nada
+//     de volta.
 package backup

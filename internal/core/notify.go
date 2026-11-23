@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/notify"
 	"github.com/trdSystemDev/cais/internal/secrets"
@@ -113,10 +114,11 @@ func (c *Core) notifyAutoDeploy(app, commit string, err error) {
 }
 
 // notifyBackup avisa que o backup automatico nao deu certo. Backup que nao
-// chegou no Drive avisa so na primeira falha da sequencia: o cais tenta de
+// chegou na nuvem avisa so na primeira falha da sequencia: o cais tenta de
 // novo a cada hora e cada tentativa seria um e-mail. Backup sem algum
 // database nao repete no dia, entao avisa toda vez.
 func (c *Core) notifyBackup(prev *BackupRun, run BackupRun, err error) {
+	where := backup.ProviderName(cmpOr(run.Provider, c.backupProvider()))
 	msg := notify.Message{
 		Kind:  notify.KindFailure,
 		Title: "Backup falhou",
@@ -126,7 +128,7 @@ func (c *Core) notifyBackup(prev *BackupRun, run BackupRun, err error) {
 	case err != nil && prev != nil && prev.Error != "":
 		return
 	case err != nil:
-		msg.Intro = "O backup automatico nao chegou no Google Drive."
+		msg.Intro = "O backup automatico nao chegou no " + where + "."
 		msg.Detail = err.Error()
 		if run.Local != "" {
 			msg.Facts = append(msg.Facts, notify.Fact{Label: "Ficou na VPS", Value: run.Local})
@@ -134,7 +136,7 @@ func (c *Core) notifyBackup(prev *BackupRun, run BackupRun, err error) {
 		msg.Next = "O cais tenta de novo a cada hora. Voce so recebe outro aviso depois de um backup que der certo. Detalhes na aba Backup."
 	case len(run.Errors) > 0:
 		msg.Title = "Backup incompleto"
-		msg.Intro = "O backup automatico chegou no Google Drive, mas sem " + plural(len(run.Errors), "este database", "estes databases") + ":"
+		msg.Intro = "O backup automatico chegou no " + where + ", mas sem " + plural(len(run.Errors), "este database", "estes databases") + ":"
 		msg.Items = run.Errors
 		msg.Facts = append(msg.Facts, notify.Fact{Label: "No backup", Value: strconv.Itoa(run.Databases) + " databases"})
 		msg.Next = "Um backup incompleto nao e repetido no mesmo dia. Detalhes na aba Backup."

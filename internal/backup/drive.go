@@ -48,8 +48,8 @@ type Drive struct {
 }
 
 // NewDrive usa o token salvo; o oauth2 renova o acesso sozinho.
-func NewDrive(ctx context.Context, cfg *oauth2.Config, tok *oauth2.Token) *Drive {
-	return &Drive{HTTP: cfg.Client(ctx, tok)}
+func NewDrive(ctx context.Context, src oauth2.TokenSource) *Drive {
+	return &Drive{HTTP: oauth2.NewClient(ctx, src)}
 }
 
 func (d *Drive) api() string {
@@ -75,8 +75,9 @@ type File struct {
 	Trashed bool      `json:"trashed"`
 }
 
-// ErrNotFound e o arquivo ou pasta que nao existe (ou que o cais nao ve).
-var ErrNotFound = errors.New("nao encontrado no Drive")
+// ErrNotFound e o arquivo ou pasta que nao existe (ou que o cais nao ve),
+// no Drive ou no OneDrive.
+var ErrNotFound = errors.New("nao encontrado na nuvem")
 
 func (d *Drive) do(req *http.Request, out any) error {
 	resp, err := d.HTTP.Do(req)

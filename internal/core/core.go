@@ -41,14 +41,17 @@ type Deps struct {
 	ContainerLogs  func(context.Context, string) (string, error)
 	ComposePS      func(ctx context.Context, file string) ([]docker.Container, error)
 	// Backup: pastas do estado (o que entra no backup e onde ficam os
-	// temporarios), o OAuth do Google e o Drive (trocados nos testes) e o
-	// exec com stdin/stdout ligados (dump e restore).
-	DataDir        string
-	BackupsDir     string
-	GoogleEndpoint oauth2.Endpoint
-	DriveAPI       string
-	DriveUpload    string
-	ExecStream     func(ctx context.Context, container string, stdin io.Reader, stdout io.Writer, args ...string) error
+	// temporarios), o OAuth do Google e o Drive, o login da Microsoft e o
+	// Graph do OneDrive (trocados nos testes) e o exec com stdin/stdout
+	// ligados (dump e restore).
+	DataDir           string
+	BackupsDir        string
+	GoogleEndpoint    oauth2.Endpoint
+	DriveAPI          string
+	DriveUpload       string
+	MicrosoftEndpoint oauth2.Endpoint
+	GraphAPI          string
+	ExecStream        func(ctx context.Context, container string, stdin io.Reader, stdout io.Writer, args ...string) error
 	// PruneBuildCache e a limpeza diaria do cache de build.
 	PruneBuildCache func(ctx context.Context) error
 
@@ -181,6 +184,9 @@ func New(d Deps) *Core {
 	}
 	if d.GoogleEndpoint.TokenURL == "" {
 		d.GoogleEndpoint = backup.GoogleEndpoint
+	}
+	if d.MicrosoftEndpoint.TokenURL == "" {
+		d.MicrosoftEndpoint = backup.MicrosoftEndpoint
 	}
 	if d.ExecStream == nil {
 		d.ExecStream = docker.ExecStream

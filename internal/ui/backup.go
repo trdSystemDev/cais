@@ -13,13 +13,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone/v2"
 
+	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/databases"
 )
 
-// bkPanel e o painel de Backups da aba Setup: OAuth client do Google,
-// login no Drive, chave do backup, horario, o backup agora e o proximo e o
-// ultimo backup. Ativo (recebe o teclado) quando o Tab passa do formulario
+// bkPanel e o painel de Backups da aba Setup: o destino (Google Drive ou
+// OneDrive), o client dele, o login, a chave do backup, o horario, o backup
+// agora e o proximo e o ultimo backup. Ativo (recebe o teclado) quando o Tab passa do formulario
 // pra ele ou num clique.
 type bkPanel struct {
 	api   core.API
@@ -87,7 +88,11 @@ func (p *bkPanel) setTheme(th theme) {
 
 // ids na ordem do Tab, conforme o que esta na tela
 func (p *bkPanel) ids(st core.BackupStatus) []string {
-	ids := []string{"bk-client-id", "bk-client-secret", "bk-client-save"}
+	ids := []string{"bk-provider", "bk-client-id"}
+	if st.Provider != backup.ProviderOneDrive { // o app do Azure nao tem secret
+		ids = append(ids, "bk-client-secret")
+	}
+	ids = append(ids, "bk-client-save")
 	switch {
 	case st.Login != nil:
 		ids = append(ids, "bk-login-cancel")
@@ -179,9 +184,22 @@ func (p *bkPanel) press(st core.BackupStatus, id string) tea.Cmd {
 		p.confirmKey = false
 	}
 	switch id {
+	case "bk-provider":
+		next := backup.ProviderOneDrive
+		if st.Provider == backup.ProviderOneDrive {
+			next = backup.ProviderGoogle
+		}
+		return p.run("provider", func(ctx context.Context) bkDoneMsg {
+			return bkDoneMsg{err: p.api.SetBackupProvider(ctx, next)}
+		})
 	case "bk-client-save":
 		cid, secret := strings.TrimSpace(p.clientID.Value()), strings.TrimSpace(p.secret.Value())
-		if cid == "" || secret == "" {
+		if st.Provider == backup.ProviderOneDrive {
+			if cid == "" {
+				p.err = "Informe o ID do aplicativo (cliente) do Azure."
+				return nil
+			}
+		} else if cid == "" || secret == "" {
 			p.err = "Informe o client ID e o client secret."
 			return nil
 		}
@@ -251,11 +269,16 @@ func (p *bkPanel) update(st core.BackupStatus, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	switch d.action {
-	case "client":
+	case "provider":
+		// o client digitado era do outro destino
+		p.clientID.SetValue("")
 		p.secret.SetValue("")
-		p.done = "OAuth client gravado. Agora conecte o Drive."
+	case "client":
+		p.clientID.SetValue("")
+		p.secret.SetValue("")
+		p.done = "Client gravado. Agora conecte o " + backup.ProviderName(st.Provider) + "."
 	case "logout":
-		p.done = "Drive desconectado (os backups que ja estao la ficam)."
+		p.done = backup.ProviderName(st.Provider) + " desconectado (os backups que ja estao la ficam)."
 	case "key":
 		p.priv, p.keyMade = d.priv, true
 		return p.setFocus(st, slices.Index(p.ids(st), "bk-key-copy")), true
@@ -265,7 +288,7 @@ func (p *bkPanel) update(st core.BackupStatus, msg tea.Msg) (tea.Cmd, bool) {
 			p.done = "Backup automatico desligado (o manual continua)."
 		}
 	case "backup":
-		p.done = fmt.Sprintf("Backup %s no Drive (%s).", d.run.File, databases.HumanSize(d.run.Size))
+		p.done = fmt.Sprintf("Backup %s no %s (%s).", d.run.File, backup.ProviderName(d.run.Provider), databases.HumanSize(d.run.Size))
 	}
 	return nil, true
 }
@@ -289,6 +312,10 @@ func (p *bkPanel) key(st core.BackupStatus, msg tea.KeyPressMsg) tea.Cmd {
 		return p.press(st, id)
 	case "space":
 		if p.input(id) == nil {
+			return p.press(st, id)
+		}
+	case "left", "right":
+		if id == "bk-provider" {
 			return p.press(st, id)
 		}
 	}
@@ -356,33 +383,56 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 		return mark + " " + t.bold().Render(fmt.Sprintf("%d · %s", n, title)) + "  " + muted.Render(ansi.Truncate(detail, max(1, w-12-len(title)), "…"))
 	}
 
+	name := backup.ProviderName(st.Provider)
+	onedrive := st.Provider == backup.ProviderOneDrive
 	var b strings.Builder
 	b.WriteString(head + "\n\n")
-	b.WriteString(t.bold().Render("Backups") + "  " + muted.Render("bancos e estado do cais, criptografados, no Google Drive") + "\n")
+	b.WriteString(t.bold().Render("Backups") + "  " + muted.Render("bancos e estado do cais, criptografados, no "+name) + "\n")
 	b.WriteString("\n")
 
-	// 1. OAuth client
-	b.WriteString(step(1, "OAuth client do Google", st.ClientID != "", cmpOrStr(st.ClientID, "falta")) + "\n")
-	if st.ClientID == "" {
-		b.WriteString(wrap.Inherit(muted).Render("No Google Cloud: ative a Google Drive API, crie em Credenciais um ID do cliente OAuth "+
-			"do tipo \"TVs e dispositivos de entrada limitada\" e publique a tela de consentimento (em teste o login expira em 7 dias).") + "\n")
+	// destino: trocar nao apaga o client nem o login do outro
+	marker, ls := "  ", t.fg(t.text).Width(16)
+	if focusID == "bk-provider" {
+		marker, ls = t.fg(t.accent).Bold(true).Render("› "), t.fg(t.accent).Bold(true).Width(16)
 	}
-	b.WriteString(field("bk-client-id", "Client ID", 41) + "\n")
-	b.WriteString(field("bk-client-secret", "Client secret", 41) + "\n")
+	sel := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Render("‹ " + name + " ›")
+	b.WriteString(p.zones.Mark("bk-provider", marker+ls.Render("Destino")+sel) + "  " +
+		muted.Render("←→ troca; o client e o login de cada um ficam guardados") + "\n\n")
+
+	// 1. client
+	if onedrive {
+		b.WriteString(step(1, "App no Azure", st.ClientID != "", cmpOrStr(st.ClientID, "falta")) + "\n")
+		if st.ClientID == "" {
+			b.WriteString(wrap.Inherit(muted).Render("No portal do Azure, em Registros de aplicativo: registre um app com \"Somente contas "+
+				"pessoais da Microsoft\" e, em Autenticacao, ligue \"Permitir fluxos de clientes publicos\". Copie o ID do aplicativo "+
+				"(cliente); nao tem secret. O cais so ve a pasta dele no OneDrive (Aplicativos/<nome do app>).") + "\n")
+		}
+		p.clientID.Placeholder = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+		b.WriteString(field("bk-client-id", "ID do aplicativo", 41) + "\n")
+	} else {
+		b.WriteString(step(1, "OAuth client do Google", st.ClientID != "", cmpOrStr(st.ClientID, "falta")) + "\n")
+		if st.ClientID == "" {
+			b.WriteString(wrap.Inherit(muted).Render("No Google Cloud: ative a Google Drive API, crie em Credenciais um ID do cliente OAuth "+
+				"do tipo \"TVs e dispositivos de entrada limitada\" e publique a tela de consentimento (em teste o login expira em 7 dias).") + "\n")
+		}
+		p.clientID.Placeholder = "....apps.googleusercontent.com"
+		b.WriteString(field("bk-client-id", "Client ID", 41) + "\n")
+		b.WriteString(field("bk-client-secret", "Client secret", 41) + "\n")
+	}
 	b.WriteString("  " + btn("bk-client-save", "Gravar client", btnNormal) + "\n\n")
 
-	// 2. Drive
+	// 2. login no destino
 	switch {
 	case st.Login != nil:
-		b.WriteString(step(2, "Google Drive", false, "aguardando o login") + "\n")
+		b.WriteString(step(2, name, false, "aguardando o login") + "\n")
 		b.WriteString("  Abra " + t.fg(t.accent).Bold(true).Render(st.Login.URL) + " em qualquer aparelho e digite:\n")
 		b.WriteString("    " + t.fg(t.accent).Bold(true).Render(st.Login.Code) + "  " + muted.Render("(expira as "+st.Login.Expires.Local().Format("15:04")+")") + "\n")
 		b.WriteString("  " + btn("bk-login-cancel", "Cancelar", btnNeutral) + "\n\n")
 	case st.Email != "":
-		b.WriteString(step(2, "Google Drive", true, st.Email) + "\n")
+		b.WriteString(step(2, name, true, st.Email) + "\n")
 		b.WriteString("  " + btn("bk-disconnect", "Desconectar", btnWarn) + "\n\n")
 	default:
-		b.WriteString(step(2, "Google Drive", false, "nao conectado") + "\n")
+		b.WriteString(step(2, name, false, "nao conectado") + "\n")
 		k := btnNormal
 		if st.ClientID == "" {
 			k = btnOff
@@ -449,7 +499,7 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 	if !st.Next.IsZero() {
 		next := "Proximo: " + st.Next.Local().Format("02/01 15:04")
 		if st.Retry {
-			next += " (nova tentativa: o ultimo nao chegou no Drive)"
+			next += " (nova tentativa: o ultimo nao chegou no " + name + ")"
 		}
 		b.WriteString(muted.Render(next) + "\n")
 	}

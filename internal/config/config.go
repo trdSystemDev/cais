@@ -101,10 +101,13 @@ type GitHub struct {
 // Backup e quando e pra quem sai o backup diario (bancos e estado do cais,
 // pro Google Drive). O login no Drive e o OAuth client ficam nos secrets.
 type Backup struct {
+	// Provider e o destino dos backups: google (Google Drive, o padrao) ou
+	// onedrive (OneDrive pessoal).
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
 	// Time e o horario diario (HH:MM, no fuso da VPS); vazio desliga o
 	// backup automatico (o "Fazer backup agora" continua valendo).
 	Time string `yaml:"time,omitempty" json:"time,omitempty"`
-	// RetentionDays apaga do Drive os backups mais velhos que isso (o mais
+	// RetentionDays apaga da nuvem os backups mais velhos que isso (o mais
 	// novo fica sempre). Zero usa DefaultRetentionDays.
 	RetentionDays int `yaml:"retention_days,omitempty" json:"retention_days,omitempty"`
 	// Recipient e a chave publica age (age1...) que criptografa os
@@ -227,6 +230,9 @@ func (c Config) Validate() error {
 		if _, _, ok := parseHHMM(b.Time); !ok {
 			errs = append(errs, fmt.Errorf("backup.time: %q invalido (use HH:MM, ex: 03:00)", b.Time))
 		}
+	}
+	if p := c.Backup.Provider; p != "" && p != "google" && p != "onedrive" {
+		errs = append(errs, fmt.Errorf("backup.provider: %q invalido (google ou onedrive)", p))
 	}
 	if c.Backup.RetentionDays < 0 || c.Backup.RetentionDays > 3650 {
 		errs = append(errs, fmt.Errorf("backup.retention_days: %d invalido (1 a 3650)", c.Backup.RetentionDays))

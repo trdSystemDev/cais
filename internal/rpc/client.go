@@ -400,6 +400,10 @@ func (c *Client) RefreshBackup(ctx context.Context) (st core.BackupStatus, err e
 	return
 }
 
+func (c *Client) SetBackupProvider(ctx context.Context, provider string) error {
+	return c.call(ctx, MethodBackupProvider, textResult{Text: provider}, nil)
+}
+
 func (c *Client) SetBackupClient(ctx context.Context, id, secret string) error {
 	return c.call(ctx, MethodBackupClient, backupClientParams{ID: id, Secret: secret}, nil)
 }

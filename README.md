@@ -17,7 +17,7 @@ proprio: o acesso e o seu SSH.
 - **HTTPS automatico** com Traefik e Let's Encrypt, no dominio de cada app.
 - **Bancos e S3 compartilhados.** Postgres (com PostGIS), MySQL e Garage; um
   database e um usuario por app, vazio ou importado de outro servidor.
-- **Backup diario** dos bancos e do estado, criptografado, pro Google Drive.
+- **Backup diario** dos bancos e do estado, criptografado, pro Google Drive ou OneDrive.
 - **Avisos por e-mail** quando um deploy automatico ou um backup falha.
 - **Pela IA**, com o MCP pelo mesmo SSH, sem nada que apague dados.
 

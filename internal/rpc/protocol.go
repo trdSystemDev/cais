@@ -55,7 +55,8 @@ const (
 	MethodAppBucketLink    = "app.bucket.link"   // params: appBucketParams
 	MethodAppBucketUnlink  = "app.bucket.unlink" // params: appBucketParams
 	MethodBackupRefresh    = "backup.refresh"
-	MethodBackupClient     = "backup.client" // params: backupClientParams
+	MethodBackupProvider   = "backup.provider" // params: textResult (o destino)
+	MethodBackupClient     = "backup.client"   // params: backupClientParams
 	MethodBackupLogin      = "backup.login"
 	MethodBackupLoginStop  = "backup.login.cancel"
 	MethodBackupDisconnect = "backup.disconnect"

@@ -17,7 +17,7 @@ import (
 )
 
 // runBackup configura e roda o backup (bancos e estado do cais, pro Google
-// Drive) e devolve databases de um backup. "open" nao usa o daemon: abre um
+// Drive ou OneDrive) e devolve databases de um backup. "open" nao usa o daemon: abre um
 // backup baixado, ate numa VPS nova.
 func runBackup(args []string) error {
 	sub, args := subcommand(args)
@@ -28,7 +28,7 @@ func runBackup(args []string) error {
 	yes := fs.Bool("yes", false, "restore/key: nao pede confirmacao")
 	pos := parseInterspersed(fs, args)
 	switch sub {
-	case "status", "now", "files", "restore", "client", "login", "logout", "key", "schedule":
+	case "status", "now", "files", "restore", "provider", "client", "login", "logout", "key", "schedule":
 	case "open":
 		return backupOpen(pos, *keyFile, *to)
 	default:
@@ -48,25 +48,41 @@ func runBackup(args []string) error {
 			return err
 		}
 		printBackupStatus(st)
+	case "provider":
+		if len(pos) != 1 {
+			return errors.New("uso: cais backup provider google|onedrive")
+		}
+		if err := c.SetBackupProvider(ctx, pos[0]); err != nil {
+			return err
+		}
+		st, _ := c.RefreshBackup(ctx)
+		printBackupStatus(st)
 	case "client":
 		if len(pos) != 1 {
-			return errors.New("uso: cais backup client <client-id> (o secret e pedido sem eco ou lido do stdin)")
+			return errors.New("uso: cais backup client <client-id> (Google: o secret e pedido sem eco ou lido do stdin)")
 		}
-		secret, err := readSecret("Client secret: ")
+		st, err := c.RefreshBackup(ctx)
 		if err != nil {
 			return err
+		}
+		secret := ""
+		if st.Provider != backup.ProviderOneDrive { // o app do Azure e publico: sem secret
+			if secret, err = readSecret("Client secret: "); err != nil {
+				return err
+			}
 		}
 		if err := c.SetBackupClient(ctx, pos[0], secret); err != nil {
 			return err
 		}
-		fmt.Println("OAuth client gravado. Agora: cais backup login")
+		fmt.Println("Client do " + backup.ProviderName(st.Provider) + " gravado. Agora: cais backup login")
 	case "login":
 		return backupLogin(ctx, c)
 	case "logout":
+		st, _ := c.RefreshBackup(ctx)
 		if err := c.DisconnectDrive(ctx); err != nil {
 			return err
 		}
-		fmt.Println("Drive desconectado (os backups que ja estao la ficam).")
+		fmt.Println(backup.ProviderName(st.Provider) + " desconectado (os backups que ja estao la ficam).")
 	case "key":
 		st, err := c.RefreshBackup(ctx)
 		if err != nil {
@@ -102,7 +118,7 @@ func runBackup(args []string) error {
 		return withProgress(c, func(ctx context.Context) error {
 			run, err := c.RunBackup(ctx)
 			if run.File != "" && err == nil {
-				fmt.Printf("Backup %s no Drive (%s, %d databases, %d arquivos)", run.File, databases.HumanSize(run.Size), run.Databases, run.Files)
+				fmt.Printf("Backup %s no %s (%s, %d databases, %d arquivos)", run.File, backup.ProviderName(run.Provider), databases.HumanSize(run.Size), run.Databases, run.Files)
 				if run.Removed > 0 {
 					fmt.Printf("; %d backups velhos apagados", run.Removed)
 				}
@@ -116,7 +132,8 @@ func runBackup(args []string) error {
 			return err
 		}
 		if len(files) == 0 {
-			fmt.Println("Nenhum backup no Drive ainda. Faca um com: cais backup now")
+			st, _ := c.RefreshBackup(ctx)
+			fmt.Printf("Nenhum backup no %s ainda. Faca um com: cais backup now\n", backup.ProviderName(st.Provider))
 			return nil
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -161,8 +178,10 @@ func printBackupStatus(st core.BackupStatus) {
 		}
 		return "falta"
 	}
-	fmt.Printf("OAuth client:  %s\n", yes(st.ClientID != "", st.ClientID))
-	fmt.Printf("Drive:         %s\n", yes(st.Email != "", st.Email))
+	name := backup.ProviderName(st.Provider)
+	fmt.Printf("Destino:       %s (cais backup provider google|onedrive)\n", name)
+	fmt.Printf("Client:        %s\n", yes(st.ClientID != "", st.ClientID))
+	fmt.Printf("Conta:         %s\n", yes(st.Email != "", st.Email))
 	fmt.Printf("Chave:         %s\n", yes(st.Recipient != "", st.Recipient))
 	when := "desligado (so manual)"
 	if st.Time != "" {
@@ -174,7 +193,7 @@ func printBackupStatus(st core.BackupStatus) {
 	if !st.Next.IsZero() {
 		retry := ""
 		if st.Retry {
-			retry = " (nova tentativa: o ultimo nao chegou no Drive)"
+			retry = " (nova tentativa: o ultimo nao chegou no " + name + ")"
 		}
 		fmt.Printf("Proximo:       %s%s\n", st.Next.Local().Format("02/01/2006 15:04"), retry)
 	}
@@ -220,7 +239,7 @@ func backupLogin(ctx context.Context, c interface {
 			return errors.New(b.LoginError)
 		}
 		if b.Email != "" {
-			fmt.Printf("Drive conectado: %s\n", b.Email)
+			fmt.Printf("%s conectado: %s\n", backup.ProviderName(b.Provider), b.Email)
 			return nil
 		}
 	}
