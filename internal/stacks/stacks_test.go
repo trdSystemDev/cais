@@ -353,7 +353,7 @@ func TestRenderRecusa(t *testing.T) {
 		t.Error("renderizou stack desconhecida")
 	}
 	if _, err := Render("proxy", config.Default(), secretsDir); err == nil {
-		t.Error("renderizou com config sem dominio")
+		t.Error("renderizou o proxy sem o e-mail do Let's Encrypt")
 	}
 	if _, err := Render("proxy", validConfig(), "secrets"); err == nil {
 		t.Error("aceitou pasta de secrets relativa")

@@ -112,6 +112,7 @@ func TestValidateRecusa(t *testing.T) {
 		"dominio com espaco":     func(c *Config) { c.Hosts.S3 = "a b.com" },
 		"label com hifen final":  func(c *Config) { c.Hosts.S3 = "a-.com" },
 		"email sem arroba":       func(c *Config) { c.Email = "admin.exemplo.com" },
+		"sem email com o proxy":  func(c *Config) { c.Email, c.Stacks = "", []string{"proxy"} },
 		"email dominio invalido": func(c *Config) { c.Email = "a@b" },
 		"email com aspas":        func(c *Config) { c.Email = `a"b@exemplo.com` },
 		"host s3 invalido":       func(c *Config) { c.Hosts.S3 = "s3_x.exemplo.com" },
@@ -142,8 +143,10 @@ func TestValidateRecusa(t *testing.T) {
 
 func TestSaveRecusaConfigInvalida(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := Save(path, Default()); err == nil {
-		t.Fatal("gravou config sem e-mail")
+	bad := Default()
+	bad.Proxy.HTTPPort = 0
+	if err := Save(path, bad); err == nil {
+		t.Fatal("gravou config com porta invalida")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("arquivo criado mesmo com config invalida")
@@ -255,5 +258,23 @@ func TestAtrasDeOutroProxyForaDe80e443(t *testing.T) {
 	c.Proxy.BehindProxy = true
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "fora de 80/443") {
 		t.Errorf("aceitou atras de outro proxy nas 80/443: %v", err)
+	}
+}
+
+// o e-mail so e do Let's Encrypt do proxy: sem o proxy (ou na CA local)
+// pode ficar vazio, pra gravar o resto do Setup antes
+func TestEmailSoComOProxy(t *testing.T) {
+	c := validConfig()
+	c.Email, c.Stacks = "", nil
+	if err := c.Validate(); err != nil {
+		t.Fatalf("sem proxy, sem e-mail: %v", err)
+	}
+	c.Stacks = []string{"proxy"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "aba Infra") {
+		t.Fatalf("proxy sem e-mail: %v", err)
+	}
+	c.TLS, c.TestDomain = TLSSelfSigned, "trd.localhost"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("CA local sem e-mail: %v", err)
 	}
 }

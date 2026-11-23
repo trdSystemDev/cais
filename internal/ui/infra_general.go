@@ -86,27 +86,33 @@ func (m *model) serviceActions(st core.StackStatus) []string {
 	return ids
 }
 
-// subIDs sao os campos do painel do servico (Novo banco, Novo bucket ou
-// Portas), depois dos botoes.
-func (m *model) subIDs() []string {
-	switch {
-	case m.db.open():
-		return m.db.ids()
-	case m.ports.shown:
-		return portsIDs
+// cfgIDs sao os campos da config do servico (proxy, Garage), se tiver.
+func (m *model) cfgIDs() []string {
+	if m.svc.shown {
+		return m.svc.ids()
 	}
 	return nil
 }
 
+// subIDs sao os campos dos paineis do servico, depois dos botoes: a config
+// (proxy, Garage) e o Novo banco ou Novo bucket.
+func (m *model) subIDs() []string {
+	ids := m.cfgIDs()
+	if m.db.open() {
+		ids = append(ids, m.db.ids()...)
+	}
+	return ids
+}
+
 // infraPos e a posicao do foco no formulario do Geral: os botoes do
-// servico e depois o painel dele.
+// servico e depois os paineis dele.
 func (m *model) infraPos() int {
 	if m.infraInSub {
-		focus := m.db.focus
-		if m.ports.shown {
-			focus = m.ports.focus
+		n := len(m.serviceActions(m.selectedStack()))
+		if m.svc.active {
+			return n + m.svc.focus
 		}
-		return len(m.serviceActions(m.selectedStack())) + focus
+		return n + len(m.cfgIDs()) + m.db.focus
 	}
 	return m.infraFocus
 }
@@ -118,23 +124,27 @@ func (m *model) setInfraPos(i int) tea.Cmd {
 	if i < len(actions) {
 		m.infraInSub, m.infraFocus = false, i
 		m.db.blur()
-		m.ports.blur()
+		m.svc.blur()
 		return nil
 	}
 	m.infraInSub = true
-	if m.ports.shown {
-		m.ports.active = true
-		return m.ports.setFocus(i - len(actions))
+	i -= len(actions)
+	if cfg := len(m.cfgIDs()); i < cfg {
+		m.db.blur()
+		m.svc.active = true
+		return m.svc.setFocus(i)
 	}
+	i -= len(m.cfgIDs())
+	m.svc.blur()
 	m.db.active = true
-	return m.db.setFocus(i - len(actions))
+	return m.db.setFocus(i)
 }
 
 // leaveInfraForm devolve o teclado pros cards.
 func (m *model) leaveInfraForm() {
 	m.infraForm, m.infraInSub, m.infraFocus = false, false, 0
 	m.db.blur()
-	m.ports.blur()
+	m.svc.blur()
 }
 
 // pressAction e o clique ou enter num botao do servico.
@@ -156,8 +166,8 @@ func (m *model) pressAction(id string) tea.Cmd {
 	return nil
 }
 
-// syncInfraPanels abre no Geral o painel do servico selecionado: Novo
-// banco ou Novo bucket (servico ligado e no ar) ou as Portas (proxy).
+// syncInfraPanels abre no Geral os paineis do servico selecionado: a
+// config (proxy, Garage) e o Novo banco ou Novo bucket (ligado e no ar).
 func (m *model) syncInfraPanels() tea.Cmd {
 	st := m.selectedStack()
 	wantDB := ""
@@ -173,11 +183,11 @@ func (m *model) syncInfraPanels() tea.Cmd {
 		}
 		m.infraInSub = false
 	}
-	if wantPorts := st.Name == "proxy"; m.ports.shown != wantPorts {
-		if wantPorts {
-			m.ports.show(m.setup.plan.Config.Proxy)
+	if want := hasConfig(st.Name); m.svc.shown != want || (want && m.svc.name != st.Name) {
+		if want {
+			m.svc.show(st.Name, m.setup.plan.Config)
 		} else {
-			m.ports.close()
+			m.svc.close()
 		}
 		m.infraInSub = false
 	}
@@ -286,25 +296,26 @@ func (m *model) viewInfraGeneral(w, h int) string {
 	}
 
 	if st.Name == "garage" && st.Enabled {
-		b.WriteString("\n" + muted.Render(ansi.Truncate("S3: https://"+m.setup.plan.Config.S3Host()+" · regiao garage", inner, "…")) + "\n")
 		b.WriteString(wrap.Foreground(t.warn).Render("Os arquivos dos buckets nao entram no backup do cais.") + "\n")
 	}
-	var sub string
+	var subs []string
+	if m.svc.shown {
+		m.svc.fill(m.setup.plan.Config)
+		subs = append(subs, m.svc.view(m.setup.plan.Config, st.Enabled, inner))
+	}
 	switch {
 	case m.db.open():
-		sub = m.db.view(inner)
-	case m.ports.shown:
-		m.ports.fill(m.setup.plan.Config.Proxy)
-		sub = m.ports.view(m.setup.plan.Config, st.Enabled, inner)
+		subs = append(subs, m.db.view(inner))
 	case (st.Name == "postgres" || st.Name == "mysql" || st.Name == "garage") && st.Enabled:
 		what := map[string]string{"postgres": "Novo banco", "mysql": "Novo banco", "garage": "Novo bucket"}[st.Name]
-		b.WriteString("\n" + wrap.Inherit(muted).Render(what+" aparece aqui quando o servico estiver no ar.") + "\n")
+		subs = append(subs, wrap.Inherit(muted).Render(what+" aparece aqui quando o servico estiver no ar.")+"\n")
 	}
-	if !m.infraForm && sub == "" {
+	if !m.infraForm && len(subs) == 0 {
 		b.WriteString("\n" + muted.Render("enter ou tab entra nos botoes · ←→ secao") + "\n")
 	}
-	if sub != "" {
-		sub = t.rule(inner) + "\n" + sub
+	var sub string
+	for _, s := range subs {
+		sub += t.rule(inner) + "\n" + s
 	}
 	return t.panel(m.infraForm, w-2, h).MaxHeight(h + 2).Render(fitGeneral(top, b.String(), sub, m.infraInSub, h))
 }

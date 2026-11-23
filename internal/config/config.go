@@ -221,10 +221,17 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("test_domain: o modo de teste (tls selfsigned) precisa do dominio do teste (ex: trd.localhost): a CA local so assina nomes dele"))
 	}
 	if c.HasStack("garage") && c.Hosts.S3 == "" {
-		errs = append(errs, errors.New("hosts.s3: o Garage precisa do endereco publico do S3 (ex: s3.exemplo.com.br)"))
+		errs = append(errs, errors.New("hosts.s3: o Garage precisa do endereco publico do S3 (ex: s3.exemplo.com.br); preencha no Garage, na aba Infra"))
 	}
-	if err := validEmail(c.Email); err != nil {
-		errs = append(errs, fmt.Errorf("email: %w", err))
+	// o e-mail so serve pro Let's Encrypt do proxy: obrigatorio com ele
+	// ligado, e conferido sempre que preenchido
+	if c.Email != "" || (c.LetsEncrypt() && c.HasStack("proxy")) {
+		if err := validEmail(c.Email); err != nil {
+			if c.Email == "" {
+				err = errors.New("obrigatorio com o proxy ligado (avisos do Let's Encrypt); preencha no proxy, na aba Infra")
+			}
+			errs = append(errs, fmt.Errorf("email: %w", err))
+		}
 	}
 	if c.Hosts.S3 != "" {
 		if err := validHost(c.Hosts.S3); err != nil {

@@ -115,26 +115,26 @@ func (m *model) onServiceDone(msg serviceDoneMsg) tea.Cmd {
 	return tea.Batch(m.stacksCmd(), m.setup.planCmd(), m.syncInfraPanels())
 }
 
-// onPortsSaved volta o foco pros botoes do proxy e, com ele ligado, aplica
-// as portas novas (o proxy sobe de novo nelas).
-func (m *model) onPortsSaved(msg portsSavedMsg) tea.Cmd {
-	m.ports.busy = false
+// onSvcConfigSaved volta o foco pros botoes do servico e, com ele ligado,
+// aplica a config nova (o servico sobe de novo com ela).
+func (m *model) onSvcConfigSaved(msg svcConfigSavedMsg) tea.Cmd {
+	m.svc.busy = false
 	if msg.err != nil {
-		m.ports.err = msg.err.Error()
+		m.svc.err = msg.err.Error()
 		return nil
 	}
 	if m.infraInSub {
 		m.setInfraPos(0)
 	}
-	m.ports.blur()
-	m.infraMsgStack = "proxy"
+	m.svc.blur()
+	m.infraMsgStack = msg.name
 	switch {
-	case !m.serviceOn("proxy"):
-		m.infraMsgC, m.infraMsg = "ok", "Portas salvas: valem quando o proxy ligar."
+	case !m.serviceOn(msg.name):
+		m.infraMsgC, m.infraMsg = "ok", "Config do "+msg.name+" salva: vale quando ele ligar."
 	case m.busy():
-		m.infraMsgC, m.infraMsg = "warn", "Portas salvas. Outra mudanca em andamento: Aplicar quando ela terminar."
+		m.infraMsgC, m.infraMsg = "warn", "Config do "+msg.name+" salva. Outra mudanca em andamento: Aplicar quando ela terminar."
 	default:
-		return tea.Batch(m.setService("proxy", true, true), m.setup.planCmd())
+		return tea.Batch(m.setService(msg.name, true, true), m.setup.planCmd())
 	}
 	return m.setup.planCmd()
 }
@@ -409,14 +409,16 @@ func (m *model) infraClick(msg tea.MouseMsg) tea.Cmd {
 				return m.pressAction(id)
 			}
 		}
-		if m.db.open() {
-			if cmd, ok := m.db.click(msg); ok {
+		if m.svc.shown {
+			if cmd, ok := m.svc.click(msg); ok {
+				m.db.blur()
 				m.infraForm, m.infraInSub = true, true
 				return cmd
 			}
 		}
-		if m.ports.shown {
-			if cmd, ok := m.ports.click(msg); ok {
+		if m.db.open() {
+			if cmd, ok := m.db.click(msg); ok {
+				m.svc.blur()
 				m.infraForm, m.infraInSub = true, true
 				return cmd
 			}
@@ -518,8 +520,8 @@ func (m *model) infraFormKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.ports.shown {
-		return m.ports.key(msg)
+	if m.svc.active {
+		return m.svc.key(msg)
 	}
 	if m.db.open() {
 		return m.db.key(msg)

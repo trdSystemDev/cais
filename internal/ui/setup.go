@@ -33,7 +33,7 @@ type item struct {
 // setupSections sao as sub-abas do Setup, cada uma em tela cheia. As duas
 // primeiras sao partes do mesmo formulario (um Salvar grava tudo).
 var setupSections = []struct{ title, hint string }{
-	{"Geral", "Certificados dos apps e o endereco publico do S3. Cada app traz o proprio dominio no compose."},
+	{"Geral", "O GitHub App do cais. A config de cada servico (certificados e portas do proxy, endereco do S3) fica no card dele, na aba Infra."},
 	{"Avisos", "E-mail pela Brevo quando um deploy automatico ou um backup falha."},
 	{"Backups", ""},
 }
@@ -46,7 +46,6 @@ const (
 
 const (
 	kindInput = iota
-	kindSelect
 	kindButton
 )
 
@@ -67,7 +66,6 @@ type setupPage struct {
 	focus  int
 	sec    int  // sub-aba aberta
 	inForm bool // o teclado esta nos campos (senao, nas sub-abas)
-	tls    int  // 0 Let's Encrypt, 1 CA local
 
 	cfg     config.Config // ultima lida: base do que o form nao mostra
 	plan    bootstrap.Plan
@@ -111,11 +109,6 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 		ti.SetWidth(28)
 		p.items = append(p.items, &item{id: id, label: label, kind: kindInput, input: &ti, section: section})
 	}
-	input("email", "E-mail", "avisos do Let's Encrypt")
-	p.items = append(p.items, &item{id: "tls", label: "Certificados", kind: kindSelect})
-	// so no modo de teste (CA local): os nomes que ela assina
-	input("testDomain", "Dominio (teste)", "ex: trd.localhost")
-	input("hostS3", "S3 do Garage", "ex: s3.exemplo.com.br")
 
 	input("ghAppID", "App ID", "numero na pagina do app")
 	input("ghKey", "Chave privada", "cole o .pem ou o caminho")
@@ -284,17 +277,10 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 
 func (p *setupPage) fill(c config.Config) {
 	p.cfg = c
-	p.get("testDomain").input.SetValue(c.TestDomain)
-	p.get("email").input.SetValue(c.Email)
-	p.tls = 0
-	if !c.LetsEncrypt() {
-		p.tls = 1
-	}
 	p.get("ghAppID").input.SetValue("")
 	if c.GitHub.AppID > 0 {
 		p.get("ghAppID").input.SetValue(strconv.FormatInt(c.GitHub.AppID, 10))
 	}
-	p.get("hostS3").input.SetValue(c.Hosts.S3)
 	p.get("notifyFrom").input.SetValue(c.Notify.From)
 	p.to = nil
 	for _, addr := range c.Notify.To {
@@ -304,11 +290,11 @@ func (p *setupPage) fill(c config.Config) {
 }
 
 // formApply le o formulario agora e devolve o que ele muda numa config: so
-// os campos do formulario. O resto (servicos e portas do proxy, na Infra;
+// os campos do formulario. O resto (os servicos e a config deles, na Infra;
 // backup, no painel ao lado) fica como estiver na config na hora de gravar.
 func (p *setupPage) formApply() func(*config.Config) {
 	val := func(id string) string { return strings.TrimSpace(p.get(id).input.Value()) }
-	email, tls, testDomain, appID, s3, from := val("email"), p.tls, val("testDomain"), val("ghAppID"), val("hostS3"), val("notifyFrom")
+	appID, from := val("ghAppID"), val("notifyFrom")
 	var to []string
 	for _, ti := range p.to {
 		if addr := strings.TrimSpace(ti.Value()); addr != "" {
@@ -316,18 +302,12 @@ func (p *setupPage) formApply() func(*config.Config) {
 		}
 	}
 	return func(c *config.Config) {
-		c.Email = email
-		c.TLS, c.TestDomain = "", ""
-		if tls == 1 {
-			c.TLS, c.TestDomain = config.TLSSelfSigned, testDomain
-		}
 		c.GitHub.AppID = 0
 		if id, err := strconv.ParseInt(appID, 10, 64); err == nil {
 			c.GitHub.AppID = id
 		} else if appID != "" {
 			c.GitHub.AppID = -1 // a validacao da config explica
 		}
-		c.Hosts.S3 = s3
 		c.Notify.From, c.Notify.To = from, to
 	}
 }
@@ -410,12 +390,9 @@ func (p *setupPage) notifyTest() tea.Cmd {
 
 func (p *setupPage) setStatus(kind, msg string) { p.statusC, p.status = kind, msg }
 
-// visible diz se o item esta na sub-aba aberta: o Salvar em todo
-// formulario, e o dominio do teste so com a CA local.
+// visible diz se o item esta na sub-aba aberta (o Salvar em todo
+// formulario).
 func (p *setupPage) visible(it *item) bool {
-	if it.id == "testDomain" && p.tls == 0 {
-		return false
-	}
 	return it.section == p.sec || (it.section < 0 && p.sec < secBackups)
 }
 
@@ -473,9 +450,6 @@ func (p *setupPage) move(d int) tea.Cmd {
 // activate e o Enter, espaco ou clique num item que nao e campo de texto.
 func (p *setupPage) activate(it *item) tea.Cmd {
 	switch {
-	case it.kind == kindSelect:
-		p.tls = 1 - p.tls
-		p.move(0) // o dominio do teste aparece ou some
 	case it.id == "save":
 		return p.save()
 	case it.id == "notifyTest":
@@ -597,10 +571,6 @@ func (p *setupPage) key(msg tea.KeyPressMsg) tea.Cmd {
 		if k == "enter" {
 			return p.move(1)
 		}
-	case "left", "right":
-		if it.kind == kindSelect {
-			return p.activate(it)
-		}
 	}
 	if it.kind == kindInput {
 		ti, cmd := it.input.Update(msg)
@@ -649,11 +619,10 @@ func (p *setupPage) view(w, h int, pills string) string {
 	return t.panel(p.inForm, w, h).MaxHeight(h + 2).Render(b.String())
 }
 
-// viewForm desenha os campos da sub-aba; o GitHub App, no Geral, fica numa
-// secao propria separada por uma linha, como as secoes da aba Apps.
+// viewForm desenha os campos da sub-aba (no Geral, o GitHub App com o
+// Testar; nos Avisos, a lista de destinatarios).
 func (p *setupPage) viewForm(w int) string {
 	t := p.th
-	field := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(30)
 	var rows, buttons []string
 	for i, it := range p.items {
 		if !p.visible(it) {
@@ -681,7 +650,7 @@ func (p *setupPage) viewForm(w int) string {
 			continue
 		}
 		if it.id == "ghAppID" {
-			rows = append(rows, "", t.rule(w), t.bold().Render("GitHub App"),
+			rows = append(rows, t.bold().Render("GitHub App"),
 				t.fg(t.muted).Width(w).Render("baixa o codigo dos repositorios privados no deploy"))
 		}
 		marker, label := "  ", t.fg(t.text).Width(16).Render(it.label)
@@ -689,14 +658,7 @@ func (p *setupPage) viewForm(w int) string {
 			marker = t.fg(t.accent).Bold(true).Render("› ")
 			label = t.fg(t.accent).Bold(true).Width(16).Render(it.label)
 		}
-		var value string
-		switch it.kind {
-		case kindInput:
-			value = t.input(it.input, 30)
-		case kindSelect:
-			value = field.Render("‹ " + []string{"Let's Encrypt", "CA local (teste)"}[p.tls] + " ›")
-		}
-		rows = append(rows, p.zones.Mark(it.id, marker+label+value))
+		rows = append(rows, p.zones.Mark(it.id, marker+label+t.input(it.input, 30)))
 	}
 	return strings.Join(rows, "\n") + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, append([]string{"  "}, buttons...)...)
 }
@@ -743,9 +705,9 @@ func (p *setupPage) viewPlan(w int) string {
 
 	if !pl.Configured {
 		b.WriteString("\n" + t.fg(t.warn).Bold(true).Render("Ainda sem configuracao.") + "\n")
-		b.WriteString(wrap.Render("Preencha o e-mail (avisos do Let's Encrypt) e o GitHub App e salve (ctrl+s). "+
-			"Salvar so grava a configuracao: nada sobe. Depois, na aba Infra, ligue o proxy (publica os apps "+
-			"com HTTPS) e o que mais for usar: Postgres, MySQL, Garage.") + "\n")
+		b.WriteString(wrap.Render("Preencha o GitHub App e salve (ctrl+s). Salvar so grava a configuracao: nada sobe. "+
+			"Depois, na aba Infra, ligue o proxy (publica os apps com HTTPS; o e-mail do Let's Encrypt fica no painel "+
+			"dele) e o que mais for usar: Postgres, MySQL, Garage.") + "\n")
 		return b.String()
 	}
 	for _, pr := range pl.Problems {

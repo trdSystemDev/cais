@@ -69,9 +69,9 @@ type model struct {
 	disconnected bool
 	setup        *setupPage
 	apps         *appsPage
-	db           *dbPanel    // Novo banco, na aba Infra
-	ports        *portsPanel // Portas do proxy, na aba Infra
-	bk           *bkPanel    // Backups, na aba Setup
+	db           *dbPanel   // Novo banco, na aba Infra
+	svc          *svcConfig // config do servico (proxy, Garage), na aba Infra
+	bk           *bkPanel   // Backups, na aba Setup
 
 	selectionGeneration uint64
 	logSelection        logSelection
@@ -108,7 +108,7 @@ func newModel(api core.API, states <-chan core.State) *model {
 	m.setup = newSetupPage(api, m.zones, m.th)
 	m.apps = newAppsPage(api, m.zones, m.th)
 	m.db = newDBPanel(api, m.zones, m.th)
-	m.ports = newPortsPanel(api, m.zones, m.th)
+	m.svc = newSvcConfig(api, m.zones, m.th)
 	m.bk = newBkPanel(api, m.zones, m.th)
 	return m
 }
@@ -154,7 +154,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setup.setTheme(m.th)
 		m.apps.setTheme(m.th)
 		m.db.setTheme(m.th)
-		m.ports.setTheme(m.th)
+		m.svc.setTheme(m.th)
 		m.bk.setTheme(m.th)
 		return m, nil
 	case stateMsg:
@@ -225,8 +225,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tabApps:
 			return m, m.apps.paste(msg)
 		case tabInfra:
-			if m.ports.shown {
-				return m, m.ports.paste(msg)
+			if m.svc.active {
+				return m, m.svc.paste(msg)
 			}
 			return m, m.db.paste(msg)
 		}
@@ -258,8 +258,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.onServiceDone(msg)
 	case serviceCtlMsg:
 		return m, m.onServiceCtl(msg)
-	case portsSavedMsg:
-		return m, m.onPortsSaved(msg)
+	case svcConfigSavedMsg:
+		return m, m.onSvcConfigSaved(msg)
 	case appLogsMsg:
 		return m, m.onAppLogs(msg)
 	case appLogsTick:
@@ -353,7 +353,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	// numeros trocam de aba, menos quando o foco esta num campo de texto
 	typing := (m.tab == tabSetup && (m.setup.typing() || m.bk.typing(m.state.Backup))) || (m.tab == tabApps && m.apps.typing()) ||
-		(m.tab == tabInfra && (m.db.typing() || m.ports.typing()))
+		(m.tab == tabInfra && (m.db.typing() || m.svc.typing()))
 	if !typing && len(k) == 1 && k[0] >= '1' && int(k[0]-'1') < len(tabs) {
 		return m.setTab(int(k[0] - '1'))
 	}

@@ -81,9 +81,14 @@ func Enabled(c config.Config) ([]Stack, error) {
 	return out, nil
 }
 
-// checkStack confere os campos da config que so uma stack exige (hoje
-// nenhuma tem regra propria).
-func checkStack(string, config.Config) error { return nil }
+// checkStack confere os campos da config que so uma stack exige: o proxy
+// com Let's Encrypt precisa do e-mail.
+func checkStack(name string, c config.Config) error {
+	if name == "proxy" && c.LetsEncrypt() && c.Email == "" {
+		return errors.New("proxy: falta o e-mail do Let's Encrypt (no proxy, na aba Infra)")
+	}
+	return nil
+}
 
 // Rendered e o compose de uma stack pronto pra gravar.
 type Rendered struct {

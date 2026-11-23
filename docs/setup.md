@@ -1,6 +1,6 @@
 # Setup e configuracao
 
-O Setup so guarda a configuracao da VPS (e-mail do Let's Encrypt, GitHub App, avisos, host do S3, backups): salvar nao sobe nada. Os servicos (proxy, bancos, S3) se ligam na aba **Infra** ou com `cais service`, e as portas do proxy ficam no card dele, na Infra.
+O Setup so guarda a configuracao da VPS (GitHub App, avisos, backups): salvar nao sobe nada. Os servicos (proxy, bancos, S3) se ligam na aba **Infra** ou com `cais service`, e a config de cada um fica no card dele, na Infra: certificados e portas no proxy, o endereco do S3 no Garage.
 
 ## Comandos
 
@@ -18,9 +18,8 @@ cais service postgres on # liga o Postgres
 cais service garage off  # desliga o S3 e preserva os volumes
 ```
 
-A aba **Setup** e dividida em sub-abas de tela cheia: **Geral** (e-mail do
-Let's Encrypt, certificados — Let's Encrypt, ou a CA local pra teste no PC —,
-o host do S3 e o GitHub App), **Avisos** (e-mail pela Brevo) e **Backups** (a
+A aba **Setup** e dividida em sub-abas de tela cheia: **Geral** (o GitHub
+App), **Avisos** (e-mail pela Brevo) e **Backups** (a
 configuracao dos [backups](backups.md)). ←/→ troca a sub-aba; enter ou tab
 entra nos campos e esc volta. Geral e Avisos sao o mesmo formulario: o Salvar
 de qualquer uma grava tudo.
@@ -30,10 +29,13 @@ ou use ↑/↓; ←/→ troca a secao; enter ou tab entra nos botoes e esc volta
 
 - **Geral**: **Ligar/Desligar** (grava na config e sobe ou derruba o
   servico), **Aplicar** quando a config salva muda um servico ligado (ex: o
-  e-mail do Let's Encrypt muda o proxy; tecla `a`), **Iniciar/Parar** e
-  **Reiniciar** (so os containers: o servico continua ligado). Embaixo, o do
-  servico: as **portas** no proxy, o **Novo banco** no Postgres/MySQL e o
-  **Novo bucket** no Garage, com a lista dos ja criados.
+  e-mail do Let's Encrypt mudado pelo CLI muda o proxy; tecla `a`),
+  **Iniciar/Parar** e **Reiniciar** (so os containers: o servico continua
+  ligado). Embaixo, a config do servico, com um Salvar que ja aplica com
+  ele ligado: no proxy, os **certificados** (Let's Encrypt com o e-mail dos
+  avisos, ou a CA local com o dominio do teste) e as **portas**; no Garage, o
+  **endereco do S3**. E o **Novo banco** no Postgres/MySQL e o **Novo
+  bucket** no Garage, com a lista dos ja criados.
 - **Logs**: os logs do container (ultimas 200 linhas, atualizadas a cada 2
   segundos). Enter entra e ←/→ troca o container nas stacks com mais de um;
   PgUp/PgDown ou a roda do mouse rola, e End volta as mensagens recentes.

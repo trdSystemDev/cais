@@ -315,7 +315,7 @@ func TestCliqueTrocaDeAba(t *testing.T) {
 	waitFor(t, m, "+ Novo app")
 
 	click(t, m, "tab:Setup")
-	waitFor(t, m, "Certificados")
+	waitFor(t, m, "GitHub App")
 }
 
 func TestAtalhoNumericoTrocaDeAba(t *testing.T) {
@@ -335,12 +335,12 @@ func TestNumeroNoCampoNaoTrocaDeAba(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	press(t, m, "4")
-	click(t, m, "email")
+	click(t, m, "ghAppID")
 	press(t, m, "4")
 	if m.tab != tabSetup {
 		t.Fatalf("trocou pra aba %d digitando no campo", m.tab)
 	}
-	if v := m.setup.get("email").input.Value(); !strings.HasSuffix(v, "4") {
+	if v := m.setup.get("ghAppID").input.Value(); !strings.HasSuffix(v, "4") {
 		t.Fatalf("campo = %q, o 4 tinha que entrar nele", v)
 	}
 }
@@ -386,7 +386,7 @@ func TestInfraMostraAsStacks(t *testing.T) {
 	waitFor(t, m, "Ultima verificacao")
 	out := screen(m)
 	for _, want := range []string{
-		"HTTPS dos apps", "✓ proxy", "Geral", "Logs", "Desligar", "Parar", "Reiniciar", "Portas do proxy",
+		"HTTPS dos apps", "✓ proxy", "Geral", "Logs", "Desligar", "Parar", "Reiniciar", "Certificados", "Porta HTTPS",
 		"✓ postgres", "ainda nao subiu", // mysql
 		"· garage",
 	} {
@@ -446,14 +446,18 @@ func TestInfraLigaEDesligaServico(t *testing.T) {
 	}
 }
 
-func TestInfraSemConfigAvisa(t *testing.T) {
+// numa VPS sem config os servicos ligam direto pela Infra (nao dependem
+// do Setup); o proxy com Let's Encrypt so pede o e-mail, no painel dele
+func TestInfraSemConfigLigaServico(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	m := open(t, c)
 	click(t, m, "tab:Infra")
 	waitFor(t, m, "Ultima verificacao")
+	click(t, m, "toggle:proxy")
+	waitFor(t, m, "preencha no proxy, na aba Infra")
 	click(t, m, "stack:mysql")
 	click(t, m, "toggle:mysql")
-	waitFor(t, m, "preencha a aba Setup primeiro")
+	waitFor(t, m, "mysql ligado.")
 }
 
 func TestInfraAtualizaAoAbrirEPeloBotao(t *testing.T) {
@@ -477,22 +481,27 @@ func TestInfraAtualizaAoAbrirEPeloBotao(t *testing.T) {
 	}
 }
 
-// o proxy liga pela Infra; mudar a config dele no Setup mostra o Aplicar,
-// que sobe de novo so com a config nova
+// o proxy liga pela Infra, com o e-mail do Let's Encrypt no painel dele;
+// mudar a config ali com o proxy ligado ja aplica, e mudar por fora (CLI)
+// mostra o Aplicar, que sobe de novo so com a config nova
 func TestInfraLigaOProxyEAplicaAConfig(t *testing.T) {
 	c, ups, _ := testCore(t, okChecker)
 	m := open(t, c)
-	click(t, m, "tab:Setup")
-	// Let's Encrypt: o e-mail vai no compose do proxy
-	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
-	click(t, m, "save")
-	waitFor(t, m, "Config salva.")
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "· proxy")
+	// sem o e-mail o proxy com Let's Encrypt nao liga, e diz onde por
+	click(t, m, "toggle:proxy")
+	waitFor(t, m, "preencha no proxy, na aba Infra")
+	if ups.Load() != 0 {
+		t.Fatal("subiu o proxy sem o e-mail")
+	}
+	click(t, m, "cert-email")
+	m.svc.email.SetValue("admin@exemplo.com.br")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "vale quando ele ligar")
 	if ups.Load() != 0 {
 		t.Fatal("salvar subiu stack")
 	}
-
-	click(t, m, "tab:Infra")
-	waitFor(t, m, "· proxy")
 	click(t, m, "toggle:proxy")
 	waitFor(t, m, "proxy ligado.")
 	waitFor(t, m, "✓ proxy")
@@ -500,20 +509,32 @@ func TestInfraLigaOProxyEAplicaAConfig(t *testing.T) {
 		t.Fatalf("%d compose up, esperava 1 (proxy)", ups.Load())
 	}
 
-	// e-mail novo muda o compose do proxy: Aplicar
-	click(t, m, "tab:Setup")
-	m.setup.get("email").input.SetValue("outro@exemplo.com.br")
-	click(t, m, "save")
-	waitFor(t, m, "Aplicar na aba Infra")
-	click(t, m, "tab:Infra")
-	waitFor(t, m, "Aplicar")
-	click(t, m, "apply:proxy")
+	// e-mail novo pelo painel, com o proxy ligado: Salvar e aplicar
+	click(t, m, "cert-email")
+	m.svc.email.SetValue("outro@exemplo.com.br")
+	click(t, m, "cfg-save")
 	waitFor(t, m, "config aplicada no proxy.")
 	if ups.Load() != 2 {
 		t.Fatalf("%d compose up, esperava 2", ups.Load())
 	}
-	if info, _ := c.LoadConfig(context.Background()); !info.Config.HasStack("proxy") {
-		t.Fatal("aplicar desligou o proxy")
+
+	// mudanca por fora (CLI): a Infra mostra o Aplicar
+	info, _ := c.LoadConfig(context.Background())
+	info.Config.Email = "terceiro@exemplo.com.br"
+	if err := c.SaveConfig(context.Background(), info.Config); err != nil {
+		t.Fatal(err)
+	}
+	// a TUI ve a config nova ao reabrir a aba
+	click(t, m, "tab:Setup")
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Aplicar")
+	click(t, m, "apply:proxy")
+	waitFor(t, m, "config aplicada no proxy.")
+	if ups.Load() != 3 {
+		t.Fatalf("%d compose up, esperava 3", ups.Load())
+	}
+	if info, _ := c.LoadConfig(context.Background()); !info.Config.HasStack("proxy") || info.Config.Email != "terceiro@exemplo.com.br" {
+		t.Fatalf("config depois do aplicar: %+v", info.Config)
 	}
 }
 
@@ -556,6 +577,50 @@ func TestInfraNovoBucket(t *testing.T) {
 	waitFor(t, m, "s3_portal_fotos_access_key, s3_portal_fotos_secret_key (sem app)")
 	if list, err := c.Buckets(context.Background()); err != nil || len(list) != 1 {
 		t.Fatalf("buckets %+v %v", list, err)
+	}
+}
+
+// o endereco do S3 e config do Garage: fica no card dele, na Infra. Sem
+// ele o Garage nao liga e diz onde por; com o Garage no ar, o painel fica
+// acima do Novo bucket e o Tab passa de um pro outro
+func TestInfraEnderecoDoS3NoGarage(t *testing.T) {
+	c, ups, _ := testCore(t, okChecker)
+	setupDone(t, c, "proxy")
+	info, _ := c.LoadConfig(context.Background())
+	info.Config.Hosts.S3 = ""
+	c.SaveConfig(context.Background(), info.Config)
+	m := open(t, c)
+	click(t, m, "tab:Setup")
+	waitFor(t, m, "GitHub App")
+	if strings.Contains(screen(m), "S3 do Garage") {
+		t.Fatal("o endereco do S3 ainda esta no Setup")
+	}
+
+	click(t, m, "tab:Infra")
+	click(t, m, "stack:garage")
+	waitFor(t, m, "Endereco do S3")
+	click(t, m, "toggle:garage")
+	waitFor(t, m, "preencha no Garage, na aba Infra")
+
+	typeIn(t, m, "s3-host", "s3.trd.localhost")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "Config do garage salva: vale quando ele ligar.")
+	if info, _ := c.LoadConfig(context.Background()); info.Config.Hosts.S3 != "s3.trd.localhost" {
+		t.Fatalf("hosts.s3 = %q", info.Config.Hosts.S3)
+	}
+	before := ups.Load()
+	click(t, m, "toggle:garage")
+	waitFor(t, m, "garage ligado.")
+	waitFor(t, m, "Novo bucket no garage")
+	if ups.Load() == before {
+		t.Fatal("o Garage nao subiu")
+	}
+	// os dois paineis no Tab: do Salvar da config pro nome do bucket
+	click(t, m, "s3-host")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // Salvar
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // nome do bucket
+	if !m.db.active || m.db.focusID() != "db-name" || m.svc.active {
+		t.Fatalf("o Tab nao passou pro Novo bucket: db %v %q, cfg %v", m.db.active, m.db.focusID(), m.svc.active)
 	}
 }
 

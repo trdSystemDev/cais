@@ -69,7 +69,8 @@ deploy.
 
 ## Buckets S3 (Garage)
 
-O Garage publica a API S3 em `https://<hosts.s3>`, com
+O Garage publica a API S3 em `https://<hosts.s3>` (o endereco do S3, no
+card do Garage na aba **Infra**, ou `cais setup config --host-s3`), com
 regiao `garage` e enderecamento por caminho (path-style). O Setup prepara
 o layout de no unico na primeira subida; execucoes seguintes preservam o
 layout. Os volumes `garage_meta` e `garage_data` persistem ao desligar.

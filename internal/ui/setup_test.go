@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,15 +27,11 @@ func openSetup(t *testing.T) (*model, func() int32) {
 	return m, ups.Load
 }
 
-// fill preenche o formulario do Setup como o usuario faria: e-mail e CA
-// local (dispensa DNS) com o dominio do teste.
-func fill(t *testing.T, m *model, domain string) {
+// fill preenche o formulario do Setup como o usuario faria (a config dos
+// servicos fica no card de cada um, na Infra).
+func fill(t *testing.T, m *model, appID string) {
 	t.Helper()
-	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
-	if m.setup.tls == 0 {
-		click(t, m, "tls")
-	}
-	m.setup.get("testDomain").input.SetValue(domain)
+	m.setup.get("ghAppID").input.SetValue(appID)
 }
 
 // o Setup so tem configuracoes: quais servicos ligar fica na aba Infra
@@ -54,7 +51,7 @@ func TestSetupNaoTemServicos(t *testing.T) {
 
 func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {
 	m, _ := openSetup(t)
-	fill(t, m, "trd.localhost")
+	fill(t, m, "5512022")
 	click(t, m, "save")
 	waitFor(t, m, "Config salva.")
 	waitFor(t, m, "Nenhum servico ligado")
@@ -63,7 +60,7 @@ func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.Exists || info.Config.TestDomain != "trd.localhost" || info.Config.LetsEncrypt() {
+	if !info.Exists || info.Config.GitHub.AppID != 5512022 {
 		t.Fatalf("config gravada: %+v", info)
 	}
 	if len(info.Config.Stacks) != 0 {
@@ -73,9 +70,9 @@ func TestSetupSalvaPeloFormularioEMostraOPlano(t *testing.T) {
 
 func TestSetupMostraErroDeValidacao(t *testing.T) {
 	m, _ := openSetup(t)
-	fill(t, m, "trd.local")
+	fill(t, m, "abc")
 	click(t, m, "save")
-	waitFor(t, m, "reservado pro mDNS")
+	waitFor(t, m, "id invalido")
 	if info, _ := m.api.LoadConfig(context.Background()); info.Exists {
 		t.Fatal("gravou config invalida")
 	}
@@ -85,7 +82,7 @@ func TestSetupMostraErroDeValidacao(t *testing.T) {
 // executar; os servicos se ligam na aba Infra
 func TestSetupSalvarNaoSobeNada(t *testing.T) {
 	m, ups := openSetup(t)
-	fill(t, m, "trd.localhost")
+	fill(t, m, "5512022")
 	click(t, m, "save")
 	waitFor(t, m, "Config salva.")
 	waitFor(t, m, "Nenhum servico ligado")
@@ -114,8 +111,7 @@ func openSetupGitHub(t *testing.T) (*model, *githubtest.Server) {
 	m := open(t, c)
 	click(t, m, "tab:Setup")
 	waitFor(t, m, "Ainda sem configuracao")
-	fill(t, m, "trd.localhost")
-	m.setup.get("ghAppID").input.SetValue("5512022")
+	fill(t, m, "5512022")
 	return m, gh
 }
 
@@ -172,7 +168,7 @@ func TestSetupRecusaChaveInvalida(t *testing.T) {
 // do mesmo Salvar; a chave some do campo depois de gravada
 func TestSetupAvisosPorEmail(t *testing.T) {
 	m, _ := openSetup(t)
-	fill(t, m, "trd.localhost")
+	fill(t, m, "5512022")
 	m.setup.get("notifyFrom").input.SetValue("cais@exemplo.com.br")
 	m.setup.get("brevoKey").input.SetValue("xkeysib-teste")
 	// os avisos tem sub-aba propria; o Salvar dela grava o formulario todo
@@ -206,29 +202,44 @@ func TestSetupAvisosPorEmail(t *testing.T) {
 	}
 }
 
-// nao ha dominio da VPS: com Let's Encrypt so o e-mail basta, e o dominio
-// do teste so aparece (e so conta no Tab) com a CA local
-func TestSetupSemDominio(t *testing.T) {
+// os certificados ficam no proxy, na Infra: com Let's Encrypt pede o
+// e-mail e, com a CA local, o dominio do teste no lugar dele (o Tab so
+// passa pelo que aparece)
+func TestInfraCertificadosNoProxy(t *testing.T) {
 	m, _ := openSetup(t)
-	if strings.Contains(screen(m), "Dominio (teste)") {
+	if s := screen(m); strings.Contains(s, "‹ Let's Encrypt ›") || strings.Contains(s, "Dominio (teste)") || strings.Contains(s, "E-mail  ") {
+		t.Fatalf("os certificados ainda estao no Setup:\n%s", s)
+	}
+	click(t, m, "tab:Infra")
+	waitFor(t, m, "Certificados")
+	waitFor(t, m, "‹ Let's Encrypt ›")
+	if strings.Contains(screen(m), "trd.localhost") || slices.Contains(m.svc.ids(), "cert-domain") {
 		t.Fatal("dominio do teste aparece com Let's Encrypt")
 	}
-	m.setup.enter(false)
-	for range len(m.setup.items) {
-		if m.setup.items[m.setup.focus].id == "testDomain" {
-			t.Fatal("o Tab passa pelo dominio do teste escondido")
-		}
-		m.setup.move(1)
+	click(t, m, "cert-email")
+	m.svc.email.SetValue("admin@exemplo.com.br")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "Config do proxy salva")
+	if info, _ := m.api.LoadConfig(context.Background()); info.Config.Email != "admin@exemplo.com.br" || !info.Config.LetsEncrypt() {
+		t.Fatalf("config: %+v", info.Config)
 	}
-	m.setup.get("email").input.SetValue("admin@exemplo.com.br")
-	click(t, m, "save")
-	waitFor(t, m, "Config salva.")
-	waitFor(t, m, "Nenhum servico ligado")
 
-	click(t, m, "tls")
-	waitFor(t, m, "Dominio (teste)")
-	click(t, m, "save")
-	waitFor(t, m, "precisa do dominio do")
+	click(t, m, "cert-tls")
+	waitFor(t, m, "‹ CA local (teste) ›")
+	if slices.Contains(m.svc.ids(), "cert-email") {
+		t.Fatal("o e-mail continua no Tab com a CA local")
+	}
+	click(t, m, "cert-domain")
+	m.svc.domain.SetValue("trd.local")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "reservado pro mDNS")
+	m.svc.domain.SetValue("trd.localhost")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "Config do proxy salva")
+	info, _ := m.api.LoadConfig(context.Background())
+	if info.Config.LetsEncrypt() || info.Config.TestDomain != "trd.localhost" {
+		t.Fatalf("CA local nao gravada: %+v", info.Config)
+	}
 }
 
 // trocar a porta do proxy: Infra -> Portas no card do proxy -> Salvar e
@@ -239,7 +250,7 @@ func TestInfraTrocaAPortaDoProxy(t *testing.T) {
 	before := ups.Load()
 	m := open(t, c)
 	click(t, m, "tab:Setup")
-	waitFor(t, m, "Certificados")
+	waitFor(t, m, "GitHub App")
 	if strings.Contains(screen(m), "Porta HTTP") {
 		t.Fatal("as portas do proxy ainda estao no Setup")
 	}
@@ -247,16 +258,16 @@ func TestInfraTrocaAPortaDoProxy(t *testing.T) {
 	click(t, m, "tab:Infra")
 	waitFor(t, m, "✓ proxy")
 	// o proxy e o primeiro card: as portas ficam no Geral dele
-	waitFor(t, m, "Portas do proxy")
+	waitFor(t, m, "Porta HTTPS")
 	waitFor(t, m, "Salvar e aplicar")
-	if v := m.ports.https.Value(); v != "443" {
+	if v := m.svc.https.Value(); v != "443" {
 		t.Fatalf("porta HTTPS no painel = %q", v)
 	}
 	click(t, m, "ports-http")
-	m.ports.http.SetValue("8080")
+	m.svc.http.SetValue("8080")
 	click(t, m, "ports-https")
-	m.ports.https.SetValue("8443")
-	click(t, m, "ports-save")
+	m.svc.https.SetValue("8443")
+	click(t, m, "cfg-save")
 	waitFor(t, m, "config aplicada no proxy.")
 	waitFor(t, m, ":8080/:8443")
 	if ups.Load() != before+1 {
@@ -274,18 +285,18 @@ func TestInfraTrocaAPortaDoProxy(t *testing.T) {
 
 	// porta invalida: nao grava e diz por que
 	click(t, m, "ports-https")
-	m.ports.https.SetValue("8080")
-	click(t, m, "ports-save")
+	m.svc.https.SetValue("8080")
+	click(t, m, "cfg-save")
 	waitFor(t, m, "nao podem ser iguais")
 	if ups.Load() != before+1 {
 		t.Fatal("porta invalida subiu o proxy")
 	}
 
 	// atras do nginx: so no loopback, e o aviso diz o que o nginx repassa
-	m.ports.https.SetValue("8443")
+	m.svc.https.SetValue("8443")
 	click(t, m, "ports-behind")
 	waitFor(t, m, "[x] atras do nginx desta VPS")
-	click(t, m, "ports-save")
+	click(t, m, "cfg-save")
 	waitFor(t, m, ":8080/:8443 atras do nginx")
 	info, _ = c.LoadConfig(context.Background())
 	if !info.Config.Proxy.BehindProxy {
@@ -309,7 +320,7 @@ func TestSetupSubAbasPeloTeclado(t *testing.T) {
 	}
 	key(tea.KeyRight)
 	waitFor(t, m, "Chave da Brevo")
-	if strings.Contains(screen(m), "Certificados") {
+	if strings.Contains(screen(m), "GitHub App") {
 		t.Fatal("Avisos ainda mostra o Geral")
 	}
 	key(tea.KeyTab)
@@ -330,7 +341,7 @@ func TestSetupSubAbasPeloTeclado(t *testing.T) {
 	key(tea.KeyRight)
 	waitFor(t, m, "OAuth client do Google")
 	key(tea.KeyRight)
-	waitFor(t, m, "Certificados")
+	waitFor(t, m, "GitHub App")
 	press(t, m, "1")
 	if m.tab != tabDashboard {
 		t.Fatalf("fora dos campos o 1 nao trocou de aba: %d", m.tab)

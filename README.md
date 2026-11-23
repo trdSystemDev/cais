@@ -49,10 +49,11 @@ chaves. Opcoes e detalhes em [docs/instalacao.md](docs/instalacao.md).
    ssh cais@ip-da-vps
    ```
 
-2. Na aba **Setup**, preencha o e-mail do Let's Encrypt e o GitHub App e
-   clique em **Salvar**. O Setup so guarda a configuracao: nada sobe.
-3. Na aba **Infra**, ligue o **proxy** (publica os apps com HTTPS) e o que
-   mais for usar: Postgres, MySQL, Garage (S3).
+2. Na aba **Setup**, preencha o GitHub App e clique em **Salvar**. O Setup
+   so guarda a configuracao: nada sobe.
+3. Na aba **Infra**, no **proxy**, ponha o e-mail do Let's Encrypt e ligue ele
+   (publica os apps com HTTPS); ligue tambem o que mais for usar: Postgres,
+   MySQL, Garage (S3).
 4. Na aba **Apps**, **+ Novo app** com o link do repositorio. A **Ajuda** do
    app gera o trecho do compose (dominio, redes, secrets) pra colar no
    repositorio. Depois, **Deploy**.

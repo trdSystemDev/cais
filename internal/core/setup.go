@@ -100,9 +100,11 @@ func (c *Core) SetService(ctx context.Context, name string, on bool) (Setup, err
 	}
 	defer c.infra.Unlock()
 
+	// sem config ainda, parte do padrao: os servicos nao dependem do Setup
+	// (o proxy com Let's Encrypt pede o e-mail, e a validacao diz onde por)
 	cfg, err := config.Load(c.deps.ConfigPath)
 	if errors.Is(err, config.ErrNotFound) {
-		return Setup{}, errors.New("a VPS ainda nao tem configuracao: preencha a aba Setup primeiro")
+		cfg, err = config.Default(), nil
 	}
 	if err != nil {
 		return Setup{}, err
