@@ -420,11 +420,11 @@ func (f *fakeAppDocker) PS(_ context.Context, p docker.Project) ([]docker.Contai
 }
 func (f *fakeAppDocker) Restart(context.Context, docker.Project, string) error { return nil }
 func (f *fakeAppDocker) Stop(context.Context, docker.Project) error            { return nil }
-func (_ *fakeAppDocker) TagImage(context.Context, string, string) error        { return nil }
-func (_ *fakeAppDocker) HasImage(context.Context, string) bool                 { return false }
-func (_ *fakeAppDocker) ImageTags(context.Context, string) ([]string, error)   { return nil, nil }
-func (_ *fakeAppDocker) RemoveImages(context.Context, []string) error          { return nil }
-func (_ *fakeAppDocker) PruneImages(context.Context, string) error             { return nil }
+func (*fakeAppDocker) TagImage(context.Context, string, string) error          { return nil }
+func (*fakeAppDocker) HasImage(context.Context, string) bool                   { return false }
+func (*fakeAppDocker) ImageTags(context.Context, string) ([]string, error)     { return nil, nil }
+func (*fakeAppDocker) RemoveImages(context.Context, []string) error            { return nil }
+func (*fakeAppDocker) PruneImages(context.Context, string) error               { return nil }
 
 func (f *fakeAppDocker) Rollout(context.Context, docker.Project, string, string, bool) error {
 	return nil

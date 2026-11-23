@@ -103,7 +103,7 @@ func parsePS(out string) ([]Container, error) {
 	}
 	cs := make([]Container, 0, len(rows))
 	for _, r := range rows {
-		cs = append(cs, Container{Name: r.Name, Service: r.Service, Image: r.Image, State: r.State, Health: r.Health, Status: r.Status, ExitCode: r.ExitCode})
+		cs = append(cs, Container(r))
 	}
 	return cs, nil
 }

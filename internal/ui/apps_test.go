@@ -63,11 +63,11 @@ func (f *fakeApps) PS(_ context.Context, p docker.Project) ([]docker.Container, 
 }
 func (f *fakeApps) Restart(context.Context, docker.Project, string) error { return nil }
 func (f *fakeApps) Stop(context.Context, docker.Project) error            { return nil }
-func (_ *fakeApps) TagImage(context.Context, string, string) error        { return nil }
-func (_ *fakeApps) HasImage(context.Context, string) bool                 { return false }
-func (_ *fakeApps) ImageTags(context.Context, string) ([]string, error)   { return nil, nil }
-func (_ *fakeApps) RemoveImages(context.Context, []string) error          { return nil }
-func (_ *fakeApps) PruneImages(context.Context, string) error             { return nil }
+func (*fakeApps) TagImage(context.Context, string, string) error          { return nil }
+func (*fakeApps) HasImage(context.Context, string) bool                   { return false }
+func (*fakeApps) ImageTags(context.Context, string) ([]string, error)     { return nil, nil }
+func (*fakeApps) RemoveImages(context.Context, []string) error            { return nil }
+func (*fakeApps) PruneImages(context.Context, string) error               { return nil }
 
 func (f *fakeApps) Rollout(context.Context, docker.Project, string, string, bool) error { return nil }
 func (f *fakeApps) Down(_ context.Context, name string, _ bool) error {

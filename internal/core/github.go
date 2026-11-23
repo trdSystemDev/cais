@@ -44,7 +44,10 @@ func (c *Core) TestGitHub(ctx context.Context, appID int64, key string) (github.
 	if appID < 0 {
 		return github.Check{}, errors.New("App ID invalido: e o numero na pagina do app no GitHub")
 	}
-	saved, err := c.githubApp()
+	// o salvo e so o padrao do que o formulario nao trouxe: config ou chave
+	// faltando nao e erro aqui (o teste roda antes de salvar)
+	saved, _ := c.githubApp()
+	var err error
 	app := github.App{ID: appID, BaseURL: c.deps.GitHubURL, Now: c.deps.Now}
 	switch {
 	case key != "":

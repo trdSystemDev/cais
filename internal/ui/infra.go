@@ -559,11 +559,6 @@ func (m *model) serviceOperation(name string) (on bool, detail string, changing 
 	return m.containerStarting(name)
 }
 
-func (m *model) serviceChanging(name string) bool {
-	_, _, changing := m.serviceOperation(name)
-	return changing
-}
-
 func (m *model) viewServiceModal(w, h int, name string, on bool, detail string) string {
 	t := m.th
 	title := "Derrubando container"

@@ -73,11 +73,11 @@ func (d *appDocker) Down(_ context.Context, name string, volumes bool) error {
 	return nil
 }
 
-func (_ *appDocker) TagImage(context.Context, string, string) error      { return nil }
-func (_ *appDocker) HasImage(context.Context, string) bool               { return false }
-func (_ *appDocker) ImageTags(context.Context, string) ([]string, error) { return nil, nil }
-func (_ *appDocker) RemoveImages(context.Context, []string) error        { return nil }
-func (_ *appDocker) PruneImages(context.Context, string) error           { return nil }
+func (*appDocker) TagImage(context.Context, string, string) error      { return nil }
+func (*appDocker) HasImage(context.Context, string) bool               { return false }
+func (*appDocker) ImageTags(context.Context, string) ([]string, error) { return nil, nil }
+func (*appDocker) RemoveImages(context.Context, []string) error        { return nil }
+func (*appDocker) PruneImages(context.Context, string) error           { return nil }
 
 func (d *appDocker) Rollout(context.Context, docker.Project, string, string, bool) error { return nil }
 

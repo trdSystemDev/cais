@@ -125,11 +125,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	if s.Fail != "" && strings.HasPrefix(r.Method+" "+r.URL.Path, s.Fail) {
 		s.Fail = ""
-		http.Error(w, `{"error":{"message":"falha de teste"}}`, 500)
+		http.Error(w, `{"error":{"message":"falha de teste"}}`, http.StatusInternalServerError)
 		return
 	}
 	if s.down != "" && strings.HasPrefix(r.Method+" "+r.URL.Path, s.down) {
-		http.Error(w, `{"error":{"message":"fora do ar"}}`, 503)
+		http.Error(w, `{"error":{"message":"fora do ar"}}`, http.StatusServiceUnavailable)
 		return
 	}
 	js := func(v any) { w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(v) }
@@ -152,8 +152,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		js(map[string]any{"access_token": "acesso-1", "refresh_token": "renova-1", "token_type": "Bearer", "expires_in": 3600})
-	case strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") == false:
-		http.Error(w, `{"error":{"message":"sem token"}}`, 401)
+	case !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "):
+		http.Error(w, `{"error":{"message":"sem token"}}`, http.StatusUnauthorized)
 	case p == "/drive/v3/about":
 		js(map[string]any{"user": map[string]any{"emailAddress": s.Email}})
 	case p == "/drive/v3/files" && r.Method == "POST":
@@ -216,6 +216,6 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		f.Data, f.Trashed = data, false
 		js(meta(f))
 	default:
-		http.Error(w, "nao implementado: "+r.Method+" "+p, 501)
+		http.Error(w, "nao implementado: "+r.Method+" "+p, http.StatusNotImplemented)
 	}
 }

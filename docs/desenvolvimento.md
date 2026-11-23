@@ -121,14 +121,22 @@ rode `cais daemon` num terminal e `cais` em outro.
 ```sh
 make build         # dist/cais-linux-amd64 e dist/cais-linux-arm64
 make test          # go test ./...
+make test-race     # go test -race ./... (o que o CI roda)
+make lint          # gofmt, go vet, staticcheck e govulncheck
 make test-docker   # importacao de banco contra bancos de verdade (docker)
 make dev           # daemon de teste + TUI no PC
 ```
 
+O CI (`.github/workflows/ci.yml`) roda `make lint` e `make test-race` a cada
+push na `main` e em todo pull request. As versoes do staticcheck e do
+govulncheck ficam fixas no `Makefile`; o go baixa na primeira vez. O
+`make test-docker` fica fora do CI automatico (lento, precisa do docker):
+roda pelo botao "Run workflow" do CI no GitHub.
+
 ## Releases
 
 Cada tag `v*` no GitHub vira um release pelo GitHub Actions
-(`.github/workflows/release.yml`): roda os testes, compila os binarios
+(`.github/workflows/release.yml`): roda o `make lint` e os testes com `-race`, compila os binarios
 `cais-linux-amd64` e `cais-linux-arm64` e publica com o `SHA256SUMS` e o
 `install.sh`. Pra lancar uma versao, da `main` em dia com o GitHub:
 

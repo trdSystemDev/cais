@@ -65,10 +65,6 @@ func (t theme) dangerPill() lipgloss.Style {
 	return lipgloss.NewStyle().Padding(0, 2).Background(t.danger).Foreground(t.accentInk).Bold(true)
 }
 
-func (t theme) disabledPill() lipgloss.Style {
-	return lipgloss.NewStyle().Padding(0, 2).Background(t.fieldBg).Foreground(t.muted).Faint(true)
-}
-
 // tipo de botao: a cor diz o que ele faz
 type btnKind int
 

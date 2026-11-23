@@ -1,0 +1,47 @@
+# CI do cais: a cada push na main e a cada pull request confere formatacao,
+# vet, testes com o race detector, staticcheck e vulnerabilidades conhecidas
+# (govulncheck). O mesmo que roda aqui roda no PC com: make lint test-race
+#
+# Os testes que sobem bancos de verdade (make test-docker) ficam fora: sao
+# lentos e dependem do docker. Rodam pelo botao "Run workflow" (job docker).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Formatacao, vet, staticcheck e govulncheck
+        run: make lint
+
+      - name: Testes (race)
+        run: make test-race
+
+  docker:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Testes com bancos no docker
+        run: make test-docker

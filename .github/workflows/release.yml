@@ -21,8 +21,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Testes
-        run: go test ./...
+      - name: Formatacao, vet, staticcheck e govulncheck
+        run: make lint
+
+      - name: Testes (race)
+        run: make test-race
 
       - name: Binarios
         run: |

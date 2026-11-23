@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build build-amd64 build-arm64 test test-docker release clean dev daemon tui cais
+.PHONY: build build-amd64 build-arm64 test test-race lint test-docker release clean dev daemon tui cais
 
 # Ambiente de teste no PC: socket, config e dados fora de /run, /etc e /var/lib
 DEV_DIR ?= $(HOME)/.local/share/cais-teste
@@ -50,6 +50,20 @@ build-arm64:
 
 test:
 	go test ./...
+
+test-race:
+	go test -race ./...
+
+# lint: formatacao, vet, staticcheck e vulnerabilidades conhecidas. As
+# ferramentas rodam pela versao fixa abaixo (o go baixa na primeira vez).
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.10.0
+
+lint:
+	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "arquivos sem gofmt:" >&2; echo "$$out" >&2; exit 1; fi
+	go vet ./...
+	go run $(STATICCHECK) ./...
+	go run $(GOVULNCHECK) ./...
 
 # release: cria a tag e manda pro GitHub; o GitHub Actions
 # (.github/workflows/release.yml) testa, compila e publica o release, de onde
