@@ -65,7 +65,7 @@ var drainTimeout = 2 * time.Minute
 
 func rollout(ctx context.Context, run runner, p Project, service, image string, drain bool) error {
 	fail := func(step string, err error) error {
-		return fmt.Errorf("troca sem queda de %s (%s): %s: %w", service, p.Name, step, lastLines(err.Error(), 15))
+		return fmt.Errorf("troca sem queda de %s (%s): %s: %w", service, p.Name, step, tail(err, 15))
 	}
 	old, err := serviceIDs(ctx, run, p, service, true)
 	if err != nil {

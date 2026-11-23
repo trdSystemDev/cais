@@ -11,7 +11,7 @@ import (
 // que for de fora do cais nao e tocado.
 func (CLI) PruneImages(ctx context.Context, project string) error {
 	if _, err := execRunner(ctx, "docker", "image", "prune", "-f", "--filter", "label=com.docker.compose.project="+project); err != nil {
-		return fmt.Errorf("docker image prune (%s): %w", project, lastLines(err.Error(), 5))
+		return fmt.Errorf("docker image prune (%s): %w", project, tail(err, 5))
 	}
 	return nil
 }
@@ -34,13 +34,13 @@ func PruneBuildCache(ctx context.Context) error {
 
 func pruneBuildCache(ctx context.Context, run runner) error {
 	if _, err := run(ctx, "docker", "builder", "prune", "-f", "--filter", "until="+BuildCacheMaxAge); err != nil {
-		return fmt.Errorf("docker builder prune: %w", lastLines(err.Error(), 5))
+		return fmt.Errorf("docker builder prune: %w", tail(err, 5))
 	}
 	// --max-used-space so existe no buildx novo; o docker antigo chama de
 	// --keep-storage
 	if _, err := run(ctx, "docker", "builder", "prune", "-f", "--max-used-space", BuildCacheMaxSize); err != nil {
 		if _, err := run(ctx, "docker", "builder", "prune", "-f", "--keep-storage", BuildCacheMaxSize); err != nil {
-			return fmt.Errorf("docker builder prune: %w", lastLines(err.Error(), 5))
+			return fmt.Errorf("docker builder prune: %w", tail(err, 5))
 		}
 	}
 	return nil

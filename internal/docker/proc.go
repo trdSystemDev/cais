@@ -30,6 +30,20 @@ func run(ctx context.Context, cmd *exec.Cmd) error {
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		killGroup(cmd)
+		if err != nil {
+			// o Run devolve o sinal ("signal: terminated"); o motivo vai
+			// junto na cadeia pra errors.Is(err, context.DeadlineExceeded)
+			err = &canceledError{err: err, cause: context.Cause(ctx)}
+		}
 	}
 	return err
 }
+
+// canceledError e a falha de um comando cancelado: a mensagem e a do
+// comando e a cadeia tem tambem o motivo do cancelamento.
+type canceledError struct {
+	err, cause error
+}
+
+func (e *canceledError) Error() string   { return e.err.Error() }
+func (e *canceledError) Unwrap() []error { return []error{e.err, e.cause} }

@@ -24,7 +24,7 @@ type ContainerStats struct {
 func Stats(ctx context.Context) ([]ContainerStats, error) {
 	out, err := execRunner(ctx, "docker", "stats", "--no-stream", "--format", "{{json .}}")
 	if err != nil {
-		return nil, fmt.Errorf("docker stats: %w", lastLines(err.Error(), 3))
+		return nil, fmt.Errorf("docker stats: %w", tail(err, 3))
 	}
 	return parseStats(out)
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -36,16 +35,14 @@ type runner func(ctx context.Context, name string, args ...string) (string, erro
 
 func execRunner(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := command(ctx, name, args...)
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
+	stderr := &tailBuffer{limit: stderrLimit}
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := run(ctx, cmd)
-	if err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			err = fmt.Errorf("%s", msg)
-		}
+	cmd.Stderr = stderr
+	if err := run(ctx, cmd); err != nil {
+		return strings.TrimSpace(stdout.String()), &CmdError{Args: cmd.Args, Stderr: strings.TrimSpace(stderr.String()), Err: err}
 	}
-	return strings.TrimSpace(stdout.String()), err
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 // Check verifica se o docker CLI existe, se o daemon responde (com a

@@ -20,7 +20,7 @@ func ComposeUp(ctx context.Context, file string, recreate bool) error {
 	}
 	_, err := execRunner(ctx, "docker", args...)
 	if err != nil {
-		return fmt.Errorf("docker compose up (%s): %w", file, lastLines(err.Error(), 15))
+		return fmt.Errorf("docker compose up (%s): %w", file, tail(err, 15))
 	}
 	return nil
 }
@@ -30,7 +30,7 @@ func ComposeUp(ctx context.Context, file string, recreate bool) error {
 func ComposeDown(ctx context.Context, file string) error {
 	_, err := execRunner(ctx, "docker", "compose", "-f", file, "down", "--remove-orphans")
 	if err != nil {
-		return fmt.Errorf("docker compose down (%s): %w", file, lastLines(err.Error(), 15))
+		return fmt.Errorf("docker compose down (%s): %w", file, tail(err, 15))
 	}
 	return nil
 }
@@ -38,7 +38,7 @@ func ComposeDown(ctx context.Context, file string) error {
 // ComposeStop para os containers do projeto do arquivo sem remover nada.
 func ComposeStop(ctx context.Context, file string) error {
 	if _, err := execRunner(ctx, "docker", "compose", "-f", file, "stop"); err != nil {
-		return fmt.Errorf("docker compose stop (%s): %w", file, lastLines(err.Error(), 15))
+		return fmt.Errorf("docker compose stop (%s): %w", file, tail(err, 15))
 	}
 	return nil
 }
@@ -46,7 +46,7 @@ func ComposeStop(ctx context.Context, file string) error {
 // ComposeRestart reinicia os containers do projeto do arquivo.
 func ComposeRestart(ctx context.Context, file string) error {
 	if _, err := execRunner(ctx, "docker", "compose", "-f", file, "restart"); err != nil {
-		return fmt.Errorf("docker compose restart (%s): %w", file, lastLines(err.Error(), 15))
+		return fmt.Errorf("docker compose restart (%s): %w", file, tail(err, 15))
 	}
 	return nil
 }
@@ -71,7 +71,7 @@ type Container struct {
 func ComposePS(ctx context.Context, file string) ([]Container, error) {
 	out, err := execRunner(ctx, "docker", "compose", "-f", file, "ps", "-a", "--format", "json")
 	if err != nil {
-		return nil, fmt.Errorf("docker compose ps (%s): %w", file, lastLines(err.Error(), 5))
+		return nil, fmt.Errorf("docker compose ps (%s): %w", file, tail(err, 5))
 	}
 	return parsePS(out)
 }
@@ -111,19 +111,9 @@ func parsePS(out string) ([]Container, error) {
 func Exec(ctx context.Context, container string, args ...string) (string, error) {
 	out, err := execRunner(ctx, "docker", append([]string{"exec", container}, args...)...)
 	if err != nil {
-		return "", fmt.Errorf("docker exec %s %s: %w", container, strings.Join(args, " "), lastLines(err.Error(), 5))
+		return "", fmt.Errorf("docker exec %s %s: %w", container, strings.Join(args, " "), tail(err, 5))
 	}
 	return out, nil
-}
-
-// lastLines fica com o fim da saida do compose: e la que esta o erro, e o
-// comeco e so progresso de pull.
-func lastLines(s string, n int) error {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return fmt.Errorf("%s", strings.Join(lines, "\n"))
 }
 
 // Project e um projeto compose de app: nome fixo (o -p tem prioridade sobre
@@ -150,7 +140,7 @@ type CLI struct{}
 func (CLI) Up(ctx context.Context, p Project) error {
 	_, err := execRunner(ctx, "docker", p.args("up", "-d", "--wait", "--wait-timeout", "300", "--remove-orphans")...)
 	if err != nil {
-		return fmt.Errorf("docker compose up (%s): %w", p.Name, lastLines(err.Error(), 15))
+		return fmt.Errorf("docker compose up (%s): %w", p.Name, tail(err, 15))
 	}
 	return nil
 }
@@ -160,7 +150,7 @@ func (CLI) Up(ctx context.Context, p Project) error {
 func (CLI) Config(ctx context.Context, p Project) ([]byte, error) {
 	out, err := execRunner(ctx, "docker", p.args("config", "--format", "json", "--no-env-resolution")...)
 	if err != nil {
-		return nil, fmt.Errorf("o compose do app tem erro (%s): %w", p.Name, lastLines(err.Error(), 10))
+		return nil, fmt.Errorf("o compose do app tem erro (%s): %w", p.Name, tail(err, 10))
 	}
 	return []byte(out), nil
 }
@@ -170,7 +160,7 @@ func (CLI) Config(ctx context.Context, p Project) ([]byte, error) {
 func (CLI) Build(ctx context.Context, p Project) error {
 	_, err := execRunner(ctx, "docker", p.args("build", "--pull")...)
 	if err != nil {
-		return fmt.Errorf("docker compose build (%s): %w", p.Name, lastLines(err.Error(), 20))
+		return fmt.Errorf("docker compose build (%s): %w", p.Name, tail(err, 20))
 	}
 	return nil
 }
@@ -179,7 +169,7 @@ func (CLI) Build(ctx context.Context, p Project) error {
 func (CLI) PS(ctx context.Context, p Project) ([]Container, error) {
 	out, err := execRunner(ctx, "docker", p.args("ps", "-a", "--format", "json")...)
 	if err != nil {
-		return nil, fmt.Errorf("docker compose ps (%s): %w", p.Name, lastLines(err.Error(), 5))
+		return nil, fmt.Errorf("docker compose ps (%s): %w", p.Name, tail(err, 5))
 	}
 	return parsePS(out)
 }
@@ -191,7 +181,7 @@ func (CLI) Restart(ctx context.Context, p Project, service string) error {
 		cmd = append(cmd, service)
 	}
 	if _, err := execRunner(ctx, "docker", p.args(cmd...)...); err != nil {
-		return fmt.Errorf("docker compose restart (%s): %w", p.Name, lastLines(err.Error(), 5))
+		return fmt.Errorf("docker compose restart (%s): %w", p.Name, tail(err, 5))
 	}
 	return nil
 }
@@ -199,7 +189,7 @@ func (CLI) Restart(ctx context.Context, p Project, service string) error {
 // Stop para os containers do projeto sem remover nada.
 func (CLI) Stop(ctx context.Context, p Project) error {
 	if _, err := execRunner(ctx, "docker", p.args("stop")...); err != nil {
-		return fmt.Errorf("docker compose stop (%s): %w", p.Name, lastLines(err.Error(), 5))
+		return fmt.Errorf("docker compose stop (%s): %w", p.Name, tail(err, 5))
 	}
 	return nil
 }
@@ -213,7 +203,7 @@ func (CLI) Down(ctx context.Context, name string, volumes bool) error {
 		args = append(args, "--volumes")
 	}
 	if _, err := execRunner(ctx, "docker", args...); err != nil {
-		return fmt.Errorf("docker compose down (%s): %w", name, lastLines(err.Error(), 5))
+		return fmt.Errorf("docker compose down (%s): %w", name, tail(err, 5))
 	}
 	out, err := execRunner(ctx, "docker", "image", "ls", "-q", "--filter", "label=com.docker.compose.project="+name)
 	if err != nil || strings.TrimSpace(out) == "" {
@@ -229,14 +219,12 @@ func (CLI) Down(ctx context.Context, name string, volumes bool) error {
 func ExecInput(ctx context.Context, container string, input []byte, args ...string) (string, error) {
 	cmd := command(ctx, "docker", append([]string{"exec", "-i", container}, args...)...)
 	cmd.Stdin = bytes.NewReader(input)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var stdout bytes.Buffer
+	stderr := &tailBuffer{limit: stderrLimit}
+	cmd.Stdout, cmd.Stderr = &stdout, stderr
 	if err := run(ctx, cmd); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("docker exec %s %s: %s", container, args[0], msg)
+		err = &CmdError{Args: cmd.Args, Stderr: strings.TrimSpace(stderr.String()), Err: err}
+		return "", fmt.Errorf("docker exec %s %s: %w", container, args[0], err)
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -250,14 +238,11 @@ func ExecStream(ctx context.Context, container string, stdin io.Reader, stdout i
 	}
 	cmd := command(ctx, "docker", append(append(flags, container), args...)...)
 	cmd.Stdin, cmd.Stdout = stdin, stdout
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := &tailBuffer{limit: stderrLimit}
+	cmd.Stderr = stderr
 	if err := run(ctx, cmd); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("docker exec %s %s: %w", container, args[0], lastLines(msg, 5))
+		err = &CmdError{Args: cmd.Args, Stderr: strings.TrimSpace(stderr.String()), Err: err}
+		return fmt.Errorf("docker exec %s %s: %w", container, args[0], tail(err, 5))
 	}
 	return nil
 }
