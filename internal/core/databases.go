@@ -28,7 +28,7 @@ type DatabaseRequest struct {
 }
 
 // DatabaseInfo e um database criado pelo cais. A senha fica guardada no
-// cais e so chega no app, pelos secrets.
+// cais e so chega no app, pelas variaveis que o cais run injeta.
 type DatabaseInfo struct {
 	Engine string `json:"engine"`
 	Name   string `json:"name"`
@@ -37,9 +37,9 @@ type DatabaseInfo struct {
 	Host    string `json:"host"`
 	Port    int    `json:"port"`
 	Network string `json:"network"`
-	// Secrets sao os secrets que o app ligado recebe
-	// (<engine>_<nome>_user e <engine>_<nome>_pass).
-	Secrets []string `json:"secrets"`
+	// Vars sao as variaveis que o app ligado recebe
+	// (<ENGINE>_<NOME>_USER, _PASS e _URL).
+	Vars []string `json:"vars"`
 	// Apps sao os apps ligados ao database.
 	Apps []string `json:"apps,omitempty"`
 	// Size e o espaco ocupado em bytes; nil se a instancia nao respondeu.
@@ -67,8 +67,8 @@ func (c *Core) dbCredentials(engine, name string) (string, string, error) {
 	return name, string(pw), nil
 }
 
-// LinkAppDatabase liga o app a um database da infra: o deploy grava
-// ${CAIS_SECRETS}/<engine>_<nome>_user e <engine>_<nome>_pass.
+// LinkAppDatabase liga o app a um database da infra: o deploy entrega as
+// variaveis <ENGINE>_<NOME>_USER, _PASS e _URL.
 func (c *Core) LinkAppDatabase(ctx context.Context, app, engine, name string) error {
 	unlock, err := c.lockApp(app)
 	if err != nil {
@@ -97,7 +97,7 @@ func dbSecret(engine, name string) string { return "db_" + engine + "_" + name }
 
 func dbInfo(e databases.Engine, name string) DatabaseInfo {
 	return DatabaseInfo{Engine: e.Name, Name: name, User: name, Host: e.Host, Port: e.Port, Network: e.Network,
-		Secrets: apps.DBLink{Engine: e.Name, Name: name}.Secrets()}
+		Vars: apps.DBLink{Engine: e.Name, Name: name}.Vars()}
 }
 
 // CreateDatabase cria database e usuario com senha nova (o usuario so
@@ -176,7 +176,7 @@ func (c *Core) CreateDatabase(ctx context.Context, req DatabaseRequest) (Databas
 }
 
 // DeleteDatabase apaga o database, o usuario e a senha guardada. Recusa se
-// algum app ainda usa o database (desligue em Apps -> Secrets antes).
+// algum app ainda usa o database (desligue em Apps -> Bancos e buckets antes).
 func (c *Core) DeleteDatabase(ctx context.Context, engine, name string) error {
 	e, err := databases.Get(engine)
 	if err != nil {
@@ -196,7 +196,7 @@ func (c *Core) DeleteDatabase(ctx context.Context, engine, name string) error {
 		return err
 	}
 	if len(users) > 0 {
-		return fmt.Errorf("o database %s/%s esta ligado a %s: desligue em Apps -> Secrets antes de excluir", engine, name, strings.Join(users, ", "))
+		return fmt.Errorf("o database %s/%s esta ligado a %s: desligue em Apps -> Bancos e buckets antes de excluir", engine, name, strings.Join(users, ", "))
 	}
 	if !c.infra.TryLock() {
 		return ErrBusy

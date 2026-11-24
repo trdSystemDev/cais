@@ -3,15 +3,17 @@
 Como o cais faz deploy, o formato do compose, historico, homologacao e deploy automatico.
 
 Um app e um repositorio do GitHub (privado) com o **compose de producao
-pronto**. O cais nao analisa nem reescreve nada: baixa o commit, grava o `.env`
-com as variaveis do app, faz o build e sobe. O que sobe e como e decisao do
-repositorio.
+pronto**. O cais nao reescreve nada: baixa o commit, faz o build e sobe. O que
+sobe e como e decisao do repositorio. As variaveis do app (senhas inclusive)
+chegam no processo dele pelo `cais run` (abaixo), nunca pela config do
+container.
 
 ```sh
 cais app create meu-app dono/meu-app -compose docker-compose.producao.yml   # -branch opcional
-cais app guide meu-app                       # modelo de compose: labels, redes, secrets
-cais app env meu-app NODE_ENV=production DATABASE_URL=postgres://...
-cais app secret meu-app jwt_secret           # le sem eco, ou do stdin
+cais app guide meu-app                       # modelo de compose: labels, redes, cais run
+cais app env meu-app NODE_ENV=production DOMINIO=meu-app.exemplo.com.br
+cais app env meu-app JWT_SECRET              # le o valor sem eco, ou do stdin
+cais app env meu-app FIREBASE_KEY < chave.json
 cais app deploy meu-app                      # o commit mais novo da branch
 cais app deploy meu-app -ref 3f2a1c9         # ou um commit/branch
 cais apps                                    # estado de todos
@@ -25,15 +27,16 @@ cais app delete meu-app [-volumes]           # pede o nome pra confirmar; -volum
 
 Na TUI, aba **Apps**: **+ Novo app** com o link do repositorio; cada app tem
 Geral (deploy, reiniciar, parar, repositorio/branch/compose), Variaveis,
-Secrets, Ajuda (o modelo de compose) e Logs.
+Bancos e buckets, Ajuda (o modelo de compose) e Logs.
 
 O deploy:
 
 1. pergunta ao GitHub o commit da branch (ou do `-ref`);
 2. baixa o tarball desse commit pelo GitHub App em `src.next` (token de uma
    hora so pro repositorio; caminhos e symlinks que saem da pasta sao recusados);
-3. grava o `.env` ao lado do compose: as variaveis do app mais `CAIS_APP`,
-   `CAIS_COMMIT` e `CAIS_SECRETS` (a pasta dos secrets);
+3. grava as variaveis (abaixo): o `run.env` com todas, que o `cais run`
+   injeta no processo do app, e o `.env` ao lado do compose so pra
+   interpolacao;
 4. `docker compose config`: confere o compose resolvido contra o formato do
    cais e **recusa** (antes do build, sem tocar no que esta no ar) o que
    foge dele, dizendo o motivo e o jeito certo de cada item (veja abaixo);
@@ -120,27 +123,27 @@ drenando com a confirmacao do Traefik, 0 em todos os deploys medidos.
 - Conexao longa (WebSocket, SSE) cai quando o antigo para; o cliente que
   reconecta ja acha o novo no ar.
 
-O compose do app publica o dominio pelo Traefik e usa as redes da infra; a
-**Ajuda** (`cais app guide`) gera o trecho pronto pra colar:
+O compose do app publica o dominio pelo Traefik, usa as redes da infra e
+recebe as variaveis pelo `cais run`; a **Ajuda** (`cais app guide`) gera o
+trecho pronto pra colar:
 
 ```yaml
 services:
   web:
     build: .
-    env_file: .env
-    secrets: [jwt_secret]
+    entrypoint: ["/cais", "run", "--", "node", "server.js"]   # o comando do app
+    volumes:
+      - ${CAIS_BIN}:/cais:ro
+      - ${CAIS_ENV}:/run/cais/env:ro
     labels:
       traefik.enable: "true"
-      traefik.http.routers.meu-app.rule: Host(`meu-app.exemplo.com.br`)
+      traefik.http.routers.meu-app.rule: Host(`${DOMINIO}`)
       traefik.http.routers.meu-app.entrypoints: websecure
       traefik.http.services.meu-app.loadbalancer.server.port: "3000"
     networks: [default, proxy_network, postgres_network]
 networks:
   proxy_network: {external: true}
   postgres_network: {external: true}
-secrets:
-  jwt_secret:
-    file: ${CAIS_SECRETS}/jwt_secret   # no container: /run/secrets/jwt_secret
 ```
 
 O que o deploy recusa (a mensagem de cada item diz como fazer; o MCP recebe
@@ -149,9 +152,13 @@ a lista em `problems`):
 - porta publicada (`ports`): o acesso e pelo dominio, via Traefik; use `expose`
   entre services;
 - `docker.sock`, bind de pasta do host fora do app, `driver_opts device`:
-  dados vao em volume nomeado; arquivos, no repositorio ou em secret do app;
-- `secrets`/`configs`/`env_file` lendo arquivo fora do app: secret do app em
-  `${CAIS_SECRETS}/<nome>`, variaveis no `.env`;
+  dados vao em volume nomeado; arquivos, no repositorio; valor secreto, numa
+  variavel. Os unicos binds de fora aceitos sao os dois do `cais run`, so
+  leitura;
+- `env_file: .env` (poe as variaveis no `docker inspect`) ou `env_file` de
+  fora do repositorio: as variaveis chegam pelo `cais run`;
+- `secrets` com `file:` ou `external` (use `environment: <VARIAVEL>`), e
+  `configs` de fora do repositorio;
 - privileged, `cap_add`, `devices`, rede/pid/ipc/uts do host ou de outro
   container, `security_opt` `unconfined`;
 - `container_name`, `external_links`, rede ou volume externo/de outro projeto
@@ -165,10 +172,43 @@ de segredo (`TOKEN`, `PASSWORD`, `API_KEY`...: fica na imagem), bind com
 escrita dentro do codigo (some no proximo deploy), volumes do app (nao entram
 no backup).
 
-Variaveis vao no `.env` (`env_file: .env` ou `${VAR}` no compose) e valem no
-proximo deploy. Secret em arquivo e opcional, pra quem nao quer o valor no
-`docker inspect`. Ponha `.env` no `.dockerignore` pra as variaveis nao entrarem
-na imagem num `COPY . .` (o deploy avisa).
+## Variaveis e o cais run
+
+Tudo o que o app recebe e variavel de ambiente, senhas e chaves inclusive:
+o app le `process.env`, `os.Getenv`, `env()` como sempre. Elas ficam no cais
+(`/var/lib/cais/apps/<app>/env`, `0600`, aceita qualquer valor: varias
+linhas, aspas, `$`) e valem no proximo deploy.
+
+No deploy o cais grava `/var/lib/cais/apps/<app>/run.env` com todas e o
+compose monta ele (so leitura) junto com o binario do cais. O `cais run`,
+como entrypoint, le o arquivo, junta as variaveis ao ambiente e vira o
+comando do app (`exec`: os sinais chegam direto no app, sem processo no
+meio). E o que `infisical run`, `doppler run` e `op run` fazem; aqui sem
+token nem servico de fora.
+
+- **Nada vai pra config do container**: o valor nao aparece no
+  `docker inspect` nem no `docker compose config`.
+- **Qualquer imagem Linux**, ate sem shell (distroless): o cais e estatico.
+- **O `entrypoint` do compose apaga o `CMD` da imagem** (regra do Docker):
+  repita o comando do app depois do `--`.
+- **`docker exec` nao passa pelo entrypoint**: comando avulso que precisa
+  das variaveis (migracao, console) vai pelo `cais run`:
+  `docker compose -p meu-app exec web /cais run -- php artisan migrate`.
+- **Debug desligado em producao**: pagina de erro de debug (Laravel, Django,
+  `phpinfo`) mostra as variaveis de ambiente.
+
+O `.env` ao lado do compose so serve pra interpolacao (`${DOMINIO}` nos
+labels): leva `CAIS_APP`, `CAIS_COMMIT`, `CAIS_BIN`, `CAIS_ENV` e so as
+variaveis que o compose cita pelo nome. Ele fica no contexto do build: ponha
+`.env` no `.dockerignore` (o deploy avisa).
+
+Bancos e buckets ligados viram variaveis automaticas, com a credencial lida
+a cada deploy: `POSTGRES_<NOME>_USER`, `_PASS` e `_URL` (URL pronta), e
+`S3_<BUCKET>_ACCESS_KEY`, `_SECRET_KEY` e `_ENDPOINT`. Veja
+[bancos-e-storage.md](bancos-e-storage.md).
+
+Pela IA (MCP) o cais devolve so os nomes das variaveis, nunca os valores. Na
+TUI e no CLI os valores aparecem (`cais app env meu-app -show`).
 
 ### Segredo no build
 
@@ -176,6 +216,7 @@ Segredo que so o build precisa (token de um pacote npm privado, chave de um
 registry) vai como **build secret**, nao como build arg: build arg fica na
 imagem e aparece no `docker history`. O build secret so existe durante o
 `RUN` que o monta e nao entra em camada, historico nem metadado da imagem.
+O valor e uma variavel do app (`cais app env meu-app NPM_TOKEN`):
 
 ```yaml
 services:
@@ -185,15 +226,13 @@ services:
       secrets: [npm_token]
 secrets:
   npm_token:
-    file: ${CAIS_SECRETS}/npm_token   # cais app secret meu-app npm_token
+    environment: NPM_TOKEN   # a variavel do app
 ```
 
 ```dockerfile
 RUN --mount=type=secret,id=npm_token \
     NPM_TOKEN=$(cat /run/secrets/npm_token) npm ci
 ```
-
-O mesmo secret pode ir pro build e pro container (`secrets:` do service).
 
 O GitHub App do cais e configurado uma vez na aba **Setup** (App ID e a chave:
 cole o .pem ou o caminho do arquivo) ou com `cais setup config --github-app-id`
@@ -211,7 +250,7 @@ imagens (`<imagem>:cais-<commit>`). **Voltar** (TUI: Geral -> Historico ->
 voltar, que pede confirmacao; CLI: `cais app rollback <app> [commit]`) baixa
 o commit, poe as imagens guardadas no lugar sem build e sobe pela troca
 normal (sem queda; se falhar, a versao no ar volta). Sem imagem guardada, faz
-o build. As variaveis e os secrets sao os de agora, nao os da epoca.
+o build. As variaveis sao as de agora, nao as da epoca.
 
 Com deploy automatico ligado, a ponta da branch na hora do rollback nao sobe
 sozinha (desfaria o rollback): o automatico volta no proximo commit novo, a
@@ -224,7 +263,7 @@ A homologacao e um **app separado**, ligado a producao (`promote_to`): mesmo
 repositorio, compose proprio (o nome que quiser, ex:
 `docker-compose.homolog.yaml`) e branch propria ou a mesma da producao. Por ser
 outro projeto compose, sobe, cai e faz deploy sem tocar na producao; variaveis,
-secrets, bancos e buckets sao dela. As rotas do Traefik usam o nome dela
+bancos e buckets sao dela. As rotas do Traefik usam o nome dela
 (`portal-homolog-*` e o dominio `portal-homolog.exemplo.com.br`; a Ajuda gera) e o
 cais nao deixa a producao usar um nome que e da homologacao (o nome e do app
 de prefixo mais longo).

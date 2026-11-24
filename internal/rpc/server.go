@@ -289,15 +289,6 @@ var handlers = map[string]handler{
 	MethodAppEnvSet: do(func(a core.API, ctx context.Context, p envParams) error {
 		return a.SetAppEnv(ctx, p.Name, p.Env)
 	}),
-	MethodAppSecrets: call(func(a core.API, ctx context.Context, p appParams) ([]apps.Secret, error) {
-		return a.AppSecrets(ctx, p.Name)
-	}),
-	MethodAppSecretSet: do(func(a core.API, ctx context.Context, p appSecretParams) error {
-		return a.SetAppSecret(ctx, p.Name, p.Secret, p.Value)
-	}),
-	MethodAppSecretDel: do(func(a core.API, ctx context.Context, p appSecretParams) error {
-		return a.DeleteAppSecret(ctx, p.Name, p.Secret)
-	}),
 	MethodAppGuide: call(func(a core.API, ctx context.Context, p appParams) (textResult, error) {
 		text, err := a.AppGuide(ctx, p.Name)
 		return textResult{Text: text}, err

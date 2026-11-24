@@ -15,12 +15,12 @@ import (
 )
 
 // secoes do detalhe de um app
-var appSections = []string{"Geral", "Variaveis", "Secrets", "Ajuda", "Logs"}
+var appSections = []string{"Geral", "Variaveis", "Bancos e buckets", "Ajuda", "Logs"}
 
 const (
 	secGeneral = iota
 	secEnv
-	secSecrets
+	secLinks
 	secGuide
 	secLogs
 )
@@ -39,10 +39,31 @@ type field struct {
 
 func (f *field) off() bool { return f.disabled != nil && f.disabled() }
 
-type envRow struct{ name, value *textinput.Model }
+// envRow e uma variavel nos editores. Valor com varias linhas (chave PEM,
+// JSON) nao cabe no campo de uma linha: fica em multi, o campo mostra so
+// quantas linhas tem, e colar outro valor (ou digitar) troca.
+type envRow struct {
+	name, value *textinput.Model
+	multi       string
+}
+
+// val e o valor da variavel: o digitado, ou o de varias linhas.
+func (r *envRow) val() string {
+	if r.multi != "" && r.value.Value() == "" {
+		return r.multi
+	}
+	return r.value.Value()
+}
+
+// setMulti guarda um valor de varias linhas na linha.
+func (r *envRow) setMulti(v string) {
+	r.multi = v
+	r.value.SetValue("")
+	r.value.Placeholder = fmt.Sprintf("‹%d linhas› cole ou digite pra trocar", strings.Count(v, "\n")+1)
+}
 
 // appsPage e a aba Apps: a lista a esquerda e, a direita, o detalhe do app
-// selecionado (deploy, variaveis, secrets, ajuda, logs) ou o cadastro de um
+// selecionado (deploy, variaveis, bancos e buckets, ajuda, logs) ou o cadastro de um
 // app novo. So chama acoes do core; o estado dos apps chega pelo estado.
 type appsPage struct {
 	api   core.API
@@ -67,28 +88,26 @@ type appsPage struct {
 
 	// editores do app selecionado: so recarregam quando troca de app ou
 	// depois de salvar, pra uma foto nova do estado nao apagar a edicao
-	loadedFor   string
-	repo        *textinput.Model
-	branch      *textinput.Model
-	compose     *textinput.Model
-	ref         *textinput.Model
-	envRows     []*envRow
-	envLoaded   string            // app cujas variaveis estao nos editores
-	envSaved    map[string]string // como estao gravadas (pra avisar o que falta salvar)
-	envPending  map[string]string // enviadas no Salvar, gravadas quando der certo
-	importing   bool              // "Importar .env" aberto: o colar vai pra ele
-	importText  string            // .env colado, ainda nao aplicado
-	importErr   string
-	secretName  *textinput.Model
-	secretValue *textinput.Model
-	guide       string
-	guideFor    string
-	dbs         []core.DatabaseInfo // bancos da infra (pra ligar no app)
-	dbPick      int
-	buckets     []core.BucketInfo // buckets do Garage (pra ligar no app)
-	bucketPick  int
-	delConfirm  *textinput.Model // nome do app digitado pra excluir
-	delVolumes  bool             // excluir apaga tambem os volumes
+	loadedFor  string
+	repo       *textinput.Model
+	branch     *textinput.Model
+	compose    *textinput.Model
+	ref        *textinput.Model
+	envRows    []*envRow
+	envLoaded  string            // app cujas variaveis estao nos editores
+	envSaved   map[string]string // como estao gravadas (pra avisar o que falta salvar)
+	envPending map[string]string // enviadas no Salvar, gravadas quando der certo
+	importing  bool              // "Importar .env" aberto: o colar vai pra ele
+	importText string            // .env colado, ainda nao aplicado
+	importErr  string
+	guide      string
+	guideFor   string
+	dbs        []core.DatabaseInfo // bancos da infra (pra ligar no app)
+	dbPick     int
+	buckets    []core.BucketInfo // buckets do Garage (pra ligar no app)
+	bucketPick int
+	delConfirm *textinput.Model // nome do app digitado pra excluir
+	delVolumes bool             // excluir apaga tambem os volumes
 
 	// app novo
 	newName, newRepo, newBranch, newCompose *textinput.Model
@@ -169,8 +188,6 @@ func newAppsPage(api core.API, zones *zone.Manager, th theme) *appsPage {
 	p.branch = p.input("a principal do repositorio", 28)
 	p.compose = p.input(apps.DefaultCompose, 30)
 	p.ref = p.input("vazio = mais novo da branch", 30)
-	p.secretName = p.input("nome (ex: jwt_secret)", 26)
-	p.secretValue = p.input("valor", 30)
 	p.delConfirm = p.input("digite o nome do app", 34)
 	p.newName = p.input("nome do app (minusculas)", 30)
 	p.newRepo = p.input("https://github.com/dono/repo", 40)
@@ -194,7 +211,7 @@ func (p *appsPage) style(ti *textinput.Model) { p.th.styleInput(ti) }
 
 func (p *appsPage) setTheme(th theme) {
 	p.th = th
-	for _, ti := range []*textinput.Model{p.repo, p.branch, p.compose, p.ref, p.secretName, p.secretValue,
+	for _, ti := range []*textinput.Model{p.repo, p.branch, p.compose, p.ref,
 		p.newName, p.newRepo, p.newBranch, p.newCompose, p.delConfirm, p.search} {
 		p.style(ti)
 	}
@@ -239,7 +256,7 @@ func (p *appsPage) onState(s core.State) tea.Cmd {
 		p.sel = max(0, len(p.list)-1)
 	}
 	if !p.creating {
-		p.rebuild() // os secrets (botoes de apagar) vem do estado
+		p.rebuild() // os bancos e buckets ligados vem do estado
 	}
 	return tea.Batch(p.loadSelected(false), p.promoRefresh(false))
 }
@@ -371,8 +388,6 @@ func (p *appsPage) loadSelected(force bool) tea.Cmd {
 	p.branch.SetValue(a.Branch)
 	p.compose.SetValue(a.Compose)
 	p.ref.SetValue("")
-	p.secretName.SetValue("")
-	p.secretValue.SetValue("")
 	p.delConfirm.SetValue("")
 	p.delVolumes = false
 	p.dbPick, p.bucketPick = 0, 0
@@ -382,10 +397,10 @@ func (p *appsPage) loadSelected(force bool) tea.Cmd {
 	return tea.Batch(p.envCmd(a.Name), p.guideCmd(a.Name), p.dbsCmd())
 }
 
-// sectionCmd atualiza o que a secao aberta mostra: em Secrets, os bancos e
+// sectionCmd atualiza o que a secao aberta mostra: em Bancos e buckets, os bancos e
 // buckets que podem ser ligados (criados depois que o app foi aberto).
 func (p *appsPage) sectionCmd() tea.Cmd {
-	if p.section == secSecrets {
+	if p.section == secLinks {
 		return p.dbsCmd()
 	}
 	return nil
@@ -446,6 +461,10 @@ func (p *appsPage) guideCmd(name string) tea.Cmd {
 func (p *appsPage) newEnvRow(name, value string) *envRow {
 	r := &envRow{name: p.input("VARIAVEL", 22), value: p.input("valor", 40)}
 	r.name.SetValue(name)
+	if strings.ContainsAny(value, "\n\r") {
+		r.setMulti(value)
+		return r
+	}
 	r.value.SetValue(value)
 	r.value.CursorStart() // valor comprido mostra o comeco, nao o fim
 	return r
@@ -476,8 +495,8 @@ func (p *appsPage) rebuild() {
 		p.fieldsGeneral(a)
 	case secEnv:
 		p.fieldsEnv()
-	case secSecrets:
-		p.fieldsSecrets(a)
+	case secLinks:
+		p.fieldsLinks(a)
 	case secLogs:
 		p.fieldsLogs(a)
 	}
@@ -568,7 +587,7 @@ func (p *appsPage) fieldsGeneral(a *core.AppStatus) {
 	p.add(&field{id: "branch", label: "Branch", input: p.branch})
 	p.add(&field{id: "compose", label: "Compose", input: p.compose})
 	p.add(p.btn("app-save", "Salvar", p.saveApp))
-	p.infoChip("info-delete", infoBox{"Excluir app", "Apaga containers, imagens, codigo, variaveis e secrets do app. " +
+	p.infoChip("info-delete", infoBox{"Excluir app", "Apaga containers, imagens, codigo e variaveis do app. " +
 		"O database e os buckets da infra ficam (aba Infra).\n\n" +
 		"Digite " + a.Name + " no Confirmar pra liberar o botao. Os volumes (dados) so sao apagados se voce trocar " +
 		"Volumes pra APAGAR; nao tem volta."})
@@ -604,22 +623,8 @@ func (p *appsPage) fieldsEnv() {
 	}
 }
 
-// fieldsSecrets e a secao Secrets: secrets, bancos e buckets ligados.
-func (p *appsPage) fieldsSecrets(a *core.AppStatus) {
-	p.infoChip("info-secrets", infoSecrets)
-	for _, s := range a.Secrets {
-		if s.Infra != "" {
-			continue // credencial de banco ou bucket: desliga por ele
-		}
-		name := s.Name
-		f := p.btn("secret-del:"+name, "✕ apagar", func() tea.Cmd { return p.deleteSecret(name) })
-		f.kind, f.chip = btnDanger, true
-		p.add(f)
-	}
-	p.add(&field{id: "secret-name", label: "Secret", input: p.secretName})
-	p.add(&field{id: "secret-value", label: "Valor", input: p.secretValue})
-	p.add(p.btn("secret-save", "Gravar", p.saveSecret))
-
+// fieldsLinks e a secao Bancos e buckets: os da infra ligados ao app.
+func (p *appsPage) fieldsLinks(a *core.AppStatus) {
 	p.infoChip("info-dbs", infoDatabases)
 	for _, l := range a.Databases {
 		l := l

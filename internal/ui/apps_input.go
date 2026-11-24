@@ -33,8 +33,6 @@ func (p *appsPage) update(msg tea.Msg) (tea.Cmd, bool) {
 			}
 		default:
 			p.setStatus("ok", msg.ok)
-			p.secretName.SetValue("")
-			p.secretValue.SetValue("")
 			if p.envPending != nil {
 				p.envSaved = p.envPending
 			}
@@ -63,7 +61,7 @@ func (p *appsPage) update(msg tea.Msg) (tea.Cmd, bool) {
 		p.creating, p.inForm = false, false
 		p.pendingSel, p.loadedFor = msg.app.Name, ""
 		p.section, p.focus, p.scroll = secGuide, 0, 0
-		p.setStatus("ok", msg.app.Name+" criado. A Ajuda mostra como escrever o compose de producao; depois Variaveis, Secrets e Deploy.")
+		p.setStatus("ok", msg.app.Name+" criado. A Ajuda mostra como escrever o compose de producao; depois Variaveis, Bancos e buckets e Deploy.")
 		p.rebuild()
 		return p.checkCmd(), true
 	case appEnvMsg:
@@ -293,6 +291,13 @@ func (p *appsPage) paste(msg tea.PasteMsg) tea.Cmd {
 	}
 	f := p.fields[p.focus]
 	if f.off() {
+		return nil
+	}
+	// valor com varias linhas (chave PEM, JSON) colado numa variavel: fica
+	// inteiro, o campo de uma linha so mostra quantas linhas tem
+	if r := p.envRowOf(f.input); r != nil && f.input == r.value && strings.ContainsAny(msg.Content, "\n\r") {
+		v := strings.ReplaceAll(strings.ReplaceAll(msg.Content, "\r\n", "\n"), "\r", "\n")
+		r.setMulti(strings.TrimRight(v, "\n"))
 		return nil
 	}
 	ti, cmd := f.input.Update(msg)

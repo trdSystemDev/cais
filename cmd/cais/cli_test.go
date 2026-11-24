@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -145,15 +146,15 @@ func TestCLIComandos(t *testing.T) {
 			calls: []string{"CheckApps"}, out: []string{"c0ffee1"}},
 		{name: "app guide", args: "app guide loja", setup: func(f *coretest.Recorder) { f.SetOut("AppGuide", "services:\n") },
 			calls: []string{"AppGuide"}, out: []string{"services:"}},
-		{name: "app env lista", args: "app env loja", setup: func(f *coretest.Recorder) { f.SetOut("AppEnv", map[string]string{"A": "1"}) },
-			calls: []string{"AppEnv"}, out: []string{"A=1"}},
+		{name: "app env lista so os nomes", args: "app env loja", setup: func(f *coretest.Recorder) { f.SetOut("AppEnv", map[string]string{"A": "1"}) },
+			calls: []string{"AppEnv", "CheckApps"}, out: []string{"  A\n", "cais app env loja -show"}},
+		{name: "app env -show", args: "app env loja -show", setup: func(f *coretest.Recorder) { f.SetOut("AppEnv", map[string]string{"A": "1"}) },
+			calls: []string{"AppEnv", "CheckApps"}, out: []string{"A=1"}},
+		{name: "app env sem eco", args: "app env loja JWT", stdin: "linha1\nlinha2\n", calls: []string{"AppEnv", "SetAppEnv"}},
+		{name: "app env duas sem valor", args: "app env loja JWT OUTRA", stdin: "x", code: 1, errOut: []string{"so uma variavel sem ="}},
 		{name: "app env grava", args: "app env loja B=2 -unset A",
 			setup: func(f *coretest.Recorder) { f.SetOut("AppEnv", map[string]string{"A": "1"}) }},
 		{name: "app env import stdin", args: "app env loja -import -", stdin: "C=3\n# comentario\n"},
-		{name: "app secrets", args: "app secrets loja",
-			setup: func(f *coretest.Recorder) { f.SetOut("AppSecrets", []apps.Secret{{Name: "jwt"}}) },
-			calls: []string{"AppSecrets"}, out: []string{"jwt"}},
-		{name: "app secret pelo stdin", args: "app secret loja jwt", stdin: "valor\n", calls: []string{"SetAppSecret"}},
 		{name: "app restart", args: "app restart loja web", calls: []string{"RestartApp"}},
 		{name: "app stop", args: "app stop loja", calls: []string{"StopApp"}},
 		{name: "app logs", args: "app logs loja web", setup: func(f *coretest.Recorder) { f.SetOut("AppLogs", "linha 1\n") },
@@ -265,5 +266,28 @@ func TestCLITodoComandoRecusaFlagInvalida(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// VAR sozinho le o valor do stdin (sem eco no terminal), com varias linhas,
+// e mantem as outras variaveis
+func TestCLIAppEnvLeOValor(t *testing.T) {
+	fake := coretest.NewRecorder()
+	fake.SetOut("AppEnv", map[string]string{"A": "1"})
+	tc := newTestCLI(fake)
+	tc.in = strings.NewReader("-----BEGIN-----\nabc\n-----END-----\n")
+	if code := tc.run([]string{"app", "env", "loja", "CHAVE"}); code != 0 {
+		t.Fatalf("saida %d: %s", code, tc.errb)
+	}
+	calls := fake.Take()
+	if len(calls) != 2 || calls[1].Method != "SetAppEnv" {
+		t.Fatalf("chamadas %+v", calls)
+	}
+	want := map[string]string{"A": "1", "CHAVE": "-----BEGIN-----\nabc\n-----END-----"}
+	if got, _ := calls[1].Args[1].(map[string]string); !maps.Equal(got, want) {
+		t.Errorf("gravou %q", calls[1].Args[1])
+	}
+	if strings.Contains(tc.out.String(), "abc") {
+		t.Errorf("o valor apareceu na saida: %s", tc.out)
 	}
 }

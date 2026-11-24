@@ -43,9 +43,6 @@ const (
 	MethodAppLogs          = "app.logs"          // params: appParams (container)
 	MethodAppEnvGet        = "app.env.get"       // params: appParams
 	MethodAppEnvSet        = "app.env.set"       // params: envParams
-	MethodAppSecrets       = "app.secrets"       // params: appParams
-	MethodAppSecretSet     = "app.secret.set"    // params: appSecretParams
-	MethodAppSecretDel     = "app.secret.delete" // params: appSecretParams
 	MethodAppGuide         = "app.guide"         // params: appParams
 	MethodDatabaseCreate   = "db.create"         // params: core.DatabaseRequest
 	MethodDatabases        = "db.list"
@@ -163,12 +160,6 @@ type deployParams struct {
 type envParams struct {
 	Name string            `json:"name"`
 	Env  map[string]string `json:"env"`
-}
-
-type appSecretParams struct {
-	Name   string `json:"name"`
-	Secret string `json:"secret"`
-	Value  string `json:"value,omitempty"`
 }
 
 type appDBParams struct {

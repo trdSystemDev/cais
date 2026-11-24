@@ -23,9 +23,9 @@ type BucketInfo struct {
 	Endpoint string `json:"endpoint"`
 	Region   string `json:"region"`
 	Network  string `json:"network"`
-	// Secrets sao os secrets que o app ligado recebe
-	// (s3_<bucket>_access_key e s3_<bucket>_secret_key).
-	Secrets []string `json:"secrets"`
+	// Vars sao as variaveis que o app ligado recebe
+	// (S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT).
+	Vars []string `json:"vars"`
 	// Apps sao os apps ligados ao bucket.
 	Apps []string `json:"apps,omitempty"`
 	// Size e o espaco ocupado, como o Garage escreve; vazio se ele nao
@@ -42,7 +42,7 @@ func bucketSecrets(name string) (id, secret string) {
 
 func bucketInfo(name string) BucketInfo {
 	return BucketInfo{Name: name, Endpoint: buckets.Endpoint, Region: buckets.Region, Network: buckets.Network,
-		Secrets: apps.BucketLink{Name: name}.Secrets()}
+		Vars: apps.BucketLink{Name: name}.Vars()}
 }
 
 // bucketCredentials e a chave de um bucket criado pelo cais (o que o app
@@ -122,7 +122,7 @@ func (c *Core) DeleteBucket(ctx context.Context, name string) error {
 		return err
 	}
 	if len(users) > 0 {
-		return fmt.Errorf("o bucket %s esta ligado a %s: desligue em Apps -> Secrets antes de excluir", name, strings.Join(users, ", "))
+		return fmt.Errorf("o bucket %s esta ligado a %s: desligue em Apps -> Bancos e buckets antes de excluir", name, strings.Join(users, ", "))
 	}
 	if !c.infra.TryLock() {
 		return ErrBusy
@@ -171,8 +171,8 @@ func (c *Core) Buckets(ctx context.Context) ([]BucketInfo, error) {
 	return out, nil
 }
 
-// LinkAppBucket liga o app a um bucket do Garage: o deploy grava
-// ${CAIS_SECRETS}/s3_<bucket>_access_key e s3_<bucket>_secret_key.
+// LinkAppBucket liga o app a um bucket do Garage: o deploy entrega as
+// variaveis S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT.
 func (c *Core) LinkAppBucket(ctx context.Context, app, bucket string) error {
 	unlock, err := c.lockApp(app)
 	if err != nil {

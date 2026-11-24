@@ -41,7 +41,7 @@ func (e *cli) runBucket(args []string) error {
 			return err
 		}
 		fmt.Fprintf(e.out, "Bucket %s criado (endpoint %s, regiao %s, path-style, rede %s).\n", info.Name, info.Endpoint, info.Region, info.Network)
-		fmt.Fprintf(e.out, "Ligue ao app com: cais app bucket <app> %s (o app recebe os secrets %s).\n", info.Name, strings.Join(info.Secrets, " e "))
+		fmt.Fprintf(e.out, "Ligue ao app com: cais app bucket <app> %s (o app recebe as variaveis %s).\n", info.Name, strings.Join(info.Vars, ", "))
 		fmt.Fprintln(e.out, "Atencao: os arquivos dos buckets nao entram no backup do cais.")
 	case "delete":
 		if len(pos) != 1 {
@@ -66,7 +66,7 @@ func (e *cli) runBucket(args []string) error {
 		w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "BUCKET\tSECRETS\tESPACO\tAPP")
 		for _, b := range list {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, strings.Join(b.Secrets, ", "), cmpOr(b.Size, "?"), cmpOr(strings.Join(b.Apps, ", "), "-"))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, strings.Join(b.Vars, ", "), cmpOr(b.Size, "?"), cmpOr(strings.Join(b.Apps, ", "), "-"))
 		}
 		w.Flush()
 		fmt.Fprintln(e.out, "\nAtencao: os arquivos dos buckets nao entram no backup do cais.")
@@ -126,7 +126,7 @@ func (e *cli) runDB(args []string) error {
 		} else {
 			fmt.Fprintf(e.out, "Database %s criado no %s (host %s:%d, rede %s).\n", info.Name, info.Engine, info.Host, info.Port, info.Network)
 		}
-		fmt.Fprintf(e.out, "Ligue ao app com: cais app db <app> %s/%s (o app recebe os secrets %s).\n", info.Engine, info.Name, strings.Join(info.Secrets, " e "))
+		fmt.Fprintf(e.out, "Ligue ao app com: cais app db <app> %s/%s (o app recebe as variaveis %s).\n", info.Engine, info.Name, strings.Join(info.Vars, ", "))
 	case "delete":
 		if len(pos) != 2 {
 			return errors.New("uso: cais db delete postgres|mysql <nome> [-yes]")
@@ -149,7 +149,7 @@ func (e *cli) runDB(args []string) error {
 		w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "DATABASE\tSECRETS\tESPACO\tAPP")
 		for _, d := range list {
-			fmt.Fprintf(w, "%s/%s\t%s\t%s\t%s\n", d.Engine, d.Name, strings.Join(d.Secrets, ", "), dbSize(d), cmpOr(strings.Join(d.Apps, ", "), "-"))
+			fmt.Fprintf(w, "%s/%s\t%s\t%s\t%s\n", d.Engine, d.Name, strings.Join(d.Vars, ", "), dbSize(d), cmpOr(strings.Join(d.Apps, ", "), "-"))
 		}
 		w.Flush()
 	}

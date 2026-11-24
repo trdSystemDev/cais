@@ -7,6 +7,8 @@ Uso:
   cais state [--socket]              imprime o estado atual em JSON
   cais check [--socket]              checa o ambiente e imprime o resultado em JSON
   cais mcp [--socket]                servidor MCP pelo stdin/stdout (pra IA, via ssh)
+  cais run [-env arquivo] -- <comando> [args...]
+                                     no container do app: injeta as variaveis e roda
   cais version                       mostra a versao
   cais help [comando]                esta ajuda; com o comando, os detalhes dele
 
@@ -26,13 +28,13 @@ Servicos (nada sobe sem ser ligado):
 Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis] [-import]
                                      database e usuario com senha nova (vazio ou importado)
-  cais db list                       databases criados pelo cais: secrets, espaco e app
+  cais db list                       databases criados pelo cais: variaveis, espaco e app
   cais db delete postgres|mysql <nome> [-yes]
                                      apaga o database e o usuario (nao pode estar ligado a app)
 
 Buckets (no Garage da infra):
   cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
-  cais bucket list                   buckets criados pelo cais: secrets, espaco e app
+  cais bucket list                   buckets criados pelo cais: variaveis, espaco e app
   cais bucket delete <nome> [-yes]   apaga o bucket (vazio) e a chave (nao pode estar ligado a app)
 
 Backup (bancos e estado do cais, criptografado, pro Google Drive ou OneDrive):
@@ -66,18 +68,16 @@ Apps (repositorio no GitHub com o compose de producao pronto):
                                      se o up falhar, a versao anterior volta
   cais app history <nome>            os ultimos deploys: quando, commit, origem e resultado
   cais app rollback <nome> [commit]  volta pra um deploy anterior que deu certo (sem build)
-  cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
-  cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
-                                     mostra ou muda as variaveis (.env do projeto);
-                                     -import junta um .env (- le do stdin)
+  cais app guide <nome>              modelo de compose: labels do Traefik, redes, cais run
+  cais app env <nome> [VAR=valor... | VAR] [-unset VAR,...] [-import arquivo.env] [-show]
+                                     mostra ou muda as variaveis (senhas inclusive);
+                                     VAR sozinho le o valor sem eco
   cais app db <nome> [postgres/<db> | off postgres/<db>]
-                                     bancos da infra do app: o deploy grava os secrets
-                                     postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}
+                                     bancos da infra do app: o deploy entrega as variaveis
+                                     POSTGRES_<DB>_USER, _PASS e _URL
   cais app bucket <nome> [<bucket> | off <bucket>]
-                                     buckets do app: o deploy grava os secrets
-                                     s3_<bucket>_access_key e s3_<bucket>_secret_key
-  cais app secrets <nome>            lista os secrets do app (so nomes)
-  cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
+                                     buckets do app: o deploy entrega as variaveis
+                                     S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
@@ -99,6 +99,8 @@ Uso:
   cais state [--socket]              imprime o estado atual em JSON
   cais check [--socket]              checa o ambiente e imprime o resultado em JSON
   cais mcp [--socket]                servidor MCP pelo stdin/stdout (pra IA, via ssh)
+  cais run [-env arquivo] -- <comando> [args...]
+                                     no container do app: injeta as variaveis e roda
   cais version                       mostra a versao
   cais help [comando]                esta ajuda; com o comando, os detalhes dele
 
@@ -118,13 +120,13 @@ Servicos (nada sobe sem ser ligado):
 Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis] [-import]
                                      database e usuario com senha nova (vazio ou importado)
-  cais db list                       databases criados pelo cais: secrets, espaco e app
+  cais db list                       databases criados pelo cais: variaveis, espaco e app
   cais db delete postgres|mysql <nome> [-yes]
                                      apaga o database e o usuario (nao pode estar ligado a app)
 
 Buckets (no Garage da infra):
   cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
-  cais bucket list                   buckets criados pelo cais: secrets, espaco e app
+  cais bucket list                   buckets criados pelo cais: variaveis, espaco e app
   cais bucket delete <nome> [-yes]   apaga o bucket (vazio) e a chave (nao pode estar ligado a app)
 
 Backup (bancos e estado do cais, criptografado, pro Google Drive ou OneDrive):
@@ -158,18 +160,16 @@ Apps (repositorio no GitHub com o compose de producao pronto):
                                      se o up falhar, a versao anterior volta
   cais app history <nome>            os ultimos deploys: quando, commit, origem e resultado
   cais app rollback <nome> [commit]  volta pra um deploy anterior que deu certo (sem build)
-  cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
-  cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
-                                     mostra ou muda as variaveis (.env do projeto);
-                                     -import junta um .env (- le do stdin)
+  cais app guide <nome>              modelo de compose: labels do Traefik, redes, cais run
+  cais app env <nome> [VAR=valor... | VAR] [-unset VAR,...] [-import arquivo.env] [-show]
+                                     mostra ou muda as variaveis (senhas inclusive);
+                                     VAR sozinho le o valor sem eco
   cais app db <nome> [postgres/<db> | off postgres/<db>]
-                                     bancos da infra do app: o deploy grava os secrets
-                                     postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}
+                                     bancos da infra do app: o deploy entrega as variaveis
+                                     POSTGRES_<DB>_USER, _PASS e _URL
   cais app bucket <nome> [<bucket> | off <bucket>]
-                                     buckets do app: o deploy grava os secrets
-                                     s3_<bucket>_access_key e s3_<bucket>_secret_key
-  cais app secrets <nome>            lista os secrets do app (so nomes)
-  cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
+                                     buckets do app: o deploy entrega as variaveis
+                                     S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
@@ -232,10 +232,10 @@ Uso: cais mcp [--socket]
 Servidor MCP pelo stdin/stdout (pra IA, via ssh).
 
 Expoe o cais como ferramentas MCP: ler o estado, logs e a ajuda do compose;
-criar e atualizar app, deploy, restart, stop, variaveis, secrets, criar e
-ligar banco e bucket. Nada que apaga dados nem o Setup: excluir app, banco,
-bucket ou secret, ligar ou desligar servico e a config da VPS ficam so na
-TUI e no CLI.
+criar e atualizar app, deploy, restart, stop, variaveis (so os nomes voltam,
+nunca os valores), criar e ligar banco e bucket. Nada que apaga dados nem o
+Setup: excluir app, banco ou bucket, ligar ou desligar servico e a config da
+VPS ficam so na TUI e no CLI.
 
 Roda na VPS e conversa pelo stdin/stdout; o cliente MCP no seu computador
 chama pelo ssh (a autenticacao e a sua chave SSH, sem porta nova).
@@ -243,6 +243,28 @@ chama pelo ssh (a autenticacao e a sua chave SSH, sem porta nova).
 Exemplo (Claude Code, no seu computador):
   claude mcp add cais -- ssh cais@vps cais mcp   # instalado com --ssh
   claude mcp add cais -- ssh root@vps cais mcp
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais run -h
+Uso: cais run [-env arquivo] -- <comando> [args...]
+
+No container do app: injeta as variaveis e roda.
+
+Roda dentro do container do app, como entrypoint: le as variaveis que o
+deploy gravou (montadas em /run/cais/env), junta ao ambiente e vira o comando
+(exec, os sinais chegam direto no app). Nada vai pra config do container
+(docker inspect). Nao fala com o daemon; funciona em qualquer imagem Linux,
+ate sem shell. O trecho do compose sai pronto em cais app guide.
+
+Exemplo (no compose do app):
+  entrypoint: ["/cais", "run", "--", "node", "server.js"]
+  volumes:
+    - ${CAIS_BIN}:/cais:ro
+    - ${CAIS_ENV}:/run/cais/env:ro
+
+Comando avulso com as variaveis (migracao, console):
+  docker compose -p <app> exec web /cais run -- php artisan migrate
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 
@@ -391,7 +413,7 @@ O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando 
 Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis] [-import]
                                      database e usuario com senha nova (vazio ou importado)
-  cais db list                       databases criados pelo cais: secrets, espaco e app
+  cais db list                       databases criados pelo cais: variaveis, espaco e app
   cais db delete postgres|mysql <nome> [-yes]
                                      apaga o database e o usuario (nao pode estar ligado a app)
 
@@ -404,7 +426,7 @@ Uso: cais db create postgres|mysql <nome> [-extensions postgis] [-import]
 Database e usuario com senha nova (vazio ou importado).
 
 Cria o database e um usuario de mesmo nome, que so acessa esse database. A
-senha fica guardada no cais e chega no app pelos secrets ao ligar o banco
+senha fica guardada no cais e chega no app pelas variaveis ao ligar o banco
 (cais app db). Nome: minusculas, numeros e _, ate 32.
 
 Com -import, o database novo ja nasce com o conteudo de um banco em outro
@@ -437,7 +459,7 @@ O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando 
 ===== cais db list -h
 Uso: cais db list
 
-Databases criados pelo cais: secrets, espaco e app.
+Databases criados pelo cais: variaveis, espaco e app.
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 
@@ -458,7 +480,7 @@ O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando 
 ===== cais bucket -h
 Buckets (no Garage da infra):
   cais bucket create <nome>          bucket e uma chave so dele (guardada no cais)
-  cais bucket list                   buckets criados pelo cais: secrets, espaco e app
+  cais bucket list                   buckets criados pelo cais: variaveis, espaco e app
   cais bucket delete <nome> [-yes]   apaga o bucket (vazio) e a chave (nao pode estar ligado a app)
 
 Detalhes: cais bucket <comando> -h.
@@ -470,7 +492,7 @@ Uso: cais bucket create <nome>
 Bucket e uma chave so dele (guardada no cais).
 
 Cria o bucket (privado) e uma chave com leitura, escrita e dono so nele. A
-chave fica guardada no cais e chega no app pelos secrets ao ligar o bucket
+chave fica guardada no cais e chega no app pelas variaveis ao ligar o bucket
 (cais app bucket). Nome: 3 a 63 letras minusculas, numeros e -.
 
 Os arquivos dos buckets nao entram no backup do cais (so os databases e o
@@ -485,7 +507,7 @@ O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando 
 ===== cais bucket list -h
 Uso: cais bucket list
 
-Buckets criados pelo cais: secrets, espaco e app.
+Buckets criados pelo cais: variaveis, espaco e app.
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 
@@ -664,18 +686,16 @@ Apps (repositorio no GitHub com o compose de producao pronto):
                                      se o up falhar, a versao anterior volta
   cais app history <nome>            os ultimos deploys: quando, commit, origem e resultado
   cais app rollback <nome> [commit]  volta pra um deploy anterior que deu certo (sem build)
-  cais app guide <nome>              modelo de compose: labels do Traefik, redes, secrets
-  cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
-                                     mostra ou muda as variaveis (.env do projeto);
-                                     -import junta um .env (- le do stdin)
+  cais app guide <nome>              modelo de compose: labels do Traefik, redes, cais run
+  cais app env <nome> [VAR=valor... | VAR] [-unset VAR,...] [-import arquivo.env] [-show]
+                                     mostra ou muda as variaveis (senhas inclusive);
+                                     VAR sozinho le o valor sem eco
   cais app db <nome> [postgres/<db> | off postgres/<db>]
-                                     bancos da infra do app: o deploy grava os secrets
-                                     postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}
+                                     bancos da infra do app: o deploy entrega as variaveis
+                                     POSTGRES_<DB>_USER, _PASS e _URL
   cais app bucket <nome> [<bucket> | off <bucket>]
-                                     buckets do app: o deploy grava os secrets
-                                     s3_<bucket>_access_key e s3_<bucket>_secret_key
-  cais app secrets <nome>            lista os secrets do app (so nomes)
-  cais app secret <nome> <secret>    grava um secret (le sem eco, ou do stdin)
+                                     buckets do app: o deploy entrega as variaveis
+                                     S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
@@ -812,26 +832,33 @@ O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando 
 ===== cais app guide -h
 Uso: cais app guide <nome>
 
-Modelo de compose: labels do Traefik, redes, secrets.
+Modelo de compose: labels do Traefik, redes, cais run.
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 
 ===== cais app env -h
-Uso: cais app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]
+Uso: cais app env <nome> [VAR=valor... | VAR] [-unset VAR,...] [-import arquivo.env] [-show]
 
-Mostra ou muda as variaveis (.env do projeto);
--import junta um .env (- le do stdin).
+Mostra ou muda as variaveis (senhas inclusive);
+VAR sozinho le o valor sem eco.
 
-Sem mudancas, so mostra. As variaveis viram o .env do projeto no deploy
-(valem no proximo). Senhas e chaves vao em secrets, nao aqui.
+Sem mudancas, mostra os nomes (-show mostra os valores). Todas as variaveis,
+senhas e chaves inclusive, chegam no processo do app pelo cais run (veja
+cais app guide): nada vai pro docker inspect. Valem no proximo deploy.
+
+VAR sozinho (sem =) pede o valor sem eco, ou le do stdin: senha fora do
+historico do shell, ou um valor com varias linhas (chave PEM, JSON).
 
 Flags:
   -unset VAR,...      remove as variaveis
   -import arquivo     junta um .env (- le do stdin); a que ja existe recebe o valor novo
+  -show               mostra os valores
 
 Exemplos:
   cais app env portal
   cais app env portal NODE_ENV=production DOMINIO=portal.exemplo.com
+  cais app env portal JWT_SECRET                  # pede o valor sem eco
+  cais app env portal FIREBASE_KEY < chave.json
   cais app env portal -unset TESTE
   cais app env portal -import .env.producao
 
@@ -840,11 +867,12 @@ O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando 
 ===== cais app db -h
 Uso: cais app db <nome> [postgres/<db> | off postgres/<db>]
 
-Bancos da infra do app: o deploy grava os secrets
-postgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}.
+Bancos da infra do app: o deploy entrega as variaveis
+POSTGRES_<DB>_USER, _PASS e _URL.
 
-Sem banco, mostra os ligados. O database tem o nome do usuario; o app chega
-por postgres:5432 (ou mysql:3306) e monta a URL. Desligar nao apaga o database.
+Sem banco, mostra os ligados. O database tem o nome do usuario; a URL vem
+pronta (postgres://...@postgres:5432/<db>, ou mysql:3306). Desligar nao apaga
+o database.
 
 Exemplos:
   cais app db portal postgres/portal
@@ -855,37 +883,16 @@ O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando 
 ===== cais app bucket -h
 Uso: cais app bucket <nome> [<bucket> | off <bucket>]
 
-Buckets do app: o deploy grava os secrets
-s3_<bucket>_access_key e s3_<bucket>_secret_key.
+Buckets do app: o deploy entrega as variaveis
+S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT.
 
-Sem bucket, mostra os ligados. O - do nome do bucket vira _ nos secrets. O
-app usa o endpoint http://garage:3900, regiao garage, path-style, na rede
+Sem bucket, mostra os ligados. O - do nome do bucket vira _ nas variaveis.
+Endpoint http://garage:3900, regiao garage, path-style, na rede
 garage_network. Desligar nao apaga o bucket.
 
 Exemplos:
   cais app bucket portal portal-fotos
   cais app bucket portal off portal-fotos
-
-O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
-
-===== cais app secrets -h
-Uso: cais app secrets <nome>
-
-Lista os secrets do app (so nomes).
-
-O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
-
-===== cais app secret -h
-Uso: cais app secret <nome> <secret>
-
-Grava um secret (le sem eco, ou do stdin).
-
-Cada secret e um arquivo em ${CAIS_SECRETS}/<secret>; no container, em
-/run/secrets/<secret>. Vale no proximo deploy. Nome: minusculas, numeros e _.
-
-Exemplos:
-  cais app secret portal jwt_secret            # pede o valor sem eco
-  cais app secret portal firebase_key < chave.json
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 

@@ -177,15 +177,6 @@ func (f *Recorder) AppEnv(_ context.Context, name string) (map[string]string, er
 func (f *Recorder) SetAppEnv(_ context.Context, name string, env map[string]string) error {
 	return only(f, "SetAppEnv", name, env)
 }
-func (f *Recorder) AppSecrets(_ context.Context, name string) ([]apps.Secret, error) {
-	return ret[[]apps.Secret](f, "AppSecrets", name)
-}
-func (f *Recorder) SetAppSecret(_ context.Context, name, secret, value string) error {
-	return only(f, "SetAppSecret", name, secret, value)
-}
-func (f *Recorder) DeleteAppSecret(_ context.Context, name, secret string) error {
-	return only(f, "DeleteAppSecret", name, secret)
-}
 func (f *Recorder) AppGuide(_ context.Context, name string) (string, error) {
 	return ret[string](f, "AppGuide", name)
 }

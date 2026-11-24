@@ -57,7 +57,7 @@ func temCampos(t *testing.T, l string, campos ...string) {
 }
 
 // O ciclo de um deploy aparece no log com os campos padrao, e o valor de
-// um secret do app nunca.
+// uma variavel do app nunca.
 func TestLogDoDeploy(t *testing.T) {
 	c, _, gh := newAppsCore(t)
 	buf := captureLog(c)
@@ -66,7 +66,7 @@ func TestLogDoDeploy(t *testing.T) {
 		t.Fatal(err)
 	}
 	const segredo = "valor-super-secreto-do-jwt-123"
-	if err := c.SetAppSecret(ctx, "meu-app", "jwt", segredo); err != nil {
+	if err := c.SetAppEnv(ctx, "meu-app", map[string]string{"JWT": segredo}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.DeployApp(ctx, "meu-app", ""); err != nil {
@@ -83,7 +83,7 @@ func TestLogDoDeploy(t *testing.T) {
 	temCampos(t, linha(buf.String(), "deploy falhou"), "level=ERROR", "acao=deploy", "app=meu-app", "erro=")
 
 	if strings.Contains(buf.String(), segredo) {
-		t.Fatalf("o valor do secret foi pro log:\n%s", buf)
+		t.Fatalf("o valor da variavel foi pro log:\n%s", buf)
 	}
 }
 

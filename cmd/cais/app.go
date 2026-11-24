@@ -8,7 +8,7 @@ import (
 	"io"
 	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -105,6 +105,7 @@ func (e *cli) runApp(args []string) error {
 	ref := fs.String("ref", "", "branch ou commit do deploy (padrao: o mais novo da branch do app)")
 	unset := fs.String("unset", "", "variaveis a remover, separadas por virgula")
 	importEnv := fs.String("import", "", "env: arquivo .env pra juntar nas variaveis (- le do stdin)")
+	show := fs.Bool("show", false, "env: mostra os valores (sem ela, so os nomes)")
 	volumes := fs.Bool("volumes", false, "delete: apaga tambem os volumes do compose (os dados)")
 	yes := fs.Bool("yes", false, "delete: nao pede confirmacao; promote: aceita voltar a producao pra um commit mais velho")
 	promoteTo := fs.String("promote-to", "", "create/set: o app e homologacao deste (a producao); set: off desfaz")
@@ -121,7 +122,7 @@ func (e *cli) runApp(args []string) error {
 	}
 	need := map[string][2]int{ // minimo e maximo de argumentos
 		"create": {2, 2}, "deploy": {1, 1}, "rollback": {1, 2}, "history": {1, 1}, "promote": {1, 1}, "set": {1, 1}, "guide": {1, 1}, "env": {1, -1},
-		"secrets": {1, 1}, "secret": {2, 2}, "restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "delete": {1, 1}, "db": {1, 3}, "bucket": {1, 3},
+		"restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "delete": {1, 1}, "db": {1, 3}, "bucket": {1, 3},
 	}
 	lim, ok := need[sub]
 	if !ok {
@@ -163,18 +164,7 @@ func (e *cli) runApp(args []string) error {
 		}
 		fmt.Fprint(e.out, text)
 	case "env":
-		return e.appEnv(ctx, c, name, pos[1:], splitList(*unset), *importEnv)
-	case "secrets":
-		return e.appSecrets(ctx, c, name)
-	case "secret":
-		value, err := e.readSecret("Valor de " + arg(1) + ": ")
-		if err != nil {
-			return err
-		}
-		if err := c.SetAppSecret(ctx, name, arg(1), value); err != nil {
-			return err
-		}
-		fmt.Fprintf(e.out, "%s gravado em ${CAIS_SECRETS}/%s (vale no proximo deploy).\n", arg(1), arg(1))
+		return e.appEnv(ctx, c, name, pos[1:], splitList(*unset), *importEnv, *show)
 	case "restart":
 		if err := c.RestartApp(ctx, name, arg(1)); err != nil {
 			return err
@@ -220,8 +210,8 @@ func (e *cli) appCreate(ctx context.Context, c daemonAPI, name, repoArg string, 
 		fmt.Fprintf(e.out, "Deploy automatico a cada commit na branch %s.\n", cmpOr(a.Branch, "principal"))
 	}
 	fmt.Fprintln(e.out)
-	fmt.Fprintf(e.out, "Modelo de compose com labels, redes e secrets: cais app guide %s\n", a.Name)
-	fmt.Fprintf(e.out, "Variaveis: cais app env %s VAR=valor ...   Secrets: cais app secret %s <nome>\n", a.Name, a.Name)
+	fmt.Fprintf(e.out, "Modelo de compose com labels, redes e o cais run: cais app guide %s\n", a.Name)
+	fmt.Fprintf(e.out, "Variaveis: cais app env %s VAR=valor ...   Senha sem eco: cais app env %s VAR\n", a.Name, a.Name)
 	fmt.Fprintf(e.out, "Deploy: cais app deploy %s\n", a.Name)
 	return nil
 }
@@ -252,32 +242,13 @@ func (e *cli) appRollback(ctx context.Context, c daemonAPI, name, commit string)
 		how = "com build (as imagens desse commit nao estavam guardadas)"
 	}
 	fmt.Fprintf(e.out, "%s no ar no commit %s, %s.\n", name, short(res.Commit), how)
-	fmt.Fprintln(e.out, "Variaveis e secrets sao os de agora. O deploy automatico (se ligado) espera um commit novo na branch.")
-	return nil
-}
-
-// appSecrets lista os secrets do app (so nomes).
-func (e *cli) appSecrets(ctx context.Context, c daemonAPI, name string) error {
-	list, err := c.AppSecrets(ctx, name)
-	if err != nil {
-		return err
-	}
-	if len(list) == 0 {
-		fmt.Fprintf(e.out, "%s sem secrets.\n", name)
-	}
-	for _, s := range list {
-		extra := ""
-		if s.Infra != "" {
-			extra = "  credencial de " + s.Infra + " (gravada pelo cais)"
-		}
-		fmt.Fprintf(e.out, "  %s  (${CAIS_SECRETS}/%s)%s\n", s.Name, s.Name, extra)
-	}
+	fmt.Fprintln(e.out, "As variaveis sao as de agora. O deploy automatico (se ligado) espera um commit novo na branch.")
 	return nil
 }
 
 // appDelete exclui o app, pedindo o nome antes (sem -yes).
 func (e *cli) appDelete(ctx context.Context, c daemonAPI, name string, volumes, yes bool) error {
-	what := "containers, imagens, codigo, variaveis e secrets"
+	what := "containers, imagens, codigo e variaveis"
 	if volumes {
 		what += " e os VOLUMES (dados)"
 	}
@@ -392,7 +363,7 @@ func (e *cli) appSet(ctx context.Context, c daemonAPI, name string, fs *flag.Fla
 }
 
 // appEnv mostra ou muda as variaveis do app. Sem mudancas, so mostra.
-func (e *cli) appEnv(ctx context.Context, c daemonAPI, name string, set, unset []string, importFile string) error {
+func (e *cli) appEnv(ctx context.Context, c daemonAPI, name string, set, unset []string, importFile string, show bool) error {
 	env, err := c.AppEnv(ctx, name)
 	if err != nil {
 		return err
@@ -417,22 +388,23 @@ func (e *cli) appEnv(ctx context.Context, c daemonAPI, name string, set, unset [
 		maps.Copy(env, imported)
 	}
 	if len(set) == 0 && len(unset) == 0 && importFile == "" {
-		keys := make([]string, 0, len(env))
-		for k := range env {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		if len(keys) == 0 {
-			fmt.Fprintf(e.out, "%s sem variaveis.\n", name)
-		}
-		for _, k := range keys {
-			fmt.Fprintf(e.out, "  %s=%s\n", k, env[k])
-		}
-		return nil
+		return e.listEnv(ctx, c, name, env, show)
 	}
+	// VAR=valor grava; VAR sozinho (uma so) le o valor sem eco ou do stdin:
+	// senha fora do historico do shell, valor com varias linhas
+	asked := false
 	for _, kv := range set {
 		k, v, ok := strings.Cut(kv, "=")
-		if !ok || k == "" {
+		if !ok {
+			if asked || importFile == "-" {
+				return fmt.Errorf("%q: so uma variavel sem =, que tem o valor lido sem eco ou do stdin", kv)
+			}
+			asked = true
+			if v, err = e.readSecret("Valor de " + k + ": "); err != nil {
+				return err
+			}
+		}
+		if k == "" {
 			return fmt.Errorf("%q: use VAR=valor", kv)
 		}
 		env[k] = v
@@ -444,6 +416,32 @@ func (e *cli) appEnv(ctx context.Context, c daemonAPI, name string, set, unset [
 		return err
 	}
 	fmt.Fprintf(e.out, "Variaveis de %s gravadas; valem no proximo deploy.\n", name)
+	return nil
+}
+
+// listEnv mostra os nomes das variaveis do app (com show, os valores) e as
+// que os bancos e buckets ligados entregam no deploy.
+func (e *cli) listEnv(ctx context.Context, c daemonAPI, name string, env map[string]string, show bool) error {
+	if len(env) == 0 {
+		fmt.Fprintf(e.out, "%s sem variaveis.\n", name)
+	}
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		if show {
+			fmt.Fprintf(e.out, "  %s=%s\n", k, env[k])
+		} else {
+			fmt.Fprintf(e.out, "  %s\n", k)
+		}
+	}
+	if list, err := c.CheckApps(ctx); err == nil {
+		for _, a := range list.List {
+			if infra := apps.InfraVars(a.App); a.Name == name && len(infra) > 0 {
+				fmt.Fprintf(e.out, "Dos bancos e buckets ligados (no deploy): %s\n", strings.Join(infra, ", "))
+			}
+		}
+	}
+	if !show && len(env) > 0 {
+		fmt.Fprintln(e.out, "Valores: cais app env "+name+" -show")
+	}
 	return nil
 }
 
@@ -471,7 +469,7 @@ func (e *cli) appDB(ctx context.Context, c daemonAPI, app string, args []string)
 				fmt.Fprintf(e.out, "%s nao usa banco da infra. Ligue com: cais app db %s postgres/<database>\n", app, app)
 			}
 			for _, l := range a.Databases {
-				fmt.Fprintf(e.out, "  %s  (secrets %s)\n", l.ID(), strings.Join(l.Secrets(), " e "))
+				fmt.Fprintf(e.out, "  %s  (variaveis %s)\n", l.ID(), strings.Join(l.Vars(), ", "))
 			}
 			return nil
 		}
@@ -494,7 +492,7 @@ func (e *cli) appDB(ctx context.Context, c daemonAPI, app string, args []string)
 			return err
 		}
 		l := apps.DBLink{Engine: engine, Name: name}
-		fmt.Fprintf(e.out, "%s ligado ao banco %s: secrets %s em ${CAIS_SECRETS}, valem no proximo deploy.\n", app, args[0], strings.Join(l.Secrets(), " e "))
+		fmt.Fprintf(e.out, "%s ligado ao banco %s: variaveis %s, valem no proximo deploy.\n", app, args[0], strings.Join(l.Vars(), ", "))
 	default:
 		return errors.New("uso: cais app db <app> [engine/nome | off engine/nome]")
 	}
@@ -518,7 +516,7 @@ func (e *cli) appBucket(ctx context.Context, c daemonAPI, app string, args []str
 				fmt.Fprintf(e.out, "%s nao usa bucket do Garage. Ligue com: cais app bucket %s <bucket>\n", app, app)
 			}
 			for _, l := range a.Buckets {
-				fmt.Fprintf(e.out, "  %s  (secrets %s)\n", l.Name, strings.Join(l.Secrets(), " e "))
+				fmt.Fprintf(e.out, "  %s  (variaveis %s)\n", l.Name, strings.Join(l.Vars(), ", "))
 			}
 			return nil
 		}
@@ -533,7 +531,7 @@ func (e *cli) appBucket(ctx context.Context, c daemonAPI, app string, args []str
 			return err
 		}
 		l := apps.BucketLink{Name: args[0]}
-		fmt.Fprintf(e.out, "%s ligado ao bucket %s: secrets %s em ${CAIS_SECRETS}, valem no proximo deploy.\n", app, args[0], strings.Join(l.Secrets(), " e "))
+		fmt.Fprintf(e.out, "%s ligado ao bucket %s: variaveis %s, valem no proximo deploy.\n", app, args[0], strings.Join(l.Vars(), ", "))
 	default:
 		return errors.New("uso: cais app bucket <app> [<bucket> | off <bucket>]")
 	}

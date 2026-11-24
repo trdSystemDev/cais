@@ -7,8 +7,8 @@ arquivo so com:
 
 - o dump de cada database criado pelo cais (`pg_dump` / `mysqldump` rodando
   dentro do container do banco, com os donos das tabelas);
-- o estado do cais: `/etc/cais` e `/var/lib/cais` (apps, variaveis, secrets,
-  senhas dos bancos), sem o codigo dos apps (volta no deploy) e sem os
+- o estado do cais: `/etc/cais` e `/var/lib/cais` (apps, variaveis, senhas
+  dos bancos), sem o codigo dos apps (volta no deploy) e sem os
   proprios backups.
 
 **Fora do backup, por enquanto:** os arquivos do Garage (buckets S3) e os

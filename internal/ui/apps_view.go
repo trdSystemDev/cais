@@ -316,8 +316,8 @@ func (p *appsPage) viewDetail(w, h int) string {
 			p.viewGeneral(&body, *a, inner)
 		case secEnv:
 			p.viewEnv(&body, inner)
-		case secSecrets:
-			p.viewSecrets(&body, *a, inner)
+		case secLinks:
+			p.viewLinks(&body, *a, inner)
 		case secGuide:
 			if p.guideFor == a.Name {
 				body.WriteString(p.guide)
@@ -368,13 +368,13 @@ func (p *appsPage) viewCreate(b *strings.Builder, w int) {
 	if p.newPromoteTo != "" {
 		b.WriteString("  " + p.th.fg(p.th.text).Width(18).Render("Homologacao de") + p.th.bold().Render(p.newPromoteTo) + "\n")
 		b.WriteString(p.th.fg(p.th.muted).Width(w).Render("  Use um compose proprio (ex: docker-compose.homolog.yaml) com rotas do Traefik com o nome deste app "+
-			"e outro dominio; variaveis, secrets e banco sao separados dos da producao.") + "\n")
+			"e outro dominio; variaveis e banco sao separados dos da producao.") + "\n")
 	}
 	b.WriteString("\n")
 	p.inline(b, "new-create", "new-cancel")
 	b.WriteString("\n" + p.th.fg(p.th.muted).Width(w).Render(
 		"Nome vazio = o nome do repositorio. O repositorio precisa do compose de producao pronto (labels do "+
-			"Traefik, redes, secrets): depois de criar, a Ajuda mostra o modelo. O codigo e baixado pelo GitHub "+
+			"Traefik, redes, cais run): depois de criar, a Ajuda mostra o modelo. O codigo e baixado pelo GitHub "+
 			"App do cais (aba Setup).") + "\n")
 }
 
@@ -657,9 +657,15 @@ func (p *appsPage) viewEnv(b *strings.Builder, w int) {
 		p.inline(b, "env-import-apply", "env-import-cancel")
 	}
 
+	if a := p.selected(); a != nil {
+		if infra := apps.InfraVars(a.App); len(infra) > 0 {
+			b.WriteString("\n" + muted.Width(w).Render("Dos bancos e buckets ligados (no deploy): "+strings.Join(infra, ", ")) + "\n")
+		}
+	}
 	b.WriteString("\n" + muted.Width(w).Render(
-		"Viram o .env na pasta do projeto no deploy: o compose usa com env_file: .env ou ${VAR}. "+
-			"O cais acrescenta CAIS_APP, CAIS_COMMIT e CAIS_SECRETS. Senhas e chaves vao em Secrets, nao aqui.") + "\n")
+		"Todas, senhas e chaves inclusive: o cais run injeta no processo do app (o entrypoint do compose, "+
+			"veja a Ajuda) e nada vai pro docker inspect. Valem no proximo deploy. Valor com varias linhas "+
+			"(chave PEM, JSON): cole no campo do valor.") + "\n")
 }
 
 // envRow escreve uma variavel numa linha: nome, valor e [✕ remover], com o
@@ -699,16 +705,12 @@ var (
 	infoRepo = infoBox{"Repositorio", "De onde o cais baixa o codigo: o repositorio do GitHub, a branch e o arquivo " +
 		"compose de producao. Vale no proximo deploy.\n\n" +
 		"Branch vazia usa a principal do repositorio. A Ajuda mostra como escrever o compose."}
-	infoSecrets = infoBox{"Secrets", "Cada secret e um arquivo em ${CAIS_SECRETS}/<nome>. No compose: " +
-		"secrets: {x: {file: ${CAIS_SECRETS}/x}} e o service le /run/secrets/x.\n\n" +
-		"O valor so aparece enquanto voce digita e vale no proximo deploy. As credenciais de banco e bucket " +
-		"ligados aparecem aqui, mas sao desligadas na parte deles."}
-	infoDatabases = infoBox{"Bancos da infra", "No deploy o cais grava usuario e senha de cada banco ligado nos secrets " +
-		"<engine>_<nome>_user e <engine>_<nome>_pass (o database tem o nome do usuario); montar a URL e com o app.\n\n" +
+	infoDatabases = infoBox{"Bancos da infra", "No deploy o app recebe, pelo cais run, as variaveis " +
+		"<ENGINE>_<NOME>_USER, _PASS e _URL de cada banco ligado (URL pronta; o database tem o nome do usuario).\n\n" +
 		"O app chega no banco por postgres:5432 ou mysql:3306. Desligar nao apaga o database. Crie bancos na aba Infra."}
-	infoBuckets = infoBox{"Buckets do Garage", "No deploy o cais grava a chave de cada bucket ligado nos secrets " +
-		"s3_<bucket>_access_key e s3_<bucket>_secret_key.\n\n" +
-		"O app usa o endpoint http://garage:3900, regiao garage, path-style (rede garage_network). " +
+	infoBuckets = infoBox{"Buckets do Garage", "No deploy o app recebe, pelo cais run, as variaveis " +
+		"S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT de cada bucket ligado (- do nome vira _).\n\n" +
+		"Endpoint http://garage:3900, regiao garage, path-style (rede garage_network). " +
 		"Desligar nao apaga o bucket. Crie buckets na aba Infra -> Garage."}
 )
 
@@ -756,40 +758,17 @@ func (p *appsPage) pickLink(b *strings.Builder, pickID, text, linkID string) {
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Center, left, "  ", right) + "\n")
 }
 
-func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
+// viewLinks e a secao Bancos e buckets: os da infra ligados ao app.
+func (p *appsPage) viewLinks(b *strings.Builder, a core.AppStatus, w int) {
 	t := p.th
 	muted := t.fg(t.muted)
 
-	p.title(b, "Secrets", "info-secrets")
-	if len(a.Secrets) == 0 {
-		b.WriteString(muted.Render("  nenhum secret") + "\n")
-	}
-	nameW := 0
-	for _, s := range a.Secrets {
-		nameW = max(nameW, len(s.Name))
-	}
-	for _, s := range a.Secrets {
-		fmt.Fprintf(b, "  %-*s  ", nameW, s.Name)
-		if s.Infra != "" {
-			b.WriteString(muted.Render("credencial de " + s.Infra))
-		} else {
-			p.mark(b, "secret-del:"+s.Name)
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
-	p.row(b, "secret-name")
-	p.row(b, "secret-value")
-	b.WriteString("\n")
-	p.inline(b, "secret-save")
-
-	b.WriteString("\n" + t.rule(w) + "\n")
 	p.title(b, "Bancos da infra", "info-dbs")
 	if len(a.Databases) == 0 {
 		b.WriteString(muted.Render("  nenhum banco ligado") + "\n")
 	}
 	for _, l := range a.Databases {
-		fmt.Fprintf(b, "  %-22s %s ", l.ID(), muted.Render(strings.Join(l.Secrets(), " e ")))
+		fmt.Fprintf(b, "  %-22s %s ", l.ID(), muted.Render(strings.Join(l.Vars(), ", ")))
 		p.mark(b, "db-unlink:"+l.ID())
 		b.WriteString("\n")
 	}
@@ -807,7 +786,7 @@ func (p *appsPage) viewSecrets(b *strings.Builder, a core.AppStatus, w int) {
 		b.WriteString(muted.Render("  nenhum bucket ligado") + "\n")
 	}
 	for _, l := range a.Buckets {
-		fmt.Fprintf(b, "  %-22s %s ", l.Name, muted.Render(strings.Join(l.Secrets(), " e ")))
+		fmt.Fprintf(b, "  %-22s %s ", l.Name, muted.Render(strings.Join(l.Vars(), ", ")))
 		p.mark(b, "bucket-unlink:"+l.Name)
 		b.WriteString("\n")
 	}

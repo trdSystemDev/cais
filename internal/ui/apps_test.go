@@ -258,25 +258,41 @@ func TestAppsVariaveis(t *testing.T) {
 	waitFor(t, m, "CAIS_COMMIT e escrita pelo cais")
 }
 
-func TestAppsSecrets(t *testing.T) {
+// valor com varias linhas (chave PEM) colado no valor fica inteiro; o
+// campo mostra quantas linhas tem e salvar nao corrompe (nem o que veio do
+// CLI)
+func TestAppsVariavelComVariasLinhas(t *testing.T) {
 	m, _, _ := openApps(t)
-	m.api.CreateApp(context.Background(), apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	ctx := context.Background()
+	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
+	const pem = "-----BEGIN-----\nabc\n-----END-----"
+	m.api.SetAppEnv(ctx, "loja", map[string]string{"DO_CLI": "linha1\nlinha2"})
 	waitFor(t, m, "sem deploy")
 	click(t, m, "app:loja")
-	click(t, m, "app-sec:Secrets")
-	waitFor(t, m, "nenhum secret")
-	typeIn(t, m, "secret-name", "api_key")
-	typeIn(t, m, "secret-value", "sk_live_123")
-	click(t, m, "secret-save")
-	waitFor(t, m, "api_key gravado")
-	waitFor(t, m, "apagar") // a lista chega pelo estado
-	if strings.Contains(screen(m), "sk_live_123") {
-		t.Fatal("o valor do secret apareceu na tela")
+	click(t, m, "app-sec:Variaveis")
+	waitFor(t, m, "‹2 linhas›")
+
+	click(t, m, "env-add")
+	typeIn(t, m, "env-name:1", "CHAVE")
+	click(t, m, "env-value:1")
+	m.Update(tea.PasteMsg{Content: pem + "\r\n"})
+	waitFor(t, m, "‹3 linhas›")
+	if strings.Contains(screen(m), "abc") {
+		t.Fatal("o valor de varias linhas apareceu inteiro no campo")
 	}
-	click(t, m, "secret-del:api_key")
-	waitFor(t, m, "api_key apagado")
-	if a := appState(t, m, "loja"); len(a.Secrets) != 0 {
-		t.Fatalf("secrets %v", a.Secrets)
+	click(t, m, "env-save")
+	waitFor(t, m, "Variaveis de loja salvas")
+	env, _ := m.api.AppEnv(ctx, "loja")
+	if env["CHAVE"] != pem || env["DO_CLI"] != "linha1\nlinha2" {
+		t.Fatalf("env %q", env)
+	}
+
+	// digitar troca o valor de varias linhas por um de uma linha
+	typeIn(t, m, "env-value:0", "uma")
+	click(t, m, "env-save")
+	waitFor(t, m, "Variaveis de loja salvas")
+	if env, _ := m.api.AppEnv(ctx, "loja"); env["DO_CLI"] != "uma" || env["CHAVE"] != pem {
+		t.Fatalf("env depois de digitar %q", env)
 	}
 }
 
@@ -405,7 +421,8 @@ func TestAppsImportarEnv(t *testing.T) {
 	click(t, m, "env-import-cancel")
 }
 
-// o banco da infra liga pelo seletor em Secrets e aparece com os secrets dele
+// o banco da infra liga pelo seletor em Bancos e buckets e aparece com as
+// variaveis dele (tambem em Variaveis)
 func TestAppsBancoLigadoAparece(t *testing.T) {
 	m, _, _ := openApps(t)
 	ctx := context.Background()
@@ -416,20 +433,23 @@ func TestAppsBancoLigadoAparece(t *testing.T) {
 	}
 	waitFor(t, m, "sem deploy")
 	click(t, m, "app:loja")
-	click(t, m, "app-sec:Secrets")
+	click(t, m, "app-sec:Bancos e buckets")
 	waitFor(t, m, "‹ postgres/loja ›")
 	click(t, m, "db-link")
 	waitFor(t, m, "loja ligado a postgres/loja")
 	if a := appState(t, m, "loja"); len(a.Databases) != 1 {
 		t.Fatalf("bancos %+v", a.Databases)
 	}
-	waitFor(t, m, "credencial de postgres/loja") // os secrets chegam pelo estado
-	waitFor(t, m, "postgres_loja_user e postgres_loja_pass")
+	waitFor(t, m, "POSTGRES_LOJA_USER, POSTGRES_LOJA_PASS, POSTGRES_LOJA_URL")
+	click(t, m, "app-sec:Variaveis")
+	waitFor(t, m, "Dos bancos e buckets ligados (no deploy): POSTGRES_LOJA_USER")
+	click(t, m, "app-sec:Bancos e buckets")
 	click(t, m, "db-unlink:postgres/loja")
 	waitFor(t, m, "desligado de postgres/loja")
 }
 
-// o bucket do Garage liga pelo seletor em Secrets e aparece com os secrets dele
+// o bucket do Garage liga pelo seletor em Bancos e buckets e aparece com as
+// variaveis dele
 func TestAppsBucketLigado(t *testing.T) {
 	m, _, _ := openApps(t)
 	ctx := context.Background()
@@ -440,28 +460,17 @@ func TestAppsBucketLigado(t *testing.T) {
 	}
 	waitFor(t, m, "sem deploy")
 	click(t, m, "app:loja")
-	click(t, m, "app-sec:Secrets")
+	click(t, m, "app-sec:Bancos e buckets")
 	waitFor(t, m, "‹ loja-fotos ›")
 	click(t, m, "bucket-link")
 	waitFor(t, m, "loja ligado ao bucket loja-fotos")
-	waitFor(t, m, "credencial de s3/loja-fotos")
+	waitFor(t, m, "S3_LOJA_FOTOS_ACCESS_KEY")
 	click(t, m, "bucket-unlink:loja-fotos")
 	waitFor(t, m, "desligado do bucket loja-fotos")
 }
 
-// o valor do secret aparece enquanto digita
-func TestAppsSecretVisivelAoDigitar(t *testing.T) {
-	m, _, _ := openApps(t)
-	m.api.CreateApp(context.Background(), apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
-	waitFor(t, m, "sem deploy")
-	click(t, m, "app:loja")
-	click(t, m, "app-sec:Secrets")
-	typeIn(t, m, "secret-value", "valor-visivel")
-	waitFor(t, m, "valor-visivel")
-}
-
 // banco e bucket criados com o app ja aberto aparecem ao voltar pra aba Apps
-// ou pra secao Secrets, sem reabrir a TUI
+// ou pra secao Bancos e buckets, sem reabrir a TUI
 func TestAppsListaDeLigarAtualiza(t *testing.T) {
 	m, _, _ := openApps(t)
 	ctx := context.Background()
@@ -469,7 +478,7 @@ func TestAppsListaDeLigarAtualiza(t *testing.T) {
 	m.api.CreateApp(ctx, apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
 	waitFor(t, m, "sem deploy")
 	click(t, m, "app:loja")
-	click(t, m, "app-sec:Secrets")
+	click(t, m, "app-sec:Bancos e buckets")
 	waitFor(t, m, "nenhum bucket criado")
 
 	// criado na Infra: volta pra aba Apps
@@ -480,24 +489,24 @@ func TestAppsListaDeLigarAtualiza(t *testing.T) {
 	click(t, m, "tab:Apps")
 	waitFor(t, m, "‹ loja-fotos ›")
 
-	// criado pelo CLI: troca de secao e volta pra Secrets
+	// criado pelo CLI: troca de secao e volta pra Bancos e buckets
 	if _, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "loja"}); err != nil {
 		t.Fatal(err)
 	}
 	click(t, m, "app-sec:Geral")
-	click(t, m, "app-sec:Secrets")
+	click(t, m, "app-sec:Bancos e buckets")
 	waitFor(t, m, "‹ postgres/loja ›")
 }
 
-// o texto de ajuda de cada parte da aba Secrets abre no [i] e fecha com esc
-// ou clique, sem ocupar a tela
-func TestAppsSecretsAjudaNoModal(t *testing.T) {
+// o texto de ajuda de cada parte da secao Bancos e buckets abre no [i] e
+// fecha com esc ou clique, sem ocupar a tela
+func TestAppsBancosAjudaNoModal(t *testing.T) {
 	m, _, _ := openApps(t)
 	m.api.CreateApp(context.Background(), apps.App{Name: "loja", Repo: "trdSystemDev/loja"})
 	waitFor(t, m, "sem deploy")
 	click(t, m, "app:loja")
-	click(t, m, "app-sec:Secrets")
-	waitFor(t, m, "nenhum secret")
+	click(t, m, "app-sec:Bancos e buckets")
+	waitFor(t, m, "nenhum banco ligado")
 	if strings.Contains(screen(m), "garage:3900") {
 		t.Fatal("texto de ajuda dos buckets aparece fora do modal")
 	}
@@ -509,9 +518,9 @@ func TestAppsSecretsAjudaNoModal(t *testing.T) {
 	if strings.Contains(screen(m), "garage:3900") {
 		t.Fatal("esc nao fechou o modal")
 	}
-	click(t, m, "info-secrets")
-	if !strings.Contains(screen(m), "/run/secrets/x") {
-		t.Fatalf("modal dos secrets nao abriu:\n%s", screen(m))
+	click(t, m, "info-dbs")
+	if !strings.Contains(screen(m), "postgres:5432") {
+		t.Fatalf("modal dos bancos nao abriu:\n%s", screen(m))
 	}
 	m.Update(tea.MouseReleaseMsg{X: 1, Y: 1, Button: tea.MouseLeft})
 	if m.apps.info != nil {

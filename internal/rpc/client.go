@@ -337,18 +337,6 @@ func (c *Client) SetAppEnv(ctx context.Context, name string, env map[string]stri
 	return c.call(ctx, MethodAppEnvSet, envParams{Name: name, Env: env}, nil)
 }
 
-func (c *Client) AppSecrets(ctx context.Context, name string) ([]apps.Secret, error) {
-	return result[[]apps.Secret](c, ctx, MethodAppSecrets, appParams{Name: name})
-}
-
-func (c *Client) SetAppSecret(ctx context.Context, name, secret, value string) error {
-	return c.call(ctx, MethodAppSecretSet, appSecretParams{Name: name, Secret: secret, Value: value}, nil)
-}
-
-func (c *Client) DeleteAppSecret(ctx context.Context, name, secret string) error {
-	return c.call(ctx, MethodAppSecretDel, appSecretParams{Name: name, Secret: secret}, nil)
-}
-
 func (c *Client) AppGuide(ctx context.Context, name string) (string, error) {
 	var r textResult
 	err := c.call(ctx, MethodAppGuide, appParams{Name: name}, &r)

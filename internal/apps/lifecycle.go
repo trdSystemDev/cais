@@ -39,7 +39,7 @@ func (m Manager) Stop(ctx context.Context, name string) error {
 }
 
 // Delete remove o app: containers, redes e imagens dele, e a pasta (codigo,
-// variaveis e secrets). Com volumes, apaga tambem os volumes do compose (os
+// variaveis). Com volumes, apaga tambem os volumes do compose (os
 // dados). Database criado na infra nao e do app e fica.
 func (m Manager) Delete(ctx context.Context, name string, volumes bool) error {
 	if _, err := m.Get(name); err != nil {

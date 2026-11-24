@@ -19,7 +19,7 @@ func (c *Core) appManager() apps.Manager {
 		src = githubSource{c}
 	}
 	m := apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now, Settle: c.deps.AppSettle, Timeout: c.deps.DeployTimeout,
-		DBCredentials: c.dbCredentials, BucketCredentials: c.bucketCredentials, Builds: c.builds}
+		DBCredentials: c.dbCredentials, BucketCredentials: c.bucketCredentials, Builds: c.builds, Bin: c.deps.CaisBin}
 	if cfg, err := config.Load(c.deps.ConfigPath); err == nil {
 		m.Networks = infraNetworks(cfg)
 		// sem o proxy ligado, app com dominio nao tem quem o publique
@@ -73,9 +73,6 @@ func (c *Core) CheckApps(ctx context.Context) (Apps, error) {
 	for _, a := range list {
 		st := AppStatus{App: a}
 		if st.Containers, err = m.Status(ctx, a.Name); err != nil {
-			st.Error = err.Error()
-		}
-		if st.Secrets, err = m.Secrets(a.Name); err != nil && st.Error == "" {
 			st.Error = err.Error()
 		}
 		result.List = append(result.List, st)
@@ -261,34 +258,8 @@ func (c *Core) SetAppEnv(ctx context.Context, name string, env map[string]string
 	return c.appManager().SetEnv(name, env)
 }
 
-func (c *Core) AppSecrets(_ context.Context, name string) ([]apps.Secret, error) {
-	return c.appManager().Secrets(name)
-}
-
-func (c *Core) SetAppSecret(ctx context.Context, name, secret, value string) error {
-	unlock, err := c.lockApp(name)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	err = c.appManager().SetSecret(name, secret, []byte(value))
-	c.CheckApps(ctx)
-	return err
-}
-
-func (c *Core) DeleteAppSecret(ctx context.Context, name, secret string) error {
-	unlock, err := c.lockApp(name)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	err = c.appManager().DeleteSecret(name, secret)
-	c.CheckApps(ctx)
-	return err
-}
-
 // AppGuide monta o texto de ajuda com o dominio sugerido, as redes das
-// stacks ligadas e as variaveis e secrets do app.
+// stacks ligadas, as variaveis do app e as dos bancos e buckets ligados.
 func (c *Core) AppGuide(_ context.Context, name string) (string, error) {
 	m := c.appManager()
 	a, err := m.Get(name)
@@ -314,13 +285,6 @@ func (c *Core) AppGuide(_ context.Context, name string) (string, error) {
 		in.Env = append(in.Env, k)
 	}
 	slices.Sort(in.Env)
-	secrets, err := m.Secrets(name)
-	if err != nil {
-		return "", err
-	}
-	for _, s := range secrets {
-		in.Secrets = append(in.Secrets, s.Name)
-	}
 	in.Databases, in.Buckets = a.Databases, a.Buckets
 	return apps.Guide(in), nil
 }

@@ -15,7 +15,7 @@ cais db list
 
 O cais cria o database e um usuario de mesmo nome com senha nova, que so
 acessa esse database. A senha fica guardada no cais e nao aparece na tela;
-`cais db list` mostra cada database com os secrets que o app recebe, o app
+`cais db list` mostra cada database com as variaveis que o app recebe, o app
 ligado e o espaco ocupado.
 
 ## Importar um banco de outro servidor
@@ -52,7 +52,8 @@ mysql://usuario:senha@host:3306/banco
 - Importar nao e oferecido pelo MCP: a string de conexao tem a senha da
   origem, e ela nao passa pela IA.
 
-Depois ligue o database ao app (Apps -> Secrets -> Ligar banco, ou pelo CLI):
+Depois ligue o database ao app (Apps -> Bancos e buckets -> Ligar banco, ou
+pelo CLI):
 
 ```sh
 cais app db portal postgres/portal       # liga
@@ -60,12 +61,14 @@ cais app db portal off postgres/portal   # desliga (o database fica)
 cais db delete postgres portal         # apaga database e usuario (desligado de todos os apps)
 ```
 
-A cada deploy o cais le a credencial guardada e grava os secrets
-`${CAIS_SECRETS}/<engine>_<database>_user` e `..._pass` (ex:
-`postgres_portal_user` e `postgres_portal_pass`). O app chega no banco
-por `postgres:5432` (ou `mysql:3306`) e o database tem o nome do usuario;
-montar a URL de conexao e com o app. Senha nova no cais vale no proximo
-deploy.
+A cada deploy o cais le a credencial guardada e o app recebe, pelo `cais run`
+(veja [apps.md](apps.md#variaveis-e-o-cais-run)), as variaveis
+`<ENGINE>_<DATABASE>_USER`, `_PASS` e `_URL` (ex: `POSTGRES_PORTAL_USER`,
+`POSTGRES_PORTAL_PASS` e `POSTGRES_PORTAL_URL=postgres://portal:...@postgres:5432/portal`,
+com a senha escapada). O database tem o nome do usuario; o app chega no banco
+por `postgres:5432` (ou `mysql:3306`). Senha nova no cais vale no proximo
+deploy. Enquanto o banco esta ligado, o app nao pode ter variavel com esses
+nomes.
 
 ## Buckets S3 (Garage)
 
@@ -82,16 +85,16 @@ guardada no cais:
 
 ```sh
 cais bucket create portal-fotos
-cais bucket list                       # secrets, espaco e app de cada bucket
+cais bucket list                       # variaveis, espaco e app de cada bucket
 cais app bucket portal portal-fotos        # liga ao app
 cais app bucket portal off portal-fotos    # desliga (o bucket e os arquivos ficam)
 cais bucket delete portal-fotos          # apaga (vazio e desligado de todos os apps)
 ```
 
-A cada deploy o cais grava a chave nos secrets do app
-`${CAIS_SECRETS}/s3_<bucket>_access_key` e `..._secret_key` (`-` do nome vira
-`_`). Dentro da `garage_network` o app usa o endpoint `http://garage:3900`,
-regiao `garage` e path-style. O secret RPC e o token de admin sao internos,
+A cada deploy o app recebe a chave nas variaveis `S3_<BUCKET>_ACCESS_KEY`,
+`_SECRET_KEY` e `_ENDPOINT` (`-` do nome vira `_`; ex: `S3_PORTAL_FOTOS_ACCESS_KEY`).
+Dentro da `garage_network` o endpoint e `http://garage:3900`, regiao `garage` e
+path-style. O secret RPC e o token de admin sao internos,
 nao sao chaves S3.
 
 Os bancos nunca entram na `proxy_network`.

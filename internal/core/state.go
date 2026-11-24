@@ -64,9 +64,7 @@ type AppStatus struct {
 	// global de build, um por vez).
 	BuildQueued bool               `json:"build_queued,omitempty"`
 	Containers  []docker.Container `json:"containers,omitempty"`
-	// Secrets sao os secrets do app: so nomes e se tem valor, nunca o valor.
-	Secrets []apps.Secret `json:"secrets,omitempty"`
-	Error   string        `json:"error,omitempty"`
+	Error       string             `json:"error,omitempty"`
 }
 
 // StackStatus e uma stack base e os containers dela.

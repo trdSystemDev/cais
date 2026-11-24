@@ -196,10 +196,7 @@ func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy
 	if _, err := os.Stat(filepath.Join(dir, next, a.ComposeFile())); err != nil {
 		return nil, nil, fmt.Errorf("o commit %s nao tem o compose %s", short(commit), a.ComposeFile())
 	}
-	if err := m.writeDotEnv(a, next, commit); err != nil {
-		return nil, nil, err
-	}
-	if err := m.infraSecrets(a); err != nil {
+	if err := m.writeEnv(a, next, commit); err != nil {
 		return nil, nil, err
 	}
 	p := m.project(a, next)
@@ -208,7 +205,7 @@ func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy
 		return nil, nil, err
 	}
 	res.Problems, res.Warnings = CheckCompose(cfg, Rules{App: name, Src: filepath.Join(dir, next),
-		SecretsDir: m.SecretsPath(name), DotEnv: m.dotEnvPath(a, next), Networks: m.Networks, Apps: m.otherApps(name)})
+		Bin: m.Bin, RunEnv: m.RunEnvPath(name), DotEnv: m.dotEnvPath(a, next), Networks: m.Networks, Apps: m.otherApps(name)})
 	if len(res.Problems) > 0 {
 		return nil, nil, &ComposeError{App: name, Problems: res.Problems}
 	}
@@ -514,7 +511,7 @@ func (m Manager) record(a App, d Deploy) {
 // Rollback volta o app pra um deploy anterior que deu certo (commit
 // vazio: o anterior ao que esta no ar), com as imagens guardadas dele
 // quando existem, pela troca normal (sem queda, e volta sozinho se falhar).
-// As variaveis e os secrets sao os de agora. O deploy automatico fica
+// As variaveis sao as de agora. O deploy automatico fica
 // parado ate a branch ganhar um commit novo: senao subiria de novo o que
 // acabou de sair.
 func (m Manager) Rollback(ctx context.Context, name, commit string) (DeployResult, error) {

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -142,9 +143,14 @@ func TestDeployPeloGitHubApp(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(src, "Dockerfile")); err != nil || string(data) != "FROM node:22\n" {
 		t.Errorf("codigo baixado: %q %v", data, err)
 	}
+	// o .env so leva as do cais (o compose nao cita NODE_ENV); o run.env,
+	// todas
 	env, _ := os.ReadFile(filepath.Join(src, ".env"))
-	if !strings.Contains(string(env), "NODE_ENV='production'") || !strings.Contains(string(env), "CAIS_COMMIT='"+res.Commit+"'") {
+	if strings.Contains(string(env), "NODE_ENV") || !strings.Contains(string(env), "CAIS_COMMIT='"+res.Commit+"'") {
 		t.Errorf(".env:\n%s", env)
+	}
+	if run, _ := os.ReadFile(filepath.Join(c.deps.AppsDir, "meu-app", apps.RunEnvFile)); string(run) != `{"NODE_ENV":"production"}` {
+		t.Errorf("run.env: %s", run)
 	}
 	if strings.Join(d.calls, ",") != "config meu-app,build meu-app,up meu-app" {
 		t.Errorf("chamadas %v", d.calls)
@@ -237,43 +243,49 @@ func TestAppLogsSoDoProprioApp(t *testing.T) {
 	}
 }
 
-func TestVariaveisESecretsDoApp(t *testing.T) {
+func TestVariaveisDoApp(t *testing.T) {
 	c, _, _ := newAppsCore(t)
 	ctx := context.Background()
 	c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"})
 	if err := c.SetAppEnv(ctx, "meu-app", map[string]string{"CAIS_COMMIT": "x"}); err == nil {
 		t.Error("deixou trocar variavel do cais")
 	}
-	c.SetAppEnv(ctx, "meu-app", map[string]string{"A": "1"})
-	if env, _ := c.AppEnv(ctx, "meu-app"); env["A"] != "1" {
-		t.Errorf("env %v", env)
-	}
-	if err := c.SetAppSecret(ctx, "meu-app", "jwt", "segredo"); err != nil {
+	if err := c.SetAppEnv(ctx, "meu-app", map[string]string{"A": "1", "JWT": "segredo"}); err != nil {
 		t.Fatal(err)
 	}
-	if s := snap(t, c).Apps.List[0]; len(s.Secrets) != 1 || s.Secrets[0].Name != "jwt" {
-		t.Errorf("secrets no estado %+v", s.Secrets)
+	if env, _ := c.AppEnv(ctx, "meu-app"); env["A"] != "1" || env["JWT"] != "segredo" {
+		t.Errorf("env %v", env)
 	}
-	// o estado nunca leva valor de secret
+	// o estado nunca leva valor de variavel
 	data, _ := os.ReadFile(filepath.Join(c.deps.AppsDir, "meu-app", apps.MetaFile))
-	if strings.Contains(string(data), "segredo") {
-		t.Error("app.yaml com o valor do secret")
+	st, _ := json.Marshal(snap(t, c))
+	if strings.Contains(string(data), "segredo") || strings.Contains(string(st), "segredo") {
+		t.Error("valor de variavel no app.yaml ou no estado")
 	}
 
 	g, err := c.AppGuide(ctx, "meu-app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Host(`${DOMINIO:?", "ex: meu-app.exemplo.com.br", "postgres_network", "${CAIS_SECRETS}/jwt"} {
+	for _, want := range []string{"Host(`${DOMINIO:?", "ex: meu-app.exemplo.com.br", "postgres_network", "/cais\", \"run\"", "Variaveis do app: A, JWT."} {
 		if !strings.Contains(g, want) {
 			t.Errorf("ajuda sem %q", want)
 		}
 	}
-	if err := c.DeleteAppSecret(ctx, "meu-app", "jwt"); err != nil {
-		t.Fatal(err)
+	if strings.Contains(g, "segredo") {
+		t.Error("valor de variavel na ajuda")
 	}
-	if list, _ := c.AppSecrets(ctx, "meu-app"); len(list) != 0 {
-		t.Errorf("secrets %v", list)
+}
+
+// o binario do cais que os apps montam e o deste processo (sem o
+// "(deleted)" de quando a atualizacao troca o arquivo)
+func TestCaisBin(t *testing.T) {
+	if got := caisBin(); got == "" || strings.HasSuffix(got, "(deleted)") {
+		t.Errorf("caisBin %q", got)
+	}
+	c, _, _ := newAppsCore(t)
+	if c.appManager().Bin != c.deps.CaisBin || c.deps.CaisBin == "" {
+		t.Errorf("Bin do manager %q, dep %q", c.appManager().Bin, c.deps.CaisBin)
 	}
 }
 
@@ -291,7 +303,7 @@ func TestCreateDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if info.Host != "postgres" || info.Port != 5432 || info.Network != "postgres_network" || info.User != "portal" ||
-		!reflect.DeepEqual(info.Secrets, []string{"postgres_portal_user", "postgres_portal_pass"}) {
+		!reflect.DeepEqual(info.Vars, []string{"POSTGRES_PORTAL_USER", "POSTGRES_PORTAL_PASS", "POSTGRES_PORTAL_URL"}) {
 		t.Errorf("credencial %+v", info)
 	}
 	if len(sql) == 0 || !strings.HasPrefix(sql[0], "postgres: ") || !strings.Contains(strings.Join(sql, "\n"), "postgis") {
@@ -369,8 +381,8 @@ func TestBancoLigadoNoApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := snap(t, c).Apps.List[0]
-	if len(s.Databases) != 1 || s.Databases[0].ID() != "postgres/meu_app" || len(s.Secrets) != 2 || s.Secrets[0].Infra == "" {
-		t.Fatalf("estado do app %+v %+v", s.Databases, s.Secrets)
+	if len(s.Databases) != 1 || s.Databases[0].ID() != "postgres/meu_app" {
+		t.Fatalf("estado do app %+v", s.Databases)
 	}
 	list, _ := c.Databases(ctx)
 	if len(list) != 1 || !reflect.DeepEqual(list[0].Apps, []string{"meu-app"}) {
@@ -411,7 +423,7 @@ func TestCreateBucket(t *testing.T) {
 
 	info, err := c.CreateBucket(ctx, "portal-fotos")
 	if err != nil || info.Endpoint != "http://garage:3900" ||
-		!reflect.DeepEqual(info.Secrets, []string{"s3_portal_fotos_access_key", "s3_portal_fotos_secret_key"}) {
+		!reflect.DeepEqual(info.Vars, []string{"S3_PORTAL_FOTOS_ACCESS_KEY", "S3_PORTAL_FOTOS_SECRET_KEY", "S3_PORTAL_FOTOS_ENDPOINT"}) {
 		t.Fatalf("%+v %v", info, err)
 	}
 	if _, err := c.CreateBucket(ctx, "portal-fotos"); err == nil || !strings.Contains(err.Error(), "ja existe") {
@@ -431,8 +443,8 @@ func TestCreateBucket(t *testing.T) {
 		t.Fatalf("lista %+v %v", list, err)
 	}
 	s := snap(t, c).Apps.List[0]
-	if len(s.Buckets) != 1 || len(s.Secrets) != 2 || s.Secrets[0].Infra != "s3/portal-fotos" {
-		t.Errorf("estado do app %+v %+v", s.Buckets, s.Secrets)
+	if len(s.Buckets) != 1 || s.Buckets[0].Name != "portal-fotos" {
+		t.Errorf("estado do app %+v", s.Buckets)
 	}
 	// a secret key nunca vai na linha de comando
 	for _, call := range calls {

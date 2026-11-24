@@ -11,9 +11,10 @@ BUILDFLAGS := -trimpath -buildvcs=true
 DEV_DIR ?= $(HOME)/.local/share/cais-teste
 DEV_ENV := CAIS_SOCKET=$(DEV_DIR)/cais.sock CAIS_CONFIG=$(DEV_DIR)/etc/config.yaml CAIS_DATA_DIR=$(DEV_DIR)/data
 
-# binario local (./cais), sempre recompilado
+# binario local (./cais), sempre recompilado. Estatico (CGO_ENABLED=0) como o
+# do release: os apps montam ele no container pro cais run (alpine, distroless)
 cais:
-	go build -ldflags "-X main.version=$(VERSION)" -o cais ./cmd/cais
+	CGO_ENABLED=0 go build -ldflags "-X main.version=$(VERSION)" -o cais ./cmd/cais
 
 # make dev: sobe o daemon em segundo plano (log em $(DEV_DIR)/daemon.log), abre a
 # TUI e, ao sair dela, para o daemon. Se ja tem um daemon de pe, so abre a TUI.

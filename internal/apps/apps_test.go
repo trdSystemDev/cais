@@ -2,12 +2,13 @@ package apps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -270,7 +271,7 @@ func newManager(t *testing.T) (Manager, *fakeSource, *fakeDocker) {
 	d := &fakeDocker{failUp: map[string]bool{}}
 	now := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
 	return Manager{Root: filepath.Join(t.TempDir(), "apps"), Source: src, Docker: d, Now: func() time.Time { return now },
-		Networks: []string{ProxyNetwork}}, src, d
+		Networks: []string{ProxyNetwork}, Bin: "/usr/local/bin/cais"}, src, d
 }
 
 func TestCheckRecusa(t *testing.T) {
@@ -322,25 +323,38 @@ func TestCreateGetList(t *testing.T) {
 	if list[0].ComposeFile() != "prod.yml" || list[1].ComposeFile() != DefaultCompose {
 		t.Errorf("compose: %s %s", list[0].ComposeFile(), list[1].ComposeFile())
 	}
-	info, _ := os.Stat(m.SecretsPath("a"))
+	info, _ := os.Stat(filepath.Join(m.Root, "a"))
 	if info == nil || info.Mode().Perm() != 0o700 {
-		t.Errorf("pasta de secrets %v", info)
+		t.Errorf("pasta do app %v", info)
 	}
 	if _, err := m.Get("c"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get de app que nao existe: %v", err)
 	}
 }
 
+// runEnv le o run.env que o deploy gravou (o que o cais run injeta).
+func runEnv(t *testing.T, m Manager, app string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(m.RunEnvPath(app))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+// o run.env leva todas as variaveis, com qualquer valor; o .env do projeto
+// so as do cais (e as citadas no compose, abaixo)
 func TestDeployGravaEnvESobe(t *testing.T) {
 	m, src, d := newManager(t)
 	m.Create(App{Name: "web", Repo: "o/web", Branch: "main"})
-	if err := m.SetEnv("web", map[string]string{"NODE_ENV": "production", "TOKEN": "a$b'c"}); err == nil {
-		t.Error("aceitou valor com $ e aspa simples juntos")
-	}
-	if err := m.SetEnv("web", map[string]string{"NODE_ENV": "production", "PRECO": "R$10"}); err != nil {
+	vars := map[string]string{"NODE_ENV": "production", "TOKEN": "a$b'c \"d\"", "CHAVE": "-----BEGIN-----\nlinha\n-----END-----"}
+	if err := m.SetEnv("web", vars); err != nil {
 		t.Fatal(err)
 	}
-	m.SetSecret("web", "jwt", []byte("segredo"))
 
 	res, err := m.Deploy(context.Background(), "web", "")
 	if err != nil {
@@ -353,9 +367,15 @@ func TestDeployGravaEnvESobe(t *testing.T) {
 	if !slices.Equal(d.calls, []string{"config v1", "build v1", "up v1", "prune web"}) {
 		t.Errorf("chamadas %v", d.calls)
 	}
-	if d.envSeen["NODE_ENV"] != "production" || d.envSeen["PRECO"] != "R$10" || d.envSeen["CAIS_COMMIT"] != "c1" ||
-		d.envSeen["CAIS_APP"] != "web" || d.envSeen["CAIS_SECRETS"] != m.SecretsPath("web") {
-		t.Errorf(".env do projeto %v", d.envSeen)
+	if got := runEnv(t, m, "web"); !maps.Equal(got, vars) {
+		t.Errorf("run.env %v", got)
+	}
+	if info, err := os.Stat(m.RunEnvPath("web")); err != nil || info.Mode().Perm() != 0o444 {
+		t.Errorf("run.env %v %v", info, err)
+	}
+	want := map[string]string{"CAIS_APP": "web", "CAIS_COMMIT": "c1", "CAIS_BIN": "/usr/local/bin/cais", "CAIS_ENV": m.RunEnvPath("web")}
+	if !maps.Equal(d.envSeen, want) {
+		t.Errorf(".env do projeto %v, queria so as do cais %v", d.envSeen, want)
 	}
 	info, err := os.Stat(filepath.Join(m.Root, "web", SrcDir, ".env"))
 	if err != nil || info.Mode().Perm() != 0o600 {
@@ -370,17 +390,24 @@ func TestDeployGravaEnvESobe(t *testing.T) {
 	}
 }
 
+// o .env do projeto (ao lado do compose, mesmo numa subpasta) leva as
+// variaveis que o compose cita pelo nome, e so elas
 func TestDeployComposeNumaSubpasta(t *testing.T) {
 	m, src, d := newManager(t)
-	src.commits["c1"] = map[string]string{"deploy/prod.yml": "sub"}
+	src.commits["c1"] = map[string]string{"deploy/prod.yml": "Host(`${DOMINIO}`) environment: NPM_TOKEN"}
 	m.Create(App{Name: "web", Repo: "o/web", Compose: "deploy/prod.yml"})
-	m.SetEnv("web", map[string]string{"A": "1"})
+	m.SetEnv("web", map[string]string{"DOMINIO": "web.x", "NPM_TOKEN": "t", "DOMINIO_VELHO": "nao", "SENHA": "nao"})
 	if _, err := m.Deploy(context.Background(), "web", ""); err != nil {
 		t.Fatal(err)
 	}
-	// o compose le o .env da pasta do arquivo
-	if d.envSeen["A"] != "1" {
-		t.Errorf(".env nao ficou ao lado do compose: %v", d.envSeen)
+	if d.envSeen["DOMINIO"] != "web.x" || d.envSeen["NPM_TOKEN"] != "t" {
+		t.Errorf(".env sem as citadas no compose: %v", d.envSeen)
+	}
+	if _, ok := d.envSeen["DOMINIO_VELHO"]; ok {
+		t.Errorf("nome parecido entrou no .env: %v", d.envSeen)
+	}
+	if _, ok := d.envSeen["SENHA"]; ok {
+		t.Errorf("variavel nao citada entrou no .env: %v", d.envSeen)
 	}
 }
 
@@ -497,24 +524,28 @@ func TestRestartEStopPedemDeploy(t *testing.T) {
 	}
 }
 
-func TestSecrets(t *testing.T) {
+func TestSetEnvRecusa(t *testing.T) {
 	m, _, _ := newManager(t)
 	m.Create(App{Name: "web", Repo: "o/web"})
-	if err := m.SetSecret("web", "../fora", []byte("x")); err == nil {
-		t.Error("aceitou nome de secret com caminho")
+	for name, env := range map[string]map[string]string{
+		"nome invalido":  {"1A": "x"},
+		"nome com ponto": {"A.B": "x"},
+		"nome do cais":   {"CAIS_ENV": "x"},
+		"byte zero":      {"A": "a\x00b"},
+	} {
+		if err := m.SetEnv("web", env); err == nil {
+			t.Errorf("%s: aceitou %v", name, env)
+		}
 	}
-	if err := m.SetSecret("web", "jwt", nil); err == nil {
-		t.Error("aceitou secret vazio")
+	in := map[string]string{"A": "linha\nquebrada", "B": `aspa ' "dupla" $x \ barra`, "C": ""}
+	if err := m.SetEnv("web", in); err != nil {
+		t.Fatal(err)
 	}
-	m.SetSecret("web", "jwt", []byte("a"))
-	m.SetSecret("web", "db_url", []byte("b"))
-	list, _ := m.Secrets("web")
-	if len(list) != 2 || list[0].Name != "db_url" {
-		t.Errorf("secrets %v", list)
+	if out, _ := m.Env("web"); !maps.Equal(out, in) {
+		t.Errorf("ida e volta %q", out)
 	}
-	m.DeleteSecret("web", "jwt")
-	if list, _ := m.Secrets("web"); len(list) != 1 {
-		t.Errorf("depois de apagar %v", list)
+	if info, _ := os.Stat(filepath.Join(m.Root, "web", EnvFile)); info == nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("arquivo das variaveis %v", info)
 	}
 }
 
@@ -549,8 +580,9 @@ func TestParseEnvDeArquivoComum(t *testing.T) {
 }
 
 func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
-	src, secretsDir := "/var/lib/cais/apps/web/src.next", "/var/lib/cais/apps/web/secrets"
-	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network", ProxyNetwork}, Apps: []string{"web-homolog"}}
+	src := "/var/lib/cais/apps/web/src.next"
+	r := Rules{App: "web", Src: src, Bin: "/usr/local/bin/cais", RunEnv: "/var/lib/cais/apps/web/run.env", DotEnv: src + "/.env",
+		Networks: []string{"postgres_network", ProxyNetwork}, Apps: []string{"web-homolog"}}
 	cases := map[string]struct{ svc, top, want string }{
 		"porta":             {`"ports": [{"published": "8080", "target": 3000}]`, "", "tire o ports"},
 		"porta aleatoria":   {`"ports": [{"target": 3000}]`, "", "porta aleatoria"},
@@ -565,7 +597,12 @@ func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
 		"seccomp":           {`"security_opt": ["seccomp=unconfined"]`, "", "seccomp=unconfined"},
 		"container_name":    {`"container_name": "web"`, "", "container_name"},
 		"external_links":    {`"external_links": ["postgres"]`, "", "external_links"},
-		"env_file fora":     {`"env_file": [{"path": "/etc/shadow"}]`, "", "env_file: .env"},
+		"env_file fora":     {`"env_file": [{"path": "/etc/shadow"}]`, "", "fora do app"},
+		"env_file do .env":  {`"env_file": [{"path": "` + src + `/.env"}]`, "", "docker inspect"},
+		"bin com escrita":   {`"volumes": [{"type": "bind", "source": "/usr/local/bin/cais", "target": "/cais"}]`, "", "so leitura"},
+		"run.env escrita":   {`"volumes": [{"type": "bind", "source": "/var/lib/cais/apps/web/run.env", "target": "/run/cais/env"}]`, "", "so leitura"},
+		"outro binario":     {`"volumes": [{"type": "bind", "source": "/usr/local/bin/outro", "target": "/x", "read_only": true}]`, "", "volume nomeado"},
+		"run.env de outro":  {`"volumes": [{"type": "bind", "source": "/var/lib/cais/apps/loja/run.env", "target": "/x", "read_only": true}]`, "", "volume nomeado"},
 		"build fora":        {`"build": {"context": "/home"}`, "", "fora do repositorio"},
 		"build remoto":      {`"build": {"context": "https://github.com/x/y.git"}`, "", "proprio repositorio"},
 		"build ssh":         {`"build": {"context": "` + src + `", "ssh": ["default"]}`, "", "ssh"},
@@ -577,8 +614,10 @@ func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
 		"infra desligada":   {"", `"networks": {"mysql_network": {"name": "mysql_network", "external": true}}`, "Ligue o mysql"},
 		"volume external":   {"", `"volumes": {"pg": {"name": "postgres_data", "external": true}}`, "external"},
 		"volume device":     {"", `"volumes": {"d": {"name": "web_d", "driver_opts": {"device": "/etc", "o": "bind"}}}`, "driver_opts"},
-		"secret fora":       {"", `"secrets": {"chave": {"file": "/root/.ssh/id_rsa"}}`, "cais app secret web chave"},
-		"config fora":       {"", `"configs": {"c": {"file": "/etc/hosts"}}`, "fora do app"},
+		"secret fora":       {"", `"secrets": {"chave": {"file": "/root/.ssh/id_rsa"}}`, "environment: CHAVE"},
+		"secret do repo":    {"", `"secrets": {"chave": {"file": "` + src + `/chave"}}`, "cais app env web CHAVE"},
+		"secret external":   {"", `"secrets": {"chave": {"external": true}}`, "environment:"},
+		"config fora":       {"", `"configs": {"c": {"file": "/etc/hosts"}}`, "fora do repositorio"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -595,10 +634,10 @@ func TestCheckComposeBloqueiaComMotivo(t *testing.T) {
 }
 
 func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
-	src, secretsDir := "/var/lib/cais/apps/web/src.next", "/var/lib/cais/apps/web/secrets"
+	src, bin, runEnv := "/var/lib/cais/apps/web/src.next", "/usr/local/bin/cais", "/var/lib/cais/apps/web/run.env"
 	cfg := `{"services": {
 		"web": {"build": {"context": "` + src + `/app", "dockerfile": "Dockerfile"},
-			"env_file": [{"path": "` + src + `/.env"}],
+			"entrypoint": ["/cais", "run", "--", "node", "server.js"],
 			"labels": {"traefik.enable": "true", "traefik.http.routers.web.rule": "Host(` + "`web.x`" + `)",
 				"traefik.http.routers.web-api.rule": "PathPrefix(` + "`/api`" + `)", "traefik.http.services.web.loadbalancer.server.port": "3000"},
 			"networks": {"default": null, "proxy_network": null, "postgres_network": null},
@@ -606,13 +645,14 @@ func TestCheckComposeAceitaOFormatoDoCais(t *testing.T) {
 			"logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}},
 			"volumes": [{"type": "volume", "source": "dados", "target": "/data"},
 				{"type": "bind", "source": "` + src + `/worker", "target": "/worker", "read_only": true},
-				{"type": "bind", "source": "` + secretsDir + `/jwt", "target": "/jwt", "read_only": true}]},
+				{"type": "bind", "source": "` + bin + `", "target": "/cais", "read_only": true},
+				{"type": "bind", "source": "` + runEnv + `", "target": "/run/cais/env", "read_only": true}]},
 		"init": {"image": "alpine", "logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}}, "volumes": [{"type": "bind", "source": "` + src + `/data"}]}},
 	"networks": {"default": {"name": "web_default"}, "proxy_network": {"name": "proxy_network", "external": true},
 		"postgres_network": {"name": "postgres_network", "external": true}},
 	"volumes": {"dados": {"name": "web_dados"}},
-	"secrets": {"jwt": {"file": "` + secretsDir + `/jwt"}, "env": {}}}`
-	problems, warnings := CheckCompose([]byte(cfg), Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network", ProxyNetwork}})
+	"secrets": {"npm_token": {"environment": "NPM_TOKEN"}}}`
+	problems, warnings := CheckCompose([]byte(cfg), Rules{App: "web", Src: src, Bin: bin, RunEnv: runEnv, DotEnv: src + "/.env", Networks: []string{"postgres_network", ProxyNetwork}})
 	if len(problems) != 0 {
 		t.Fatalf("recusou o formato do cais: %v", problems)
 	}
@@ -717,20 +757,21 @@ func TestModeloDaAjudaPassaNaChecagem(t *testing.T) {
 		t.Skip("docker compose nao instalado")
 	}
 	root := t.TempDir()
-	src, secretsDir := filepath.Join(root, "src"), filepath.Join(root, "secrets")
+	src, bin, runEnv := filepath.Join(root, "src"), filepath.Join(root, "cais"), filepath.Join(root, "run.env")
 	os.MkdirAll(src, 0o755)
-	os.MkdirAll(secretsDir, 0o700)
-	os.WriteFile(filepath.Join(secretsDir, "jwt"), []byte("x"), 0o444)
-	os.WriteFile(filepath.Join(src, ".env"), []byte("CAIS_SECRETS="+secretsDir+"\nDATABASE_URL=x\nDOMINIO=web.exemplo.com.br\n"), 0o600)
+	os.WriteFile(bin, nil, 0o755)
+	os.WriteFile(runEnv, []byte("{}"), 0o444)
+	os.WriteFile(filepath.Join(src, ".env"), []byte("CAIS_BIN="+bin+"\nCAIS_ENV="+runEnv+"\nDOMINIO=web.exemplo.com.br\n"), 0o600)
 	g := Guide(GuideInput{App: "web", Host: "web.exemplo.com.br", Networks: []string{"postgres_network"},
-		Env: []string{"DATABASE_URL"}, Secrets: []string{"jwt"}})
+		Env: []string{"DATABASE_URL"}, Databases: []DBLink{{Engine: "postgres", Name: "web"}}})
 	os.WriteFile(filepath.Join(src, "docker-compose.yml"), []byte(g), 0o644)
 	cmd := exec.Command("docker", "compose", "-p", "web", "-f", filepath.Join(src, "docker-compose.yml"), "config", "--format", "json", "--no-env-resolution")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("o modelo nao e um compose valido: %v\n%s", err, g)
 	}
-	problems, warnings := CheckCompose(out, Rules{App: "web", Src: src, SecretsDir: secretsDir, Networks: []string{"postgres_network", ProxyNetwork}})
+	problems, warnings := CheckCompose(out, Rules{App: "web", Src: src, Bin: bin, RunEnv: runEnv, DotEnv: filepath.Join(src, ".env"),
+		Networks: []string{"postgres_network", ProxyNetwork}})
 	if len(problems) != 0 {
 		t.Fatalf("o modelo da Ajuda foi recusado: %v\n%s", problems, g)
 	}
@@ -746,26 +787,35 @@ func TestModeloDaAjudaPassaNaChecagem(t *testing.T) {
 }
 
 func TestGuide(t *testing.T) {
-	g := Guide(GuideInput{App: "web", Host: "web.exemplo.com.br", Networks: []string{"postgres_network"},
-		Env: []string{"DATABASE_URL"}, Secrets: []string{"jwt"}})
+	g := Guide(GuideInput{App: "web", Host: "web.exemplo.com.br", Networks: []string{"postgres_network", "garage_network"},
+		Env: []string{"DATABASE_URL"}, Databases: []DBLink{{Engine: "postgres", Name: "loja"}}, Buckets: []BucketLink{{Name: "fotos"}}})
 	for _, want := range []string{
 		"traefik.http.routers.web.rule: Host(`${DOMINIO:?defina DOMINIO nas variaveis do app}`)",
 		"ex: web.exemplo.com.br",
 		"traefik.http.routers.web.entrypoints: websecure",
 		"proxy_network:\n    external: true",
 		"postgres_network:\n    external: true",
-		"file: ${CAIS_SECRETS}/jwt",
+		`entrypoint: ["/cais", "run", "--", "node", "server.js"]`,
+		"${CAIS_BIN}:/cais:ro",
+		"${CAIS_ENV}:/run/cais/env:ro",
+		"docker compose -p web exec web /cais run -- <comando>",
+		"POSTGRES_LOJA_USER, POSTGRES_LOJA_PASS e\n#   POSTGRES_LOJA_URL",
+		"S3_FOTOS_ACCESS_KEY, S3_FOTOS_SECRET_KEY e S3_FOTOS_ENDPOINT",
+		"Variaveis do app: DATABASE_URL.",
+		"secrets: {npm_token: {environment: NPM_TOKEN}}",
 		"postgres:5432",
-		"env_file: .env",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("guia sem %q:\n%s", want, g)
 		}
 	}
+	for _, notWant := range []string{"env_file", "CAIS_SECRETS", "/run/secrets/<nome>"} {
+		if strings.Contains(g, notWant) {
+			t.Errorf("guia ainda fala de %q:\n%s", notWant, g)
+		}
+	}
 }
 
-// sem healthcheck o up volta "running" na hora; o deploy observa um pouco e
-// container que reinicia ou para com erro e falha (e a anterior volta)
 func TestDeployObservaOsContainersDepoisDoUp(t *testing.T) {
 	m, _, d := newManager(t)
 	m.Settle = 30 * time.Millisecond
@@ -798,7 +848,7 @@ func TestDeployObservaOsContainersDepoisDoUp(t *testing.T) {
 func TestDeleteApagaOAppEDerrubaOProjeto(t *testing.T) {
 	m, _, d := newManager(t)
 	m.Create(App{Name: "web", Repo: "o/web"})
-	m.SetSecret("web", "jwt", []byte("x"))
+	m.SetEnv("web", map[string]string{"JWT": "x"})
 	m.Deploy(context.Background(), "web", "")
 	if err := m.Delete(context.Background(), "web", true); err != nil {
 		t.Fatal(err)
@@ -817,6 +867,8 @@ func TestDeleteApagaOAppEDerrubaOProjeto(t *testing.T) {
 	}
 }
 
+// banco ligado vira variaveis do app: usuario, senha e a URL pronta, com a
+// credencial lida a cada deploy
 func TestBancoLigadoEntraNoDeploy(t *testing.T) {
 	m, _, _ := newManager(t)
 	pws := map[string]string{"postgres/loja": "s3nh4", "mysql/relatorios": "outra"}
@@ -827,64 +879,53 @@ func TestBancoLigadoEntraNoDeploy(t *testing.T) {
 		return "", "", fmt.Errorf("o database %s/%s nao existe", engine, name)
 	}
 	m.Create(App{Name: "web", Repo: "o/web"})
-	m.SetSecret("web", "postgres_loja_pass", []byte("colada a mao"))
-	read := func(s string) string {
-		data, _ := os.ReadFile(filepath.Join(m.SecretsPath("web"), s))
-		return string(data)
-	}
+	m.SetEnv("web", map[string]string{"POSTGRES_LOJA_PASS": "colada a mao"})
 
 	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "nao"}); err == nil {
 		t.Error("ligou banco que nao existe")
 	}
-	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "loja"}); err == nil || !strings.Contains(err.Error(), "gravado a mao") {
-		t.Fatalf("secret repetido: %v", err)
+	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "loja"}); err == nil || !strings.Contains(err.Error(), "ja tem a variavel POSTGRES_LOJA_PASS") {
+		t.Fatalf("variavel repetida: %v", err)
 	}
-	m.DeleteSecret("web", "postgres_loja_pass")
+	m.SetEnv("web", map[string]string{"APP": "1"})
 	if err := m.LinkDB("web", DBLink{Engine: "postgres", Name: "loja"}); err != nil {
 		t.Fatal(err)
 	}
-	// cada banco tem os proprios secrets: o app pode usar mais de um
+	// cada banco tem as proprias variaveis: o app pode usar mais de um
 	if err := m.LinkDB("web", DBLink{Engine: "mysql", Name: "relatorios"}); err != nil {
 		t.Fatal(err)
 	}
-	// os secrets aparecem na hora, marcados com o banco
-	list, _ := m.Secrets("web")
-	got := map[string]string{}
-	for _, s := range list {
-		got[s.Name] = s.Infra
+	if err := m.SetEnv("web", map[string]string{"POSTGRES_LOJA_USER": "x"}); err == nil || !strings.Contains(err.Error(), "postgres/loja") {
+		t.Errorf("sobrescreveu o usuario do banco a mao: %v", err)
 	}
-	want := map[string]string{"postgres_loja_user": "postgres/loja", "postgres_loja_pass": "postgres/loja",
-		"mysql_relatorios_user": "mysql/relatorios", "mysql_relatorios_pass": "mysql/relatorios"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("secrets %v", got)
-	}
-	if read("postgres_loja_user") != "loja" || read("postgres_loja_pass") != "s3nh4" {
-		t.Errorf("credencial %q %q", read("postgres_loja_user"), read("postgres_loja_pass"))
-	}
-	if err := m.DeleteSecret("web", "postgres_loja_pass"); err == nil {
-		t.Error("apagou a senha do banco como secret comum")
-	}
-	if err := m.SetSecret("web", "postgres_loja_user", []byte("x")); err == nil {
-		t.Error("sobrescreveu o usuario do banco a mao")
+	a, _ := m.Get("web")
+	if got := InfraVars(a); len(got) != 6 || got[2] != "POSTGRES_LOJA_URL" || got[5] != "MYSQL_RELATORIOS_URL" {
+		t.Errorf("variaveis da infra %v", got)
 	}
 
-	// a senha mudou no cais: o proximo deploy ja leva a nova
-	pws["postgres/loja"] = "nova"
+	// a senha mudou no cais (com caracteres que a URL escapa): o proximo
+	// deploy ja leva a nova
+	pws["postgres/loja"] = "p@ss/w:rd"
 	if _, err := m.Deploy(context.Background(), "web", ""); err != nil {
 		t.Fatal(err)
 	}
-	if read("postgres_loja_pass") != "nova" {
-		t.Errorf("nao atualizou: %q", read("postgres_loja_pass"))
+	env := runEnv(t, m, "web")
+	want := map[string]string{"APP": "1",
+		"POSTGRES_LOJA_USER": "loja", "POSTGRES_LOJA_PASS": "p@ss/w:rd", "POSTGRES_LOJA_URL": "postgres://loja:p%40ss%2Fw%3Ard@postgres:5432/loja",
+		"MYSQL_RELATORIOS_USER": "relatorios", "MYSQL_RELATORIOS_PASS": "outra", "MYSQL_RELATORIOS_URL": "mysql://relatorios:outra@mysql:3306/relatorios"}
+	if !maps.Equal(env, want) {
+		t.Errorf("run.env %v\nqueria %v", env, want)
 	}
 
 	if err := m.UnlinkDB("web", "postgres", "loja"); err != nil {
 		t.Fatal(err)
 	}
-	if list, _ := m.Secrets("web"); len(list) != 2 || list[0].Infra != "mysql/relatorios" {
-		t.Errorf("depois de desligar o postgres: %+v", list)
-	}
 	if a, _ := m.Get("web"); len(a.Databases) != 1 {
 		t.Errorf("bancos ligados: %+v", a.Databases)
+	}
+	m.Deploy(context.Background(), "web", "")
+	if env := runEnv(t, m, "web"); env["POSTGRES_LOJA_PASS"] != "" || env["MYSQL_RELATORIOS_PASS"] != "outra" {
+		t.Errorf("depois de desligar o postgres: %v", env)
 	}
 }
 
@@ -898,25 +939,14 @@ func TestBucketLigadoEntraNoDeploy(t *testing.T) {
 		return "", "", fmt.Errorf("o bucket %s nao existe", name)
 	}
 	m.Create(App{Name: "web", Repo: "o/web"})
-	read := func(s string) string {
-		data, _ := os.ReadFile(filepath.Join(m.SecretsPath("web"), s))
-		return string(data)
-	}
 	if err := m.LinkBucket("web", BucketLink{Name: "nao"}); err == nil {
 		t.Error("ligou bucket que nao existe")
 	}
 	if err := m.LinkBucket("web", BucketLink{Name: "portal-fotos"}); err != nil {
 		t.Fatal(err)
 	}
-	if read("s3_portal_fotos_access_key") != "GK1" || read("s3_portal_fotos_secret_key") != "s3cr3t" {
-		t.Errorf("chave %q %q", read("s3_portal_fotos_access_key"), read("s3_portal_fotos_secret_key"))
-	}
-	list, _ := m.Secrets("web")
-	if len(list) != 2 || list[0].Infra != "s3/portal-fotos" {
-		t.Fatalf("secrets %+v", list)
-	}
-	if err := m.DeleteSecret("web", "s3_portal_fotos_secret_key"); err == nil {
-		t.Error("apagou a chave do bucket como secret comum")
+	if err := m.SetEnv("web", map[string]string{"S3_PORTAL_FOTOS_SECRET_KEY": "x"}); err == nil {
+		t.Error("gravou a chave do bucket como variavel comum")
 	}
 
 	// chave nova no cais: o proximo deploy ja leva
@@ -924,15 +954,17 @@ func TestBucketLigadoEntraNoDeploy(t *testing.T) {
 	if _, err := m.Deploy(context.Background(), "web", ""); err != nil {
 		t.Fatal(err)
 	}
-	if read("s3_portal_fotos_access_key") != "GK2" {
-		t.Errorf("nao atualizou: %q", read("s3_portal_fotos_access_key"))
+	want := map[string]string{"S3_PORTAL_FOTOS_ACCESS_KEY": "GK2", "S3_PORTAL_FOTOS_SECRET_KEY": "nova", "S3_PORTAL_FOTOS_ENDPOINT": "http://garage:3900"}
+	if env := runEnv(t, m, "web"); !maps.Equal(env, want) {
+		t.Errorf("run.env %v", env)
 	}
 
 	if err := m.UnlinkBucket("web", "portal-fotos"); err != nil {
 		t.Fatal(err)
 	}
-	if list, _ := m.Secrets("web"); len(list) != 0 {
-		t.Errorf("os secrets do bucket ficaram: %+v", list)
+	m.Deploy(context.Background(), "web", "")
+	if env := runEnv(t, m, "web"); len(env) != 0 {
+		t.Errorf("as variaveis do bucket ficaram: %v", env)
 	}
 }
 
@@ -1384,27 +1416,27 @@ func TestCheckComposeSemProxyLigado(t *testing.T) {
 	}
 }
 
-// segredo do build: build secret do ${CAIS_SECRETS} passa sem aviso; de fora
-// do app e recusado; build arg com nome de segredo avisa (fica na imagem)
+// segredo do build: build secret vindo de variavel do app passa sem aviso;
+// de arquivo e recusado; build arg com nome de segredo avisa (fica na imagem)
 func TestCheckComposeBuildSecret(t *testing.T) {
-	src, secretsDir := t.TempDir(), "/var/lib/cais/apps/web/secrets"
+	src := t.TempDir()
 	os.WriteFile(filepath.Join(src, ".dockerignore"), []byte(".env\n"), 0o644)
-	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, DotEnv: filepath.Join(src, ".env")}
-	cfg := func(build, file string) []byte {
+	r := Rules{App: "web", Src: src, DotEnv: filepath.Join(src, ".env")}
+	cfg := func(build, secret string) []byte {
 		return []byte(`{"services": {"web": {"build": {"context": "` + src + `"` + build + `},
 			"logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}}}},
-			"secrets": {"npm_token": {"name": "web_npm_token", "file": "` + file + `"}}}`)
+			"secrets": {"npm_token": {"name": "web_npm_token", ` + secret + `}}}`)
 	}
 
-	p, w := CheckCompose(cfg(`, "secrets": [{"source": "npm_token"}]`, secretsDir+"/npm_token"), r)
+	p, w := CheckCompose(cfg(`, "secrets": [{"source": "npm_token"}]`, `"environment": "NPM_TOKEN"`), r)
 	if len(p) != 0 || len(w) != 0 {
-		t.Fatalf("build secret do app: problemas %v avisos %v", p, w)
+		t.Fatalf("build secret de variavel: problemas %v avisos %v", p, w)
 	}
-	if p, _ := CheckCompose(cfg(`, "secrets": [{"source": "npm_token"}]`, "/root/.npmrc"), r); len(p) != 1 || !strings.Contains(p[0], "fora do app") {
-		t.Errorf("build secret de fora do app: %v", p)
+	if p, _ := CheckCompose(cfg(`, "secrets": [{"source": "npm_token"}]`, `"file": "/root/.npmrc"`), r); len(p) != 1 || !strings.Contains(p[0], "environment: NPM_TOKEN") {
+		t.Errorf("build secret de arquivo: %v", p)
 	}
 
-	_, w = CheckCompose(cfg(`, "args": {"NPM_TOKEN": "x", "NODE_ENV": "production", "STRIPE_API_KEY": null, "PASSENGER": "1"}`, secretsDir+"/npm_token"), r)
+	_, w = CheckCompose(cfg(`, "args": {"NPM_TOKEN": "x", "NODE_ENV": "production", "STRIPE_API_KEY": null, "PASSENGER": "1"}`, `"environment": "NPM_TOKEN"`), r)
 	if len(w) != 2 || !strings.Contains(w[0], "NPM_TOKEN parece segredo") || !strings.Contains(w[0], "id=npm_token") ||
 		!strings.Contains(w[1], "STRIPE_API_KEY parece segredo") {
 		t.Errorf("avisos dos build args %v", w)

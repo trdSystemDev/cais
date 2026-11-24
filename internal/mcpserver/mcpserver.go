@@ -1,8 +1,8 @@
 // Package mcpserver expoe o cais como servidor MCP: cada ferramenta chama
 // uma acao da core.API (as mesmas da TUI e do CLI, com as mesmas regras).
 //
-// Nada que apaga dados nem o Setup da VPS entra aqui: excluir app, banco,
-// bucket ou secret, ligar ou desligar servico e a config da VPS ficam so com
+// Nada que apaga dados nem o Setup da VPS entra aqui: excluir app, banco ou
+// bucket, ligar ou desligar servico e a config da VPS ficam so com
 // o humano, pela TUI ou pelo CLI.
 package mcpserver
 
@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -27,12 +28,13 @@ com a versao antiga no ar e sobe. Se o up falhar, a versao anterior volta.
 
 Fluxo de um app novo:
 1. app_create (nome, repositorio, branch, arquivo de compose).
-2. app_guide: o modelo de compose de producao (labels do Traefik, redes,
-   secrets). O compose mora no repositorio do app: escreva la e faca push.
+2. app_guide: o modelo de compose de producao (labels do Traefik, redes e o
+   entrypoint com o cais run, que injeta as variaveis no processo do app).
+   O compose mora no repositorio do app: escreva la e faca push.
 3. Banco/bucket se precisar: database_create ou bucket_create e depois
-   app_link_database ou app_link_bucket (o cais grava a credencial em
-   secrets do app).
-4. app_env_set (so o que nao e segredo) e app_secret_set (senhas e chaves).
+   app_link_database ou app_link_bucket (o app recebe a credencial como
+   variaveis, ex: POSTGRES_<NOME>_URL).
+4. app_env_set: todas as variaveis do app, senhas e chaves inclusive.
 5. app_deploy. Se o compose estiver fora do formato do cais, o deploy recusa
    antes do build e diz o motivo e a correcao: corrija no repositorio e tente
    de novo. Depois do deploy, apps_list e app_logs mostram como ficou.
@@ -45,11 +47,11 @@ nome dela). Valide nela e use app_promote_check e app_promote pra levar o
 commit pra producao; o deploy direto da producao pula a validacao.
 auto_deploy faz o deploy sozinho a cada commit novo na branch do app.
 
-Variaveis valem no proximo deploy; secrets tambem (arquivo em
-${CAIS_SECRETS}/<nome>, no container /run/secrets/<nome>). Valores de secret
-nunca sao devolvidos.
+Variaveis valem no proximo deploy. O cais run as injeta no processo do app:
+nada vai pra config do container (docker inspect). Valores nunca sao
+devolvidos aqui, so os nomes.
 
-Excluir app, banco, bucket ou secret, o Setup da VPS e ligar ou desligar
+Excluir app, banco ou bucket, o Setup da VPS e ligar ou desligar
 servicos (Postgres, MySQL, Garage) nao estao disponiveis aqui, de proposito:
 peca ao usuario pra fazer pela TUI ou pelo CLI do cais. Se database_create ou
 bucket_create disser que a stack esta desligada, e isso que falta.`
@@ -103,10 +105,10 @@ type (
 		Set   map[string]string `json:"set,omitempty" jsonschema:"variaveis a criar ou trocar (NOME: valor)"`
 		Unset []string          `json:"unset,omitempty" jsonschema:"variaveis a remover"`
 	}
-	secretSetArgs struct {
-		App   string `json:"app" jsonschema:"nome do app"`
-		Name  string `json:"name" jsonschema:"nome do secret: minusculas, numeros e _ (ex: jwt_secret)"`
-		Value string `json:"value" jsonschema:"valor do secret"`
+	// envNames sao so os nomes: o valor de uma variavel nunca volta pela IA
+	envNames struct {
+		Vars  []string `json:"vars" jsonschema:"variaveis gravadas no app"`
+		Infra []string `json:"infra,omitempty" jsonschema:"variaveis que os bancos e buckets ligados entregam no deploy"`
 	}
 	appCreateArgs struct {
 		Name       string `json:"name" jsonschema:"nome do app: minusculas, numeros e -"`
@@ -187,7 +189,7 @@ func (t tools) registerRead(s *mcp.Server) {
 			return text(out), nil, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "apps_list", Annotations: readOnly(),
-		Description: "Lista os apps: repositorio, branch, compose, commit no ar, ultimo deploy, containers (estado e saude), bancos e buckets ligados e nomes dos secrets."},
+		Description: "Lista os apps: repositorio, branch, compose, commit no ar, ultimo deploy, containers (estado e saude), bancos e buckets ligados."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, core.Apps, error) {
 			list, err := t.api.CheckApps(ctx)
 			return nil, list, err
@@ -199,31 +201,32 @@ func (t tools) registerRead(s *mcp.Server) {
 			return text(out), nil, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_guide", Annotations: readOnly(),
-		Description: "Modelo do compose de producao do app no formato do cais: labels do Traefik, redes da infra, secrets e as variaveis atuais. Use antes de escrever ou corrigir o compose."},
+		Description: "Modelo do compose de producao do app no formato do cais: labels do Traefik, redes da infra, o entrypoint com o cais run e os nomes das variaveis. Use antes de escrever ou corrigir o compose."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in appArgs) (*mcp.CallToolResult, any, error) {
 			out, err := t.api.AppGuide(ctx, in.App)
 			return text(out), nil, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_env_get", Annotations: readOnly(),
-		Description: "Variaveis do app (viram o .env do projeto no deploy)."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in appArgs) (*mcp.CallToolResult, map[string]string, error) {
+		Description: "Nomes das variaveis do app e das que os bancos e buckets ligados entregam. O valor nunca e devolvido (pode ser senha)."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in appArgs) (*mcp.CallToolResult, envNames, error) {
 			env, err := t.api.AppEnv(ctx, in.App)
-			return nil, env, err
-		})
-	mcp.AddTool(s, &mcp.Tool{Name: "app_secrets_list", Annotations: readOnly(),
-		Description: "Nomes dos secrets do app (o valor nunca e devolvido). infra indica a credencial de banco ou bucket gravada pelo cais."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in appArgs) (*mcp.CallToolResult, []apps.Secret, error) {
-			list, err := t.api.AppSecrets(ctx, in.App)
-			return nil, list, err
+			if err != nil {
+				return nil, envNames{}, err
+			}
+			out := envNames{Vars: slices.Sorted(maps.Keys(env))}
+			if a, err := t.app(ctx, in.App); err == nil {
+				out.Infra = apps.InfraVars(a)
+			}
+			return nil, out, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "databases_list", Annotations: readOnly(),
-		Description: "Databases criados pelo cais no Postgres/MySQL da infra: host, secrets que o app recebe, apps ligados e espaco ocupado (sem a senha)."},
+		Description: "Databases criados pelo cais no Postgres/MySQL da infra: host, variaveis que o app recebe, apps ligados e espaco ocupado (sem a senha)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, []core.DatabaseInfo, error) {
 			list, err := t.api.Databases(ctx)
 			return nil, list, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "buckets_list", Annotations: readOnly(),
-		Description: "Buckets do Garage criados pelo cais: endpoint, secrets que o app recebe, apps ligados e espaco ocupado (sem a chave)."},
+		Description: "Buckets do Garage criados pelo cais: endpoint, variaveis que o app recebe, apps ligados e espaco ocupado (sem a chave)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, []core.BucketInfo, error) {
 			list, err := t.api.Buckets(ctx)
 			return nil, list, err
@@ -300,14 +303,14 @@ func (t tools) registerApps(s *mcp.Server) {
 			return nil, res, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_rollback", Annotations: action(),
-		Description: "Volta o app pra um deploy anterior que deu certo (commit vazio: o anterior ao que esta no ar; o historico esta em apps_list). Usa as imagens guardadas dos ultimos deploys, sem build, e troca sem queda. Variaveis e secrets sao os de agora. Com auto_deploy, o automatico espera um commit novo na branch."},
+		Description: "Volta o app pra um deploy anterior que deu certo (commit vazio: o anterior ao que esta no ar; o historico esta em apps_list). Usa as imagens guardadas dos ultimos deploys, sem build, e troca sem queda. As variaveis sao as de agora. Com auto_deploy, o automatico espera um commit novo na branch."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in rollbackArgs) (*mcp.CallToolResult, apps.DeployResult, error) {
 			res, err := t.api.RollbackApp(ctx, in.App, in.Commit)
 			return nil, res, err
 		})
 }
 
-// registerAppOps registra a operacao do dia a dia dos apps: restart, stop, variaveis e secrets.
+// registerAppOps registra a operacao do dia a dia dos apps: restart, stop e variaveis.
 func (t tools) registerAppOps(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "app_restart", Annotations: idempotent(),
 		Description: "Reinicia o app, ou so um service do compose."},
@@ -326,7 +329,7 @@ func (t tools) registerAppOps(s *mcp.Server) {
 			return text(in.App + " parado. Volta com app_restart."), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_env_set", Annotations: idempotent(),
-		Description: "Cria, troca ou remove variaveis do app, mantendo as outras. Valem no proximo deploy. Senhas e chaves vao em app_secret_set, nao aqui."},
+		Description: "Cria, troca ou remove variaveis do app, mantendo as outras. Senhas e chaves tambem: o cais run injeta no processo, nada vai pro docker inspect. Valem no proximo deploy. O retorno traz so os nomes."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in envSetArgs) (*mcp.CallToolResult, any, error) {
 			if len(in.Set) == 0 && len(in.Unset) == 0 {
 				return nil, nil, errors.New("informe set ou unset")
@@ -351,14 +354,6 @@ func (t tools) registerAppOps(s *mcp.Server) {
 			sort.Strings(names)
 			return text(fmt.Sprintf("Variaveis de %s gravadas (valem no proximo deploy): %s.", in.App, strings.Join(names, ", "))), nil, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "app_secret_set", Annotations: idempotent(),
-		Description: "Grava um secret do app (arquivo ${CAIS_SECRETS}/<nome>, no container /run/secrets/<nome>). Vale no proximo deploy. Secrets de banco e bucket sao gravados pelo cais ao ligar, nao aqui."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in secretSetArgs) (*mcp.CallToolResult, any, error) {
-			if err := t.api.SetAppSecret(ctx, in.App, in.Name, in.Value); err != nil {
-				return nil, nil, err
-			}
-			return text(in.Name + " gravado em ${CAIS_SECRETS}/" + in.Name + " (vale no proximo deploy)."), nil, nil
-		})
 }
 
 // registerData registra bancos e buckets: criar e ligar aos apps.
@@ -370,16 +365,16 @@ func (t tools) registerData(s *mcp.Server) {
 			return nil, info, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_link_database", Annotations: idempotent(),
-		Description: "Liga o app a um database da infra: o cais grava os secrets <engine>_<nome>_user e <engine>_<nome>_pass (o database tem o nome do usuario; host postgres:5432 ou mysql:3306). O app monta a URL. Vale no proximo deploy."},
+		Description: "Liga o app a um database da infra: o app recebe as variaveis <ENGINE>_<NOME>_USER, _PASS e _URL (URL pronta; o database tem o nome do usuario; host postgres:5432 ou mysql:3306). Vale no proximo deploy."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in dbLinkArgs) (*mcp.CallToolResult, any, error) {
 			if err := t.api.LinkAppDatabase(ctx, in.App, in.Engine, in.Name); err != nil {
 				return nil, nil, err
 			}
 			l := apps.DBLink{Engine: in.Engine, Name: in.Name}
-			return text(fmt.Sprintf("%s ligado a %s: secrets %s.", in.App, l.ID(), strings.Join(l.Secrets(), " e "))), nil, nil
+			return text(fmt.Sprintf("%s ligado a %s: variaveis %s (no proximo deploy).", in.App, l.ID(), strings.Join(l.Vars(), ", "))), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_unlink_database", Annotations: idempotent(),
-		Description: "Desliga o app do database: apaga so os secrets dele no app; o database e os dados ficam."},
+		Description: "Desliga o app do database: as variaveis dele saem no proximo deploy; o database e os dados ficam."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in dbLinkArgs) (*mcp.CallToolResult, any, error) {
 			if err := t.api.UnlinkAppDatabase(ctx, in.App, in.Engine, in.Name); err != nil {
 				return nil, nil, err
@@ -393,16 +388,16 @@ func (t tools) registerData(s *mcp.Server) {
 			return nil, info, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_link_bucket", Annotations: idempotent(),
-		Description: "Liga o app a um bucket: o cais grava os secrets s3_<bucket>_access_key e s3_<bucket>_secret_key (- vira _). Endpoint http://garage:3900, regiao garage, path-style, rede garage_network. Vale no proximo deploy."},
+		Description: "Liga o app a um bucket: o app recebe as variaveis S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT (- vira _; endpoint http://garage:3900, regiao garage, path-style, rede garage_network). Vale no proximo deploy."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in bucketLinkArgs) (*mcp.CallToolResult, any, error) {
 			if err := t.api.LinkAppBucket(ctx, in.App, in.Bucket); err != nil {
 				return nil, nil, err
 			}
 			l := apps.BucketLink{Name: in.Bucket}
-			return text(fmt.Sprintf("%s ligado ao bucket %s: secrets %s.", in.App, in.Bucket, strings.Join(l.Secrets(), " e "))), nil, nil
+			return text(fmt.Sprintf("%s ligado ao bucket %s: variaveis %s (no proximo deploy).", in.App, in.Bucket, strings.Join(l.Vars(), ", "))), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_unlink_bucket", Annotations: idempotent(),
-		Description: "Desliga o app do bucket: apaga so os secrets dele no app; o bucket e os arquivos ficam."},
+		Description: "Desliga o app do bucket: as variaveis dele saem no proximo deploy; o bucket e os arquivos ficam."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in bucketLinkArgs) (*mcp.CallToolResult, any, error) {
 			if err := t.api.UnlinkAppBucket(ctx, in.App, in.Bucket); err != nil {
 				return nil, nil, err

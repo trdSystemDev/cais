@@ -99,24 +99,18 @@ type API interface {
 	RestartApp(ctx context.Context, name, service string) error
 	// StopApp para o app sem apagar nada.
 	StopApp(ctx context.Context, name string) error
-	// DeleteApp remove o app (containers, imagens, codigo, variaveis e
-	// secrets). Com volumes, apaga tambem os dados dos volumes. O database
+	// DeleteApp remove o app (containers, imagens, codigo e variaveis). Com
+	// volumes, apaga tambem os dados dos volumes. O database
 	// da infra fica (aba Infra).
 	DeleteApp(ctx context.Context, name string, volumes bool) error
 	// AppLogs le as ultimas linhas de um container do app.
 	AppLogs(ctx context.Context, name, container string) (string, error)
-	// AppEnv le as variaveis do app (o .env do projeto no deploy).
+	// AppEnv le as variaveis do app (o cais run injeta no processo dele).
 	AppEnv(ctx context.Context, name string) (map[string]string, error)
 	// SetAppEnv troca as variaveis do app; valem no proximo deploy.
 	SetAppEnv(ctx context.Context, name string, env map[string]string) error
-	// AppSecrets lista os secrets do app (nomes, nunca valores).
-	AppSecrets(ctx context.Context, name string) ([]apps.Secret, error)
-	// SetAppSecret grava um secret do app (arquivo em ${CAIS_SECRETS}).
-	SetAppSecret(ctx context.Context, name, secret, value string) error
-	// DeleteAppSecret apaga um secret do app.
-	DeleteAppSecret(ctx context.Context, name, secret string) error
 	// AppGuide e o texto de ajuda pra escrever o compose de producao do app
-	// (labels do Traefik, redes, variaveis e secrets).
+	// (labels do Traefik, redes e as variaveis pelo cais run).
 	AppGuide(ctx context.Context, name string) (string, error)
 
 	// CreateDatabase cria um database e um usuario com senha nova no
@@ -125,8 +119,8 @@ type API interface {
 	// Databases lista os databases criados pelo cais, com os apps que usam
 	// cada um e o espaco ocupado.
 	Databases(ctx context.Context) ([]DatabaseInfo, error)
-	// LinkAppDatabase liga o app a um database da infra: o deploy grava
-	// ${CAIS_SECRETS}/<engine>_<nome>_user e <engine>_<nome>_pass.
+	// LinkAppDatabase liga o app a um database da infra: o deploy entrega as
+	// variaveis <ENGINE>_<NOME>_USER, _PASS e _URL.
 	LinkAppDatabase(ctx context.Context, app, engine, name string) error
 	// UnlinkAppDatabase desliga o app do database (o database e os dados ficam).
 	UnlinkAppDatabase(ctx context.Context, app, engine, name string) error
@@ -141,8 +135,8 @@ type API interface {
 	// Buckets lista os buckets criados pelo cais, com os apps que usam
 	// cada um e o espaco ocupado.
 	Buckets(ctx context.Context) ([]BucketInfo, error)
-	// LinkAppBucket liga o app a um bucket: o deploy grava
-	// ${CAIS_SECRETS}/s3_<bucket>_access_key e s3_<bucket>_secret_key.
+	// LinkAppBucket liga o app a um bucket: o deploy entrega as variaveis
+	// S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT.
 	LinkAppBucket(ctx context.Context, app, bucket string) error
 	// UnlinkAppBucket desliga o app do bucket (o bucket e os arquivos ficam).
 	UnlinkAppBucket(ctx context.Context, app, bucket string) error

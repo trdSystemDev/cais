@@ -107,9 +107,9 @@ mesmos argumentos, e cada constante do protocolo tem que ter handler.
 | `internal/bootstrap` | assistente da VPS vazia |
 | `internal/stacks` | stacks base + `templates/` embutidos |
 | `internal/docker` | checagem, SDK do Docker e `docker compose` |
-| `internal/secrets` | secrets centrais e por app |
+| `internal/secrets` | secrets centrais (senhas das stacks, chaves do GitHub App e da Brevo) |
 | `internal/databases` | databases/usuarios Postgres e MySQL |
-| `internal/apps` | apps em `/var/lib/cais/apps/<app>`: deploy, `.env`, secrets, avisos e ajuda do compose |
+| `internal/apps` | apps em `/var/lib/cais/apps/<app>`: deploy, variaveis (`run.env` e `.env`), avisos e ajuda do compose |
 | `internal/github` | GitHub App: token por repositorio, commit e tarball do codigo |
 | `internal/config` | `/etc/cais/config.yaml` e os caminhos no disco |
 | `install.sh` | instalador: baixa o release e traz a unidade do systemd |
@@ -122,7 +122,7 @@ mesmos argumentos, e cada constante do protocolo tem que ter handler.
 |---|---|
 | `/etc/cais/config.yaml` | configuracao: e-mail, servicos opcionais ativos, hosts, avisos |
 | `/var/lib/cais/stacks/<stack>/` | compose das stacks (proxy, postgres, mysql, garage) |
-| `/var/lib/cais/apps/<app>/` | `app.yaml`, `env` (variaveis), `secrets/` e o codigo: `src/` (no ar) e `src.prev` (anterior) |
+| `/var/lib/cais/apps/<app>/` | `app.yaml`, `env` (variaveis, JSON `0600`), `run.env` (o que o `cais run` injeta, gerado no deploy) e o codigo: `src/` (no ar) e `src.prev` (anterior) |
 | `/var/lib/cais/secrets/` | secrets centrais (senhas das instancias de banco etc.) |
 | `/var/lib/cais/backups/` | backups |
 | `/run/cais/cais.sock` | socket do daemon |
@@ -132,8 +132,10 @@ e `StateDirectory`); `/var/lib/cais` e `0700`, so o daemon escreve nele. Os
 caminhos ficam em `internal/config/paths.go` e podem ser trocados por
 `CAIS_CONFIG` e `CAIS_DATA_DIR` (ex: pra testar no PC).
 
-Secrets ficam em texto puro em `/var/lib/cais` (pasta root `0700`, arquivos
-`0444`); o valor nunca aparece no estado nem em log. Backups saem
+Secrets e variaveis dos apps ficam em texto puro em `/var/lib/cais` (pasta
+root `0700`); o valor nunca aparece no estado, em log nem pelo MCP. O app
+recebe as variaveis no processo pelo `cais run`, nunca na config do container
+(`docker inspect`). Backups saem
 criptografados com [age](https://age-encryption.org) para uma chave publica
 cuja privada fica fora da VPS. Motivos em `internal/secrets/doc.go`.
 

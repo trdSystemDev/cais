@@ -56,10 +56,10 @@ journalctl -u cais | grep app=loja`},
 Confere Docker e Docker Compose (instalados, versao, daemon no ar).`},
 		{name: "mcp", usage: "mcp [--socket]", short: "servidor MCP pelo stdin/stdout (pra IA, via ssh)", long: `
 Expoe o cais como ferramentas MCP: ler o estado, logs e a ajuda do compose;
-criar e atualizar app, deploy, restart, stop, variaveis, secrets, criar e
-ligar banco e bucket. Nada que apaga dados nem o Setup: excluir app, banco,
-bucket ou secret, ligar ou desligar servico e a config da VPS ficam so na
-TUI e no CLI.
+criar e atualizar app, deploy, restart, stop, variaveis (so os nomes voltam,
+nunca os valores), criar e ligar banco e bucket. Nada que apaga dados nem o
+Setup: excluir app, banco ou bucket, ligar ou desligar servico e a config da
+VPS ficam so na TUI e no CLI.
 
 Roda na VPS e conversa pelo stdin/stdout; o cliente MCP no seu computador
 chama pelo ssh (a autenticacao e a sua chave SSH, sem porta nova).
@@ -67,6 +67,21 @@ chama pelo ssh (a autenticacao e a sua chave SSH, sem porta nova).
 Exemplo (Claude Code, no seu computador):
   claude mcp add cais -- ssh cais@vps cais mcp   # instalado com --ssh
   claude mcp add cais -- ssh root@vps cais mcp`},
+		{name: "run", usage: "run [-env arquivo] -- <comando> [args...]", short: "no container do app: injeta as variaveis e roda", long: `
+Roda dentro do container do app, como entrypoint: le as variaveis que o
+deploy gravou (montadas em /run/cais/env), junta ao ambiente e vira o comando
+(exec, os sinais chegam direto no app). Nada vai pra config do container
+(docker inspect). Nao fala com o daemon; funciona em qualquer imagem Linux,
+ate sem shell. O trecho do compose sai pronto em cais app guide.
+
+Exemplo (no compose do app):
+  entrypoint: ["/cais", "run", "--", "node", "server.js"]
+  volumes:
+    - ${CAIS_BIN}:/cais:ro
+    - ${CAIS_ENV}:/run/cais/env:ro
+
+Comando avulso com as variaveis (migracao, console):
+  docker compose -p <app> exec web /cais run -- php artisan migrate`},
 		{name: "version", usage: "version", short: "mostra a versao"},
 		{name: "help", usage: "help [comando]", short: "esta ajuda; com o comando, os detalhes dele", long: `
 Exemplos:
@@ -148,7 +163,7 @@ Exemplos:
 	{title: "Bancos (no Postgres/MySQL da infra):", group: "db", cmds: []command{
 		{name: "db create", usage: "db create postgres|mysql <nome> [-extensions postgis] [-import]", short: "database e usuario com senha nova (vazio ou importado)", long: `
 Cria o database e um usuario de mesmo nome, que so acessa esse database. A
-senha fica guardada no cais e chega no app pelos secrets ao ligar o banco
+senha fica guardada no cais e chega no app pelas variaveis ao ligar o banco
 (cais app db). Nome: minusculas, numeros e _, ate 32.
 
 Com -import, o database novo ja nasce com o conteudo de um banco em outro
@@ -173,7 +188,7 @@ Exemplos:
   cais db create postgres portal -extensions postgis
   cais db create mysql estoque -import
   cais app db portal postgres/portal      # liga ao app`},
-		{name: "db list", usage: "db list", short: "databases criados pelo cais: secrets, espaco e app"},
+		{name: "db list", usage: "db list", short: "databases criados pelo cais: variaveis, espaco e app"},
 		{name: "db delete", usage: "db delete postgres|mysql <nome> [-yes]", short: "apaga o database e o usuario (nao pode estar ligado a app)", long: `
 Apaga todos os dados do database, o usuario e a senha guardada. Nao tem
 volta. Recusa se algum app ainda usa o banco: desligue antes com
@@ -185,7 +200,7 @@ Flags:
 	{title: "Buckets (no Garage da infra):", group: "bucket", cmds: []command{
 		{name: "bucket create", usage: "bucket create <nome>", short: "bucket e uma chave so dele (guardada no cais)", long: `
 Cria o bucket (privado) e uma chave com leitura, escrita e dono so nele. A
-chave fica guardada no cais e chega no app pelos secrets ao ligar o bucket
+chave fica guardada no cais e chega no app pelas variaveis ao ligar o bucket
 (cais app bucket). Nome: 3 a 63 letras minusculas, numeros e -.
 
 Os arquivos dos buckets nao entram no backup do cais (so os databases e o
@@ -194,7 +209,7 @@ estado do cais entram).
 Exemplos:
   cais bucket create portal-fotos
   cais app bucket portal portal-fotos     # liga ao app`},
-		{name: "bucket list", usage: "bucket list", short: "buckets criados pelo cais: secrets, espaco e app"},
+		{name: "bucket list", usage: "bucket list", short: "buckets criados pelo cais: variaveis, espaco e app"},
 		{name: "bucket delete", usage: "bucket delete <nome> [-yes]", short: "apaga o bucket (vazio) e a chave (nao pode estar ligado a app)", long: `
 O Garage so apaga bucket vazio. Recusa se algum app ainda usa o bucket:
 desligue antes com "cais app bucket <app> off <nome>". Pede o nome digitado
@@ -331,43 +346,43 @@ que estava no ar antes do rollback nao sobe sozinho).
 Exemplos:
   cais app rollback portal
   cais app rollback portal 1910cca`},
-		{name: "app guide", usage: "app guide <nome>", short: "modelo de compose: labels do Traefik, redes, secrets"},
-		{name: "app env", usage: "app env <nome> [VAR=valor...] [-unset VAR,...] [-import arquivo.env]", short: "mostra ou muda as variaveis (.env do projeto);\n-import junta um .env (- le do stdin)", long: `
-Sem mudancas, so mostra. As variaveis viram o .env do projeto no deploy
-(valem no proximo). Senhas e chaves vao em secrets, nao aqui.
+		{name: "app guide", usage: "app guide <nome>", short: "modelo de compose: labels do Traefik, redes, cais run"},
+		{name: "app env", usage: "app env <nome> [VAR=valor... | VAR] [-unset VAR,...] [-import arquivo.env] [-show]", short: "mostra ou muda as variaveis (senhas inclusive);\nVAR sozinho le o valor sem eco", long: `
+Sem mudancas, mostra os nomes (-show mostra os valores). Todas as variaveis,
+senhas e chaves inclusive, chegam no processo do app pelo cais run (veja
+cais app guide): nada vai pro docker inspect. Valem no proximo deploy.
+
+VAR sozinho (sem =) pede o valor sem eco, ou le do stdin: senha fora do
+historico do shell, ou um valor com varias linhas (chave PEM, JSON).
 
 Flags:
   -unset VAR,...      remove as variaveis
   -import arquivo     junta um .env (- le do stdin); a que ja existe recebe o valor novo
+  -show               mostra os valores
 
 Exemplos:
   cais app env portal
   cais app env portal NODE_ENV=production DOMINIO=portal.exemplo.com
+  cais app env portal JWT_SECRET                  # pede o valor sem eco
+  cais app env portal FIREBASE_KEY < chave.json
   cais app env portal -unset TESTE
   cais app env portal -import .env.producao`},
-		{name: "app db", usage: "app db <nome> [postgres/<db> | off postgres/<db>]", short: "bancos da infra do app: o deploy grava os secrets\npostgres_<db>_user e postgres_<db>_pass em ${CAIS_SECRETS}", long: `
-Sem banco, mostra os ligados. O database tem o nome do usuario; o app chega
-por postgres:5432 (ou mysql:3306) e monta a URL. Desligar nao apaga o database.
+		{name: "app db", usage: "app db <nome> [postgres/<db> | off postgres/<db>]", short: "bancos da infra do app: o deploy entrega as variaveis\nPOSTGRES_<DB>_USER, _PASS e _URL", long: `
+Sem banco, mostra os ligados. O database tem o nome do usuario; a URL vem
+pronta (postgres://...@postgres:5432/<db>, ou mysql:3306). Desligar nao apaga
+o database.
 
 Exemplos:
   cais app db portal postgres/portal
   cais app db portal off postgres/portal`},
-		{name: "app bucket", usage: "app bucket <nome> [<bucket> | off <bucket>]", short: "buckets do app: o deploy grava os secrets\ns3_<bucket>_access_key e s3_<bucket>_secret_key", long: `
-Sem bucket, mostra os ligados. O - do nome do bucket vira _ nos secrets. O
-app usa o endpoint http://garage:3900, regiao garage, path-style, na rede
+		{name: "app bucket", usage: "app bucket <nome> [<bucket> | off <bucket>]", short: "buckets do app: o deploy entrega as variaveis\nS3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT", long: `
+Sem bucket, mostra os ligados. O - do nome do bucket vira _ nas variaveis.
+Endpoint http://garage:3900, regiao garage, path-style, na rede
 garage_network. Desligar nao apaga o bucket.
 
 Exemplos:
   cais app bucket portal portal-fotos
   cais app bucket portal off portal-fotos`},
-		{name: "app secrets", usage: "app secrets <nome>", short: "lista os secrets do app (so nomes)"},
-		{name: "app secret", usage: "app secret <nome> <secret>", short: "grava um secret (le sem eco, ou do stdin)", long: `
-Cada secret e um arquivo em ${CAIS_SECRETS}/<secret>; no container, em
-/run/secrets/<secret>. Vale no proximo deploy. Nome: minusculas, numeros e _.
-
-Exemplos:
-  cais app secret portal jwt_secret            # pede o valor sem eco
-  cais app secret portal firebase_key < chave.json`},
 		{name: "app restart", usage: "app restart <nome> [service]", short: "reinicia o app (ou um service)"},
 		{name: "app stop", usage: "app stop <nome>", short: "para o app sem apagar nada", long: `
 Volta com: cais app restart <nome>`},

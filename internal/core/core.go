@@ -67,7 +67,10 @@ type Deps struct {
 
 	// Apps: pasta dos apps, de onde vem o codigo (padrao: o GitHub App) e
 	// as operacoes de projeto compose deles.
-	AppsDir   string
+	AppsDir string
+	// CaisBin e o binario do cais que o compose dos apps monta pro cais
+	// run (padrao: o executavel deste processo).
+	CaisBin   string
 	AppSource apps.Source
 	AppDocker apps.Docker
 	// AppSettle e quanto o deploy observa os containers depois do up
@@ -222,6 +225,9 @@ func New(d Deps) *Core {
 	if d.AppsDir == "" {
 		d.AppsDir = filepath.Join(config.DataDir(), "apps")
 	}
+	if d.CaisBin == "" {
+		d.CaisBin = caisBin()
+	}
 	if d.AppSettle == 0 {
 		d.AppSettle = 15 * time.Second
 	}
@@ -255,6 +261,17 @@ func New(d Deps) *Core {
 	c := &Core{deps: d, subs: map[int]chan State{}, builds: apps.NewBuildQueue(1)}
 	c.builds.Waiting = c.setBuildQueued
 	return c
+}
+
+// caisBin e o caminho do executavel deste processo: o binario do cais que
+// os apps montam pro cais run. Trocado no disco por uma atualizacao, o
+// /proc/self/exe diz "(deleted)"; o caminho continua o mesmo.
+func caisBin() string {
+	p, err := os.Executable()
+	if err != nil {
+		return "/usr/local/bin/cais"
+	}
+	return strings.TrimSuffix(p, " (deleted)")
 }
 
 // Snapshot devolve a foto atual do estado. Localmente nunca falha; o erro

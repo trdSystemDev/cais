@@ -53,10 +53,6 @@ func StackDir(name string) string { return filepath.Join(DataDir(), "stacks", na
 // AppDir e a pasta de um app.
 func AppDir(name string) string { return filepath.Join(DataDir(), "apps", name) }
 
-// AppSecretsDir e a pasta de secrets de um app, a unica que o compose dele
-// pode referenciar em "file:".
-func AppSecretsDir(name string) string { return filepath.Join(AppDir(name), "secrets") }
-
 // SecretsDir guarda os secrets centrais (senhas das instancias de banco etc).
 func SecretsDir() string { return filepath.Join(DataDir(), "secrets") }
 

@@ -543,7 +543,7 @@ func TestInfraLigaOProxyEAplicaAConfig(t *testing.T) {
 	}
 }
 
-// Novo banco: database e usuario com senha nova, e a lista com secrets e espaco
+// Novo banco: database e usuario com senha nova, e a lista com as variaveis e o espaco
 func TestInfraNovoBanco(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	setupDone(t, c, "postgres")
@@ -556,7 +556,7 @@ func TestInfraNovoBanco(t *testing.T) {
 	typeIn(t, m, "db-exts", "postgis")
 	click(t, m, "db-create")
 	waitFor(t, m, "Database loja criado")
-	waitFor(t, m, "postgres_loja_user, postgres_loja_pass (sem app)")
+	waitFor(t, m, "POSTGRES_LOJA_URL (sem app)")
 	list, err := c.Databases(context.Background())
 	if err != nil || len(list) != 1 || list[0].Name != "loja" {
 		t.Fatalf("databases %+v %v", list, err)
@@ -568,7 +568,7 @@ func TestInfraNovoBanco(t *testing.T) {
 	waitFor(t, m, "ja existe")
 }
 
-// Novo bucket no Garage: bucket e chave, e a lista com os secrets do app
+// Novo bucket no Garage: bucket e chave, e a lista com as variaveis do app
 func TestInfraNovoBucket(t *testing.T) {
 	c, _, _ := testCore(t, okChecker)
 	setupDone(t, c, "proxy", "garage")
@@ -579,7 +579,7 @@ func TestInfraNovoBucket(t *testing.T) {
 	typeIn(t, m, "db-name", "portal-fotos")
 	click(t, m, "db-create")
 	waitFor(t, m, "Bucket portal-fotos criado")
-	waitFor(t, m, "s3_portal_fotos_access_key, s3_portal_fotos_secret_key (sem app)")
+	waitFor(t, m, "S3_PORTAL_FOTOS_ENDPOINT (sem app)")
 	if list, err := c.Buckets(context.Background()); err != nil || len(list) != 1 {
 		t.Fatalf("buckets %+v %v", list, err)
 	}

@@ -57,7 +57,7 @@ func (p *appsPage) rollback(commit string) tea.Cmd {
 	}
 	if p.rollbackArm != commit {
 		p.rollbackArm = commit
-		p.setStatus("warn", "Voltar "+a.Name+" pra "+shortCommit(commit)+"? Aperte de novo pra confirmar (variaveis e secrets sao os de agora).")
+		p.setStatus("warn", "Voltar "+a.Name+" pra "+shortCommit(commit)+"? Aperte de novo pra confirmar (as variaveis sao as de agora).")
 		p.rebuild()
 		return nil
 	}
@@ -195,7 +195,7 @@ func (p *appsPage) saveEnv() tea.Cmd {
 			p.setStatus("danger", "variavel "+k+" repetida")
 			return nil
 		}
-		env[k] = r.value.Value()
+		env[k] = r.val()
 	}
 	name := a.Name
 	p.envPending = env
@@ -204,12 +204,22 @@ func (p *appsPage) saveEnv() tea.Cmd {
 	})
 }
 
+// envRowOf e a linha de variavel do campo (nil se nao e de variavel).
+func (p *appsPage) envRowOf(ti *textinput.Model) *envRow {
+	for _, r := range p.envRows {
+		if r.name == ti || r.value == ti {
+			return r
+		}
+	}
+	return nil
+}
+
 // envNow sao as variaveis como estao nos editores (linhas sem nome ficam fora).
 func (p *appsPage) envNow() map[string]string {
 	env := map[string]string{}
 	for _, r := range p.envRows {
 		if k := strings.TrimSpace(r.name.Value()); k != "" {
-			env[k] = r.value.Value()
+			env[k] = r.val()
 		}
 	}
 	return env
@@ -234,7 +244,8 @@ func (p *appsPage) applyImport() tea.Cmd {
 	for _, k := range keys {
 		i := slices.IndexFunc(p.envRows, func(r *envRow) bool { return strings.TrimSpace(r.name.Value()) == k })
 		if i >= 0 {
-			if p.envRows[i].value.Value() != env[k] {
+			if p.envRows[i].val() != env[k] {
+				p.envRows[i].multi = ""
 				p.envRows[i].value.SetValue(env[k])
 				p.envRows[i].value.CursorStart()
 				changed++
@@ -250,22 +261,6 @@ func (p *appsPage) applyImport() tea.Cmd {
 	return p.setFocus(slices.IndexFunc(p.fields, func(f *field) bool { return f.id == "env-save" }))
 }
 
-func (p *appsPage) saveSecret() tea.Cmd {
-	a := p.selected()
-	if a == nil {
-		return nil
-	}
-	secret, value := strings.TrimSpace(p.secretName.Value()), p.secretValue.Value()
-	if secret == "" || value == "" {
-		p.setStatus("danger", "Informe o nome e o valor do secret.")
-		return nil
-	}
-	name := a.Name
-	return p.do(name, "Gravando "+secret, secret+" gravado em ${CAIS_SECRETS}/"+secret+" (vale no proximo deploy).", func(ctx context.Context) error {
-		return p.api.SetAppSecret(ctx, name, secret, value)
-	})
-}
-
 func (p *appsPage) linkDB() tea.Cmd {
 	a := p.selected()
 	list := p.linkable()
@@ -274,7 +269,7 @@ func (p *appsPage) linkDB() tea.Cmd {
 	}
 	d := list[min(p.dbPick, len(list)-1)]
 	name := a.Name
-	return p.do(name, "Ligando "+d.Engine+"/"+d.Name, name+" ligado a "+d.Engine+"/"+d.Name+": os secrets valem no proximo deploy.", func(ctx context.Context) error {
+	return p.do(name, "Ligando "+d.Engine+"/"+d.Name, name+" ligado a "+d.Engine+"/"+d.Name+": as variaveis dele valem no proximo deploy.", func(ctx context.Context) error {
 		return p.api.LinkAppDatabase(ctx, name, d.Engine, d.Name)
 	})
 }
@@ -287,7 +282,7 @@ func (p *appsPage) linkBucket() tea.Cmd {
 	}
 	bk := list[min(p.bucketPick, len(list)-1)]
 	name := a.Name
-	return p.do(name, "Ligando o bucket "+bk.Name, name+" ligado ao bucket "+bk.Name+": os secrets valem no proximo deploy.", func(ctx context.Context) error {
+	return p.do(name, "Ligando o bucket "+bk.Name, name+" ligado ao bucket "+bk.Name+": as variaveis dele valem no proximo deploy.", func(ctx context.Context) error {
 		return p.api.LinkAppBucket(ctx, name, bk.Name)
 	})
 }
@@ -311,17 +306,6 @@ func (p *appsPage) unlinkDB(l apps.DBLink) tea.Cmd {
 	name := a.Name
 	return p.do(name, "Desligando "+l.ID(), name+" desligado de "+l.ID()+" (o database e os dados ficam).", func(ctx context.Context) error {
 		return p.api.UnlinkAppDatabase(ctx, name, l.Engine, l.Name)
-	})
-}
-
-func (p *appsPage) deleteSecret(secret string) tea.Cmd {
-	a := p.selected()
-	if a == nil {
-		return nil
-	}
-	name := a.Name
-	return p.do(name, "Apagando "+secret, secret+" apagado.", func(ctx context.Context) error {
-		return p.api.DeleteAppSecret(ctx, name, secret)
 	})
 }
 

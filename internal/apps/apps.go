@@ -19,19 +19,17 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/fsx"
-	"github.com/trdSystemDev/cais/internal/secrets"
 	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
 // Arquivos e pastas de cada app em Root/<app>.
 const (
-	MetaFile   = "app.yaml" // o que o cais sabe do app
-	EnvFile    = "env"      // variaveis do painel (vira o .env do projeto)
-	SecretsDir = "secrets"  // arquivos de secret (${CAIS_SECRETS}/<nome>)
-	SrcDir     = "src"      // codigo do commit no ar
-	PrevDir    = "src.prev" // commit anterior, pra voltar se o deploy falhar
-	NextDir    = "src.next" // codigo do deploy em andamento (antes da troca)
-	FailedDir  = "src.failed"
+	MetaFile  = "app.yaml" // o que o cais sabe do app
+	EnvFile   = "env"      // variaveis do app (JSON); o deploy gera o run.env e o .env
+	SrcDir    = "src"      // codigo do commit no ar
+	PrevDir   = "src.prev" // commit anterior, pra voltar se o deploy falhar
+	NextDir   = "src.next" // codigo do deploy em andamento (antes da troca)
+	FailedDir = "src.failed"
 	// SwapFile marca a troca em andamento (de src.next pra src ate o
 	// registro do deploy). Se o daemon para no meio, ela fica, e o Recover
 	// sabe que o codigo em src pode nao ter subido.
@@ -45,7 +43,7 @@ const DefaultCompose = "docker-compose.yml"
 var ErrNotFound = errors.New("app nao encontrado")
 
 // App e o que o cais guarda de um app (app.yaml). Nada de segredo aqui:
-// variaveis ficam em env (0600) e secrets em secrets/.
+// variaveis ficam em env (0600).
 type App struct {
 	Name string `yaml:"-" json:"name"`
 	// Repo e o repositorio no GitHub (dono/nome).
@@ -290,6 +288,9 @@ type Manager struct {
 	// (nenhum deploy, nem o automatico, passa da trava). Zero nao limita.
 	// A volta da versao anterior roda depois do limite, com RollbackTimeout.
 	Timeout time.Duration
+	// Bin e o binario do cais na VPS: o compose do app monta ele (so
+	// leitura) pro cais run injetar as variaveis no processo.
+	Bin string
 	// Builds e a fila global de build (nil: sem fila). O tempo esperando
 	// nela nao conta no Timeout.
 	Builds *BuildQueue
@@ -348,13 +349,6 @@ func Check(a App) error {
 
 func (m Manager) dir(name string) string { return filepath.Join(m.Root, name) }
 
-// SecretsPath e a pasta dos secrets do app (o ${CAIS_SECRETS} do compose).
-func (m Manager) SecretsPath(name string) string { return filepath.Join(m.dir(name), SecretsDir) }
-
-func (m Manager) secrets(name string) secrets.FileStore {
-	return secrets.FileStore{Dir: m.SecretsPath(name)}
-}
-
 // Project e o projeto compose do app no ar (ou numa pasta de codigo).
 func (m Manager) project(a App, src string) docker.Project {
 	return docker.Project{Name: a.Name, Files: []string{filepath.Join(m.dir(a.Name), src, a.ComposeFile())}}
@@ -365,7 +359,7 @@ func (m Manager) deployed(a App) bool {
 	return err == nil
 }
 
-// Create cria o app (pasta, secrets/ e app.yaml). O codigo so vem no deploy.
+// Create cria o app (pasta 0700 e app.yaml). O codigo so vem no deploy.
 func (m Manager) Create(a App) (App, error) {
 	if err := Check(a); err != nil {
 		return App{}, err
@@ -376,7 +370,7 @@ func (m Manager) Create(a App) (App, error) {
 	if err := m.checkLink(a); err != nil {
 		return App{}, err
 	}
-	if err := os.MkdirAll(m.SecretsPath(a.Name), 0o700); err != nil {
+	if err := os.MkdirAll(m.dir(a.Name), 0o700); err != nil {
 		return App{}, err
 	}
 	a.Commit, a.Last, a.Databases, a.Buckets = "", nil, nil, nil

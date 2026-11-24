@@ -19,7 +19,7 @@ import (
 // dbPanel e o "Novo banco" (Postgres/MySQL) e o "Novo bucket" (Garage) da
 // secao Geral do card na aba Infra: cria o database com usuario e senha
 // nova, ou o bucket com uma chave so dele, e lista os ja criados. O app
-// recebe a credencial pelos secrets ao ligar (Apps -> Secrets). Aberto
+// recebe a credencial nas variaveis ao ligar (Apps -> Bancos e buckets). Aberto
 // (engine) enquanto o card do servico ligado esta selecionado; active diz
 // se o foco do teclado esta nele.
 type dbPanel struct {
@@ -50,10 +50,10 @@ type dbPanel struct {
 // infraRow e um database ou bucket na lista: nome, secrets que o app
 // recebe, apps ligados e espaco ocupado.
 type infraRow struct {
-	name    string
-	secrets []string
-	apps    []string
-	size    string
+	name string
+	vars []string
+	apps []string
+	size string
 	// imported e a origem quando o database acabou de ser importado
 	imported string
 	dumpSize string
@@ -199,7 +199,7 @@ func (p *dbPanel) listCmd() tea.Cmd {
 		if engine == "garage" {
 			list, err := p.api.Buckets(ctx)
 			for _, b := range list {
-				rows = append(rows, infraRow{name: b.Name, secrets: b.Secrets, apps: b.Apps, size: cmpOrStr(b.Size, "?")})
+				rows = append(rows, infraRow{name: b.Name, vars: b.Vars, apps: b.Apps, size: cmpOrStr(b.Size, "?")})
 			}
 			return dbListMsg{engine, rows, err}
 		}
@@ -210,7 +210,7 @@ func (p *dbPanel) listCmd() tea.Cmd {
 				if d.Size != nil {
 					size = databases.HumanSize(*d.Size)
 				}
-				rows = append(rows, infraRow{name: d.Name, secrets: d.Secrets, apps: d.Apps, size: size})
+				rows = append(rows, infraRow{name: d.Name, vars: d.Vars, apps: d.Apps, size: size})
 			}
 		}
 		return dbListMsg{engine, rows, err}
@@ -237,7 +237,7 @@ func (p *dbPanel) create() tea.Cmd {
 	if p.buckets() {
 		return func() tea.Msg {
 			info, err := p.api.CreateBucket(context.Background(), name)
-			return dbCreatedMsg{infraRow{name: info.Name, secrets: info.Secrets}, err}
+			return dbCreatedMsg{infraRow{name: info.Name, vars: info.Vars}, err}
 		}
 	}
 	req := core.DatabaseRequest{Engine: p.engine, Name: name, Source: strings.TrimSpace(p.src.Value())}
@@ -246,7 +246,7 @@ func (p *dbPanel) create() tea.Cmd {
 	}
 	return func() tea.Msg {
 		info, err := p.api.CreateDatabase(context.Background(), req)
-		row := infraRow{name: info.Name, secrets: info.Secrets, imported: info.Imported}
+		row := infraRow{name: info.Name, vars: info.Vars, imported: info.Imported}
 		if info.Imported != "" {
 			row.dumpSize = databases.HumanSize(info.ImportedBytes)
 		}
@@ -450,8 +450,8 @@ func (p *dbPanel) view(w int) string {
 			msg = nameLabel + " " + c.name + " criado com o conteudo de " + c.imported + " (dump de " + c.dumpSize + ")."
 		}
 		b.WriteString("\n" + wrap.Foreground(t.ok).Bold(true).Render(msg) + "\n")
-		b.WriteString(wrap.Inherit(muted).Render("Ligue ao app em Apps -> Secrets -> "+link+": o app recebe os secrets "+
-			strings.Join(c.secrets, " e ")+".") + "\n")
+		b.WriteString(wrap.Inherit(muted).Render("Ligue ao app em Apps -> Bancos e buckets -> "+link+": o app recebe as variaveis "+
+			strings.Join(c.vars, ", ")+".") + "\n")
 	}
 	if len(p.list) > 0 {
 		b.WriteString("\n" + t.bold().Render("Ja criados") + "\n")
@@ -505,18 +505,18 @@ func (p *dbPanel) viewSource(w int) string {
 	return line(t.ok, "copia de "+s.String())
 }
 
-// writeInfraRows e a tabela dos databases ou buckets: nome, secrets que o
-// app recebe (e o app ligado) e espaco ocupado. Se nao cabe em w, os
-// secrets vao numa segunda linha de cada item.
+// writeInfraRows e a tabela dos databases ou buckets: nome, variaveis que o
+// app recebe (e o app ligado) e espaco ocupado. Se nao cabe em w, as
+// variaveis vao numa segunda linha de cada item.
 func writeInfraRows(b *strings.Builder, nameLabel string, list []infraRow, t theme, w int, del func(name string) string) {
-	nameW, secW := len(nameLabel), len("Secrets")
+	nameW, secW := len(nameLabel), len("Variaveis")
 	secs := make([]string, len(list))
 	for i, d := range list {
 		app := "sem app"
 		if len(d.apps) > 0 {
 			app = strings.Join(d.apps, ", ")
 		}
-		secs[i] = strings.Join(d.secrets, ", ") + " (" + app + ")"
+		secs[i] = strings.Join(d.vars, ", ") + " (" + app + ")"
 		nameW, secW = max(nameW, len(d.name)), max(secW, len(secs[i]))
 	}
 	head := t.fg(t.muted).Bold(true)
@@ -532,7 +532,7 @@ func writeInfraRows(b *strings.Builder, nameLabel string, list []infraRow, t the
 	row := func(name, secrets, size string) string {
 		return fmt.Sprintf("  %-*s  %-*s  %9s", nameW, name, secW, secrets, size)
 	}
-	b.WriteString(head.Render(row(nameLabel, "Secrets", "Espaco")) + "\n")
+	b.WriteString(head.Render(row(nameLabel, "Variaveis", "Espaco")) + "\n")
 	for i, d := range list {
 		b.WriteString(row(d.name, secs[i], d.size) + "  " + del(d.name) + "\n")
 	}

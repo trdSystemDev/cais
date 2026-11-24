@@ -145,7 +145,7 @@ func TestFerramentasSemExclusao(t *testing.T) {
 	slices.Sort(names)
 	want := []string{
 		"app_create", "app_deploy", "app_env_get", "app_env_set", "app_guide", "app_link_bucket", "app_link_database",
-		"app_logs", "app_promote", "app_promote_check", "app_restart", "app_rollback", "app_secret_set", "app_secrets_list", "app_stop", "app_unlink_bucket",
+		"app_logs", "app_promote", "app_promote_check", "app_restart", "app_rollback", "app_stop", "app_unlink_bucket",
 		"app_unlink_database", "app_update", "apps_list", "bucket_create", "buckets_list", "database_create",
 		"databases_list", "infra_logs", "infra_status", "status",
 	}
@@ -169,33 +169,31 @@ func TestFluxoDoApp(t *testing.T) {
 		t.Errorf("ajuda sem labels do traefik:\n%s", g)
 	}
 
-	call(t, cs, "app_env_set", map[string]any{"app": "loja", "set": map[string]any{"NODE_ENV": "production", "VELHA": "x"}}, false)
+	set := call(t, cs, "app_env_set", map[string]any{"app": "loja", "set": map[string]any{"NODE_ENV": "production", "VELHA": "x",
+		"JWT_SECRET": "valor-que-nao-volta"}}, false)
 	out := call(t, cs, "app_env_set", map[string]any{"app": "loja", "unset": []any{"VELHA"}}, false)
 	if !strings.Contains(out, "NODE_ENV") || strings.Contains(out, "VELHA") {
 		t.Errorf("env_set: %s", out)
 	}
-	var env map[string]string
-	json.Unmarshal([]byte(call(t, cs, "app_env_get", map[string]any{"app": "loja"}, false)), &env)
-	if len(env) != 1 || env["NODE_ENV"] != "production" {
-		t.Errorf("env %v", env)
-	}
-
-	call(t, cs, "app_secret_set", map[string]any{"app": "loja", "name": "jwt_secret", "value": "valor-que-nao-volta"}, false)
 	call(t, cs, "database_create", map[string]any{"engine": "postgres", "name": "loja"}, false)
 	call(t, cs, "app_link_database", map[string]any{"app": "loja", "engine": "postgres", "name": "loja"}, false)
 	call(t, cs, "bucket_create", map[string]any{"name": "loja-fotos"}, false)
 	call(t, cs, "app_link_bucket", map[string]any{"app": "loja", "bucket": "loja-fotos"}, false)
-	secrets := call(t, cs, "app_secrets_list", map[string]any{"app": "loja"}, false)
-	for _, s := range []string{"jwt_secret", "postgres_loja_user", "s3_loja_fotos_secret_key"} {
-		if !strings.Contains(secrets, s) {
-			t.Errorf("sem o secret %s: %s", s, secrets)
-		}
+
+	// app_env_get: so os nomes, os do app e os dos bancos e buckets ligados
+	got := call(t, cs, "app_env_get", map[string]any{"app": "loja"}, false)
+	var env struct{ Vars, Infra []string }
+	json.Unmarshal([]byte(got), &env)
+	if !slices.Equal(env.Vars, []string{"JWT_SECRET", "NODE_ENV"}) || !slices.Contains(env.Infra, "POSTGRES_LOJA_URL") ||
+		!slices.Contains(env.Infra, "S3_LOJA_FOTOS_SECRET_KEY") {
+		t.Errorf("env_get %s", got)
 	}
-	// nenhuma resposta traz valor de secret ou credencial guardada
-	all := secrets + call(t, cs, "databases_list", nil, false) + call(t, cs, "buckets_list", nil, false) + call(t, cs, "status", nil, false)
-	for _, valor := range []string{"valor-que-nao-volta", "6c9b79"} {
+	// nenhuma resposta traz valor de variavel ou credencial guardada
+	all := set + out + got + call(t, cs, "app_guide", map[string]any{"app": "loja"}, false) + call(t, cs, "databases_list", nil, false) +
+		call(t, cs, "buckets_list", nil, false) + call(t, cs, "status", nil, false)
+	for _, valor := range []string{"valor-que-nao-volta", "production", "6c9b79"} {
 		if strings.Contains(all, valor) {
-			t.Errorf("valor de secret na resposta: %s", valor)
+			t.Errorf("valor de variavel na resposta: %s", valor)
 		}
 	}
 

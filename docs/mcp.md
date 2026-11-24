@@ -26,15 +26,16 @@ As ferramentas chamam as mesmas acoes da TUI e do CLI, com as mesmas regras
 (o deploy recusa compose fora do formato e diz a correcao):
 
 - ler: `status`, `infra_status`, `infra_logs`, `apps_list`,
-  `app_logs`, `app_guide`, `app_env_get`, `app_secrets_list`,
+  `app_logs`, `app_guide`, `app_env_get` (so os nomes),
   `databases_list`, `buckets_list`, `app_promote_check`;
 - agir: `app_create`, `app_update`, `app_deploy`, `app_rollback`, `app_promote`, `app_restart`, `app_stop`,
-  `app_env_set`, `app_secret_set`, `database_create`, `bucket_create`,
+  `app_env_set` (senhas inclusive), `database_create`, `bucket_create`,
   `app_link_database`/`app_unlink_database`, `app_link_bucket`/`app_unlink_bucket`.
 
-Nada que apaga dados nem o Setup: excluir app, banco, bucket ou secret, ligar
-ou desligar servico e a config da VPS ficam so na TUI e no CLI. Valores de secret nunca sao
-devolvidos (a IA ve so os nomes).
+Nada que apaga dados nem o Setup: excluir app, banco ou bucket, ligar ou
+desligar servico e a config da VPS ficam so na TUI e no CLI. Valores de
+variavel nunca sao devolvidos (a IA ve so os nomes): a IA pode gravar uma
+senha, mas nao ler.
 
 ---
 

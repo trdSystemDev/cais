@@ -344,7 +344,7 @@ func TestConfigESetupPeloSocket(t *testing.T) {
 	}
 
 	db, err := c.CreateDatabase(ctx, core.DatabaseRequest{Engine: "postgres", Name: "meu_app"})
-	if err != nil || db.User != "meu_app" || len(db.Secrets) != 2 {
+	if err != nil || db.User != "meu_app" || len(db.Vars) != 3 {
 		t.Fatalf("CreateDatabase: %+v, %v", db, err)
 	}
 	list, err := c.Databases(ctx)
@@ -469,9 +469,6 @@ func TestAppPeloSocket(t *testing.T) {
 	if env, err := c.AppEnv(ctx, "meu-app"); err != nil || env["A"] != "1" {
 		t.Fatalf("env %v %v", env, err)
 	}
-	if err := c.SetAppSecret(ctx, "meu-app", "jwt", "x"); err != nil {
-		t.Fatal(err)
-	}
 	// compose fora do formato: recusado, com o motivo na mensagem e a lista
 	// em Problems (o MCP le os dois)
 	ad.config.Store(`{"services": {"web": {"privileged": true}}}`)
@@ -485,15 +482,12 @@ func TestAppPeloSocket(t *testing.T) {
 		t.Fatalf("deploy: %+v %v (ups %d)", res, err, ad.ups.Load())
 	}
 	list, err := c.CheckApps(ctx)
-	if err != nil || len(list.List) != 1 || list.List[0].Commit != "c0ffee" || len(list.List[0].Secrets) != 1 {
+	if err != nil || len(list.List) != 1 || list.List[0].Commit != "c0ffee" {
 		t.Fatalf("apps: %+v %v", list, err)
 	}
 	if out, err := c.AppGuide(ctx, "meu-app"); err == nil || out != "" {
 		// sem config.yaml a ajuda nao tem o dominio
 		t.Errorf("ajuda sem config: %q %v", out, err)
-	}
-	if err := c.DeleteAppSecret(ctx, "meu-app", "jwt"); err != nil {
-		t.Fatal(err)
 	}
 	if err := c.RestartApp(ctx, "meu-app", "web"); err != nil {
 		t.Fatal(err)

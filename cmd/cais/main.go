@@ -101,6 +101,8 @@ func (e *cli) run(args []string) int {
 		err = e.runBackup(args)
 	case "mcp":
 		err = e.runMCP(args)
+	case "run":
+		err = e.runRun(args)
 	case "version":
 		fmt.Fprintln(e.out, versionLine())
 	case "help":
@@ -110,11 +112,15 @@ func (e *cli) run(args []string) int {
 		return 2
 	}
 	var usage *usageError
+	var exit *exitError
 	switch {
 	case err == nil, errors.Is(err, flag.ErrHelp):
 		return 0
 	case errors.As(err, &usage):
 		return 2
+	case errors.As(err, &exit):
+		fmt.Fprintln(e.err, "cais:", err)
+		return exit.code
 	default:
 		fmt.Fprintln(e.err, "cais:", err)
 		return 1

@@ -25,10 +25,11 @@ const ProxyNetwork = "proxy_network"
 
 // Rules e o contexto da checagem do compose de um app.
 type Rules struct {
-	App        string
-	Src        string // pasta do codigo do commit
-	SecretsDir string // ${CAIS_SECRETS}
-	DotEnv     string // o .env que o cais grava
+	App    string
+	Src    string // pasta do codigo do commit
+	Bin    string // ${CAIS_BIN}: o binario do cais (montado so leitura)
+	RunEnv string // ${CAIS_ENV}: as variaveis que o cais run injeta
+	DotEnv string // o .env que o cais grava (so interpolacao)
 	// Networks sao as redes externas que o app pode usar agora: a
 	// as das stacks ligadas (proxy_network so com o proxy ligado).
 	Networks []string
@@ -203,11 +204,20 @@ func (k *composeCheck) warn(svc, format string, args ...any) {
 	k.warnings = append(k.warnings, svc+": "+fmt.Sprintf(format, args...))
 }
 
-// inApp diz se o caminho e do app: o codigo ou os secrets dele.
+// inApp diz se o caminho e do app: o codigo dele.
 func (k *composeCheck) inApp(p string) bool {
 	p = filepath.Clean(p)
-	return within(p, k.r.Src) || within(p, k.r.SecretsDir)
+	return within(p, k.r.Src)
 }
+
+// caisMount diz se o bind e um dos dois do cais run: o binario do cais e o
+// run.env, so esses caminhos exatos.
+func (k *composeCheck) caisMount(src string) bool {
+	return k.r.Bin != "" && src == filepath.Clean(k.r.Bin) || k.r.RunEnv != "" && src == filepath.Clean(k.r.RunEnv)
+}
+
+// runSnippet e o jeito certo de entregar as variaveis ao app.
+const runSnippet = `entrypoint: ["/cais", "run", "--", <comando do app>] e volumes ${CAIS_BIN}:/cais:ro e ${CAIS_ENV}:` + RunEnvTarget + `:ro`
 
 // hostAccess confere o que da acesso ao host ou a containers de fora do app.
 func (k *composeCheck) hostAccess(n string, s *composeService) {
@@ -268,8 +278,11 @@ func (k *composeCheck) mounts(n string, s *composeService) {
 			switch {
 			case strings.HasSuffix(src, "docker.sock"):
 				k.bad(n, "monta o docker.sock: controla o Docker e o host inteiro. Tire esse volume; o cais e quem fala com o Docker")
+			case k.caisMount(src) && !v.ReadOnly:
+				k.bad(n, "monta %s com escrita: o binario e as variaveis do cais vao so leitura. Use %s:%s:ro", v.Source, v.Source, v.Target)
+			case k.caisMount(src):
 			case !k.inApp(src):
-				k.bad(n, "monta %s do host, fora da pasta do app. Dados: use um volume nomeado (volumes: {dados: {}} e dados:%s). Arquivo de config: deixe no repositorio ou num secret do app (${CAIS_SECRETS}/<nome>)", v.Source, v.Target)
+				k.bad(n, "monta %s do host, fora da pasta do app. Dados: use um volume nomeado (volumes: {dados: {}} e dados:%s). Arquivo de config: deixe no repositorio; valor secreto: variavel do app (cais app env)", v.Source, v.Target)
 			case within(src, k.r.Src) && !v.ReadOnly:
 				k.warn(n, "monta %s do codigo com escrita: o que o app gravar ai some no proximo deploy (o codigo e trocado). Pra dados use um volume nomeado; pra codigo, monte com :ro", strings.TrimPrefix(src, filepath.Clean(k.r.Src)+"/"))
 			}
@@ -278,8 +291,11 @@ func (k *composeCheck) mounts(n string, s *composeService) {
 		}
 	}
 	for _, f := range envFiles(s.EnvFile) {
-		if !k.inApp(f) {
-			k.bad(n, "env_file %s le um arquivo de fora do app. Use env_file: .env (as variaveis do app, gravadas pelo cais)", f)
+		switch {
+		case k.r.DotEnv != "" && filepath.Clean(f) == filepath.Clean(k.r.DotEnv):
+			k.bad(n, "env_file: .env poe as variaveis na config do container (aparecem no docker inspect). O cais injeta no processo: %s", runSnippet)
+		case !k.inApp(f):
+			k.bad(n, "env_file %s le um arquivo de fora do app. As variaveis do app chegam pelo cais run: %s", f, runSnippet)
 		}
 	}
 }
@@ -305,8 +321,9 @@ func (k *composeCheck) build(n string, s *composeService) {
 		}
 		for _, arg := range sortedKeys(b.Args) {
 			if secretArg.MatchString(arg) {
+				id := strings.ToLower(arg)
 				k.warn(n, "o build arg %s parece segredo: build arg fica na imagem (docker history). Use build secret: secrets: [%s] no build, "+
-					"o secret no ${CAIS_SECRETS} e RUN --mount=type=secret,id=%s no Dockerfile (veja %s)", arg, strings.ToLower(arg), strings.ToLower(arg), k.guide)
+					"secrets: {%s: {environment: %s}} no compose e RUN --mount=type=secret,id=%s no Dockerfile (veja %s)", arg, id, id, arg, id, k.guide)
 			}
 		}
 		if dotEnv := filepath.Clean(k.r.DotEnv); k.r.DotEnv != "" && within(dotEnv, filepath.Clean(b.Context)) && !ignoresEnv(b.Context) {
@@ -408,17 +425,26 @@ func (k *composeCheck) volumes(c *composeConfig) {
 	}
 }
 
-// files confere secrets e configs: so arquivos do app.
+// files confere secrets e configs: secret so vindo de variavel do app
+// (environment:, o build secret); config so de arquivo do repositorio.
 func (k *composeCheck) files(c *composeConfig) {
-	for kind, refs := range map[string]map[string]fileRef{"secret": c.Secrets, "config": c.Configs} {
-		for _, key := range sortedKeys(refs) {
-			f := refs[key]
-			switch {
-			case f.External:
-				k.bad("", "o %s %s e external (do swarm), nao existe no cais. Use file: ${CAIS_SECRETS}/%s", kind, key, key)
-			case f.File != "" && !k.inApp(f.File):
-				k.bad("", "o %s %s le %s, fora do app. Grave o valor como secret do app (cais app secret %s %s) e use file: ${CAIS_SECRETS}/%s", kind, key, f.File, k.r.App, key, key)
-			}
+	for _, key := range sortedKeys(c.Secrets) {
+		f := c.Secrets[key]
+		switch {
+		case f.External:
+			k.bad("", "o secret %s e external (do swarm), nao existe no cais. Use environment: <VARIAVEL> (uma variavel do app)", key)
+		case f.File != "":
+			k.bad("", "o secret %s le o arquivo %s. Segredo e variavel do app (cais app env %s %s): use environment: %s no secret, ou receba no processo pelo cais run",
+				key, f.File, k.r.App, strings.ToUpper(key), strings.ToUpper(key))
+		}
+	}
+	for _, key := range sortedKeys(c.Configs) {
+		f := c.Configs[key]
+		switch {
+		case f.External:
+			k.bad("", "o config %s e external (do swarm), nao existe no cais. Use um arquivo do repositorio", key)
+		case f.File != "" && !k.inApp(f.File):
+			k.bad("", "o config %s le %s, fora do repositorio. Use um arquivo do repositorio", key, f.File)
 		}
 	}
 }

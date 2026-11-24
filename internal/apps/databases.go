@@ -3,15 +3,15 @@ package apps
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"net/url"
 	"slices"
-
-	"github.com/trdSystemDev/cais/internal/secrets"
+	"strings"
 )
 
 // DBLink liga o app a um database da infra (Postgres/MySQL compartilhado).
-// No deploy o cais le a credencial guardada e grava os secrets
-// ${CAIS_SECRETS}/<engine>_<nome>_user e <engine>_<nome>_pass; montar a
-// URL e com o app.
+// No deploy o cais le a credencial guardada e entrega ao app as variaveis
+// <ENGINE>_<NOME>_USER, _PASS e _URL (o database tem o nome do usuario).
 type DBLink struct {
 	Engine string `yaml:"engine" json:"engine"`
 	Name   string `yaml:"name" json:"name"`
@@ -20,20 +20,35 @@ type DBLink struct {
 // ID e engine/nome, como o cais mostra o database.
 func (l DBLink) ID() string { return l.Engine + "/" + l.Name }
 
-// UserSecret e o secret com o usuario do banco (ex: postgres_portal_user).
-func (l DBLink) UserSecret() string { return l.Engine + "_" + l.Name + "_user" }
+func (l DBLink) prefix() string { return envPrefix(l.Engine + "_" + l.Name) }
 
-// PassSecret e o secret com a senha do banco (ex: postgres_portal_pass).
-func (l DBLink) PassSecret() string { return l.Engine + "_" + l.Name + "_pass" }
+// Vars sao os nomes das variaveis que o cais entrega pro banco ligado (ex:
+// POSTGRES_PORTAL_USER, POSTGRES_PORTAL_PASS, POSTGRES_PORTAL_URL).
+func (l DBLink) Vars() []string {
+	p := l.prefix()
+	return []string{p + "_USER", p + "_PASS", p + "_URL"}
+}
 
-// Secrets sao os secrets que o cais grava pro banco ligado.
-func (l DBLink) Secrets() []string { return []string{l.UserSecret(), l.PassSecret()} }
+// dbHosts e onde cada engine responde na rede dela.
+var dbHosts = map[string]string{"postgres": "postgres:5432", "mysql": "mysql:3306"}
+
+// env sao as variaveis do banco ligado com a credencial: usuario, senha e a
+// URL pronta (usuario e senha escapados).
+func (l DBLink) env(user, pass string) map[string]string {
+	u := url.URL{Scheme: l.Engine, User: url.UserPassword(user, pass), Host: dbHosts[l.Engine], Path: "/" + user}
+	v := l.Vars()
+	return map[string]string{v[0]: user, v[1]: pass, v[2]: u.String()}
+}
+
+// envPrefix e o comeco do nome de uma variavel da infra: maiusculas, com _
+// no lugar de - (postgres_meu-banco -> POSTGRES_MEU_BANCO).
+func envPrefix(s string) string { return strings.ToUpper(strings.ReplaceAll(s, "-", "_")) }
 
 // DBCredentials devolve usuario e senha de um database da infra.
 type DBCredentials func(engine, name string) (user, password string, err error)
 
-// LinkDB liga o app a um database. O app nao pode ter os secrets do banco
-// gravados a mao.
+// LinkDB liga o app a um database; vale no proximo deploy. O app nao pode
+// ter variavel com os nomes das do banco.
 func (m Manager) LinkDB(name string, l DBLink) error {
 	a, err := m.Get(name)
 	if err != nil {
@@ -42,26 +57,21 @@ func (m Manager) LinkDB(name string, l DBLink) error {
 	if m.DBCredentials == nil {
 		return errors.New("bancos da infra indisponiveis")
 	}
-	user, pw, err := m.DBCredentials(l.Engine, l.Name)
-	if err != nil {
+	if _, _, err := m.DBCredentials(l.Engine, l.Name); err != nil {
 		return err
 	}
 	if slices.ContainsFunc(a.Databases, func(x DBLink) bool { return x.ID() == l.ID() }) {
 		return nil
 	}
-	if err := m.secretsFree(name, l.Secrets()); err != nil {
+	if err := m.varsFree(name, l.Vars()); err != nil {
 		return err
 	}
 	a.Databases = append(a.Databases, l)
-	if err := m.save(a); err != nil {
-		return err
-	}
-	// os arquivos ja ficam prontos (e aparecem em Secrets); o deploy regrava
-	return m.putSecrets(name, l.Secrets(), user, pw)
+	return m.save(a)
 }
 
-// UnlinkDB desliga o app do database (o database e os dados ficam) e apaga
-// os secrets dele; vale no proximo deploy.
+// UnlinkDB desliga o app do database (o database e os dados ficam); as
+// variaveis dele saem no proximo deploy.
 func (m Manager) UnlinkDB(name, engine, db string) error {
 	a, err := m.Get(name)
 	if err != nil {
@@ -71,88 +81,76 @@ func (m Manager) UnlinkDB(name, engine, db string) error {
 	if i < 0 {
 		return fmt.Errorf("o app %s nao usa o banco %s/%s", name, engine, db)
 	}
-	l := a.Databases[i]
 	a.Databases = slices.Delete(a.Databases, i, i+1)
-	if err := m.save(a); err != nil {
+	return m.save(a)
+}
+
+// varsFree recusa ligar a infra se o app ja tem variavel com algum dos
+// nomes que ela entrega (o cais sobrescreveria).
+func (m Manager) varsFree(app string, names []string) error {
+	env, err := m.Env(app)
+	if err != nil {
 		return err
 	}
-	return m.deleteSecrets(name, l.Secrets())
-}
-
-// secretsFree recusa ligar a infra se o app ja tem algum dos secrets
-// gravado a mao (o cais sobrescreveria).
-func (m Manager) secretsFree(app string, names []string) error {
-	for _, s := range names {
-		if ok, err := secrets.Exists(m.secrets(app), s); err != nil {
-			return err
-		} else if ok {
-			return fmt.Errorf("o app ja tem o secret %s gravado a mao; apague ele (o cais passa a gravar com a credencial da infra)", s)
+	for _, n := range names {
+		if _, ok := env[n]; ok {
+			return fmt.Errorf("o app ja tem a variavel %s; apague ela (o cais passa a entregar com a credencial da infra)", n)
 		}
 	}
 	return nil
 }
 
-// putSecrets grava os valores nos secrets, na mesma ordem.
-func (m Manager) putSecrets(app string, names []string, values ...string) error {
-	for i, s := range names {
-		if err := m.secrets(app).Put(s, []byte(values[i])); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m Manager) deleteSecrets(app string, names []string) error {
-	for _, s := range names {
-		if err := m.secrets(app).Delete(s); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// infraOfSecret e o banco ou bucket cuja credencial esta no secret
-// (gerenciado pelo cais).
-func infraOfSecret(a App, secret string) (string, bool) {
+// InfraVars sao os nomes das variaveis que os bancos e buckets ligados
+// entregam ao app (o valor so existe no deploy).
+func InfraVars(a App) []string {
+	var out []string
 	for _, l := range a.Databases {
-		if slices.Contains(l.Secrets(), secret) {
+		out = append(out, l.Vars()...)
+	}
+	for _, l := range a.Buckets {
+		out = append(out, l.Vars()...)
+	}
+	return out
+}
+
+// infraOfVar e o banco ou bucket que entrega a variavel.
+func infraOfVar(a App, name string) (string, bool) {
+	for _, l := range a.Databases {
+		if slices.Contains(l.Vars(), name) {
 			return l.ID(), true
 		}
 	}
 	for _, l := range a.Buckets {
-		if slices.Contains(l.Secrets(), secret) {
+		if slices.Contains(l.Vars(), name) {
 			return l.ID(), true
 		}
 	}
 	return "", false
 }
 
-// infraSecrets regrava os secrets dos bancos e buckets ligados (credencial
-// nova no cais vale no proximo deploy).
-func (m Manager) infraSecrets(a App) error {
+// infraEnv le as credenciais dos bancos e buckets ligados (credencial nova
+// no cais vale no proximo deploy) e devolve as variaveis deles.
+func (m Manager) infraEnv(a App) (map[string]string, error) {
+	env := map[string]string{}
 	for _, l := range a.Databases {
 		if m.DBCredentials == nil {
-			return errors.New("bancos da infra indisponiveis")
+			return nil, errors.New("bancos da infra indisponiveis")
 		}
 		user, pw, err := m.DBCredentials(l.Engine, l.Name)
 		if err != nil {
-			return fmt.Errorf("banco %s do app: %w", l.ID(), err)
+			return nil, fmt.Errorf("banco %s do app: %w", l.ID(), err)
 		}
-		if err := m.putSecrets(a.Name, l.Secrets(), user, pw); err != nil {
-			return err
-		}
+		maps.Copy(env, l.env(user, pw))
 	}
 	for _, l := range a.Buckets {
 		if m.BucketCredentials == nil {
-			return errors.New("buckets do Garage indisponiveis")
+			return nil, errors.New("buckets do Garage indisponiveis")
 		}
 		id, secret, err := m.BucketCredentials(l.Name)
 		if err != nil {
-			return fmt.Errorf("bucket %s do app: %w", l.Name, err)
+			return nil, fmt.Errorf("bucket %s do app: %w", l.Name, err)
 		}
-		if err := m.putSecrets(a.Name, l.Secrets(), id, secret); err != nil {
-			return err
-		}
+		maps.Copy(env, l.env(id, secret))
 	}
-	return nil
+	return env, nil
 }

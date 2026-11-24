@@ -55,8 +55,9 @@ chaves. Opcoes e detalhes em [docs/instalacao.md](docs/instalacao.md).
    (publica os apps com HTTPS); ligue tambem o que mais for usar: Postgres,
    MySQL, Garage (S3).
 4. Na aba **Apps**, **+ Novo app** com o link do repositorio. A **Ajuda** do
-   app gera o trecho do compose (dominio, redes, secrets) pra colar no
-   repositorio. Depois, **Deploy**.
+   app gera o trecho do compose (dominio, redes e o `cais run`, que entrega as
+   variaveis ao app sem expor no `docker inspect`) pra colar no repositorio.
+   Depois, **Deploy**.
 
 O mesmo pelo CLI, na VPS (ou `ssh cais@ip-da-vps <comando>`):
 

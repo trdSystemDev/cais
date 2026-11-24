@@ -4,12 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 )
 
-// BucketLink liga o app a um bucket do Garage. No deploy o cais grava a
-// chave do bucket nos secrets ${CAIS_SECRETS}/s3_<bucket>_access_key e
-// s3_<bucket>_secret_key (- do nome vira _).
+// BucketLink liga o app a um bucket do Garage. No deploy o cais entrega ao
+// app as variaveis S3_<BUCKET>_ACCESS_KEY, _SECRET_KEY e _ENDPOINT (- do
+// nome vira _).
 type BucketLink struct {
 	Name string `yaml:"name" json:"name"`
 }
@@ -17,22 +16,27 @@ type BucketLink struct {
 // ID e como o cais mostra o bucket (s3/fotos).
 func (l BucketLink) ID() string { return "s3/" + l.Name }
 
-func (l BucketLink) prefix() string { return "s3_" + strings.ReplaceAll(l.Name, "-", "_") }
+// GarageEndpoint e o S3 do Garage na garage_network (regiao garage,
+// path-style).
+const GarageEndpoint = "http://garage:3900"
 
-// AccessKeySecret e o secret com o Key ID (ex: s3_fotos_access_key).
-func (l BucketLink) AccessKeySecret() string { return l.prefix() + "_access_key" }
+// Vars sao os nomes das variaveis que o cais entrega pro bucket ligado (ex:
+// S3_FOTOS_ACCESS_KEY, S3_FOTOS_SECRET_KEY, S3_FOTOS_ENDPOINT).
+func (l BucketLink) Vars() []string {
+	p := envPrefix("s3_" + l.Name)
+	return []string{p + "_ACCESS_KEY", p + "_SECRET_KEY", p + "_ENDPOINT"}
+}
 
-// SecretKeySecret e o secret com a Secret key (ex: s3_fotos_secret_key).
-func (l BucketLink) SecretKeySecret() string { return l.prefix() + "_secret_key" }
-
-// Secrets sao os secrets que o cais grava pro bucket ligado.
-func (l BucketLink) Secrets() []string { return []string{l.AccessKeySecret(), l.SecretKeySecret()} }
+func (l BucketLink) env(keyID, secretKey string) map[string]string {
+	v := l.Vars()
+	return map[string]string{v[0]: keyID, v[1]: secretKey, v[2]: GarageEndpoint}
+}
 
 // BucketCredentials devolve o Key ID e a Secret key de um bucket do Garage.
 type BucketCredentials func(name string) (keyID, secretKey string, err error)
 
-// LinkBucket liga o app a um bucket. O app nao pode ter os secrets do
-// bucket gravados a mao.
+// LinkBucket liga o app a um bucket; vale no proximo deploy. O app nao pode
+// ter variavel com os nomes das do bucket.
 func (m Manager) LinkBucket(name string, l BucketLink) error {
 	a, err := m.Get(name)
 	if err != nil {
@@ -41,25 +45,21 @@ func (m Manager) LinkBucket(name string, l BucketLink) error {
 	if m.BucketCredentials == nil {
 		return errors.New("buckets do Garage indisponiveis")
 	}
-	id, secret, err := m.BucketCredentials(l.Name)
-	if err != nil {
+	if _, _, err := m.BucketCredentials(l.Name); err != nil {
 		return err
 	}
 	if slices.ContainsFunc(a.Buckets, func(x BucketLink) bool { return x.Name == l.Name }) {
 		return nil
 	}
-	if err := m.secretsFree(name, l.Secrets()); err != nil {
+	if err := m.varsFree(name, l.Vars()); err != nil {
 		return err
 	}
 	a.Buckets = append(a.Buckets, l)
-	if err := m.save(a); err != nil {
-		return err
-	}
-	return m.putSecrets(name, l.Secrets(), id, secret)
+	return m.save(a)
 }
 
-// UnlinkBucket desliga o app do bucket (o bucket e os arquivos ficam) e
-// apaga os secrets dele; vale no proximo deploy.
+// UnlinkBucket desliga o app do bucket (o bucket e os arquivos ficam); as
+// variaveis dele saem no proximo deploy.
 func (m Manager) UnlinkBucket(name, bucket string) error {
 	a, err := m.Get(name)
 	if err != nil {
@@ -69,10 +69,6 @@ func (m Manager) UnlinkBucket(name, bucket string) error {
 	if i < 0 {
 		return fmt.Errorf("o app %s nao usa o bucket %s", name, bucket)
 	}
-	l := a.Buckets[i]
 	a.Buckets = slices.Delete(a.Buckets, i, i+1)
-	if err := m.save(a); err != nil {
-		return err
-	}
-	return m.deleteSecrets(name, l.Secrets())
+	return m.save(a)
 }
