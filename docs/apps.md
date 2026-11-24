@@ -37,7 +37,8 @@ O deploy:
 4. `docker compose config`: confere o compose resolvido contra o formato do
    cais e **recusa** (antes do build, sem tocar no que esta no ar) o que
    foge dele, dizendo o motivo e o jeito certo de cada item (veja abaixo);
-5. `docker compose -p <app> build --pull` com a versao atual ainda no ar;
+5. `docker compose -p <app> build --pull` com a versao atual ainda no ar,
+   pela fila de build (abaixo);
 6. troca `src` por `src.next`; os services atras do Traefik com
    `healthcheck` no compose trocam **sem queda** (abaixo) e o resto sobe com
    `up -d --wait` (so recria o que mudou);
@@ -52,6 +53,15 @@ o app pra sempre (nenhum deploy, nem o automatico, passa da trava). Passou do
 limite, o deploy e cancelado, a versao anterior volta (com prazo proprio de 10
 minutos, normalmente pelas imagens guardadas) e a falha conta como passageira
 pro deploy automatico.
+
+Os builds passam por uma **fila global: um build por vez na VPS**, na ordem
+de chegada. Dois builds pesados juntos disputam memoria e CPU com os apps no
+ar, e numa VPS pequena o sistema acaba matando container de producao. So o
+build espera: download, troca e up de apps diferentes continuam juntos. O
+app esperando aparece como "na fila de build" na TUI e no `cais app list`,
+e o tempo na fila nao conta no limite do deploy. O build da volta pra versao
+anterior (deploy que falhou, daemon que parou no meio) nao entra na fila: e
+a producao voltando. Rollback com as imagens guardadas nem faz build.
 
 Se o daemon morre no meio da troca (queda, kill, reboot, o limite do
 `TimeoutStopSec`), a marca `deploy.yaml` na pasta do app fica. Na subida, o

@@ -290,6 +290,9 @@ type Manager struct {
 	// (nenhum deploy, nem o automatico, passa da trava). Zero nao limita.
 	// A volta da versao anterior roda depois do limite, com RollbackTimeout.
 	Timeout time.Duration
+	// Builds e a fila global de build (nil: sem fila). O tempo esperando
+	// nela nao conta no Timeout.
+	Builds *BuildQueue
 }
 
 // RollbackTimeout e o limite da volta da versao anterior quando um deploy

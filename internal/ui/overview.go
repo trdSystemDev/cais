@@ -65,6 +65,8 @@ const (
 // appHealth resume um app: a gravidade e o texto curto do estado dele.
 func appHealth(a core.AppStatus) (severity, string) {
 	switch {
+	case a.BuildQueued:
+		return sevInfo, "deploy na fila de build"
 	case a.Deploying:
 		return sevInfo, "deploy em andamento"
 	case a.Error != "":

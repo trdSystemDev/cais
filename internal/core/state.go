@@ -59,8 +59,11 @@ type Apps struct {
 // AppStatus e um app, os containers dele e se ha um deploy em andamento.
 type AppStatus struct {
 	apps.App
-	Deploying  bool               `json:"deploying,omitempty"`
-	Containers []docker.Container `json:"containers,omitempty"`
+	Deploying bool `json:"deploying,omitempty"`
+	// BuildQueued: o deploy espera o build de outro app terminar (fila
+	// global de build, um por vez).
+	BuildQueued bool               `json:"build_queued,omitempty"`
+	Containers  []docker.Container `json:"containers,omitempty"`
 	// Secrets sao os secrets do app: so nomes e se tem valor, nunca o valor.
 	Secrets []apps.Secret `json:"secrets,omitempty"`
 	Error   string        `json:"error,omitempty"`

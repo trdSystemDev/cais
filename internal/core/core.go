@@ -132,6 +132,9 @@ type Core struct {
 	containers containersRuntime
 	health     healthRuntime
 
+	// builds e a fila global de build: um build por vez na VPS
+	builds *apps.BuildQueue
+
 	// work e o trabalho que o daemon dispara sozinho (deploy automatico,
 	// backup, recuperacao): o Close espera ele terminar
 	work inflight.Group
@@ -249,7 +252,9 @@ func New(d Deps) *Core {
 			return sysstat.Read("/proc", "/", dataDir, "/var/lib/docker")
 		}
 	}
-	return &Core{deps: d, subs: map[int]chan State{}}
+	c := &Core{deps: d, subs: map[int]chan State{}, builds: apps.NewBuildQueue(1)}
+	c.builds.Waiting = c.setBuildQueued
+	return c
 }
 
 // Snapshot devolve a foto atual do estado. Localmente nunca falha; o erro

@@ -47,12 +47,8 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	// back e o ctx do que roda mesmo depois do limite do deploy: a volta da
 	// versao anterior e a limpeza das imagens
 	back := context.WithoutCancel(ctx)
-	if m.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, m.Timeout)
-		defer cancel()
-	}
-	dl := deadline{ctx: ctx, limit: m.Timeout}
+	ctx, dl := newDeadline(ctx, m.Timeout)
+	defer dl.stop()
 	a, commit, err := m.deployTarget(ctx, name, ref, dl)
 	if err != nil {
 		return DeployResult{}, err
@@ -75,7 +71,7 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 			PromotedFrom: tag.PromotedFrom, Auto: tag.Auto, Rollback: tag.Rollback, Transient: transient(err)})
 		return res, err
 	}
-	cfg, built, err := m.buildNext(ctx, a, commit, tag, &res)
+	cfg, built, err := m.buildNext(ctx, a, commit, tag, &res, dl)
 	if err != nil {
 		return fail(err)
 	}
@@ -110,15 +106,52 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	return res, nil
 }
 
-// deadline e o limite de um deploy: wrap diz o motivo de um erro que veio
-// dele (o docker morto pelo ctx so diz "signal: killed").
+// deadline e o limite de um deploy: um relogio que cancela o ctx com
+// DeadlineExceeded e para enquanto o deploy espera a fila de build (a
+// espera nao conta). wrap diz o motivo de um erro que veio dele (o docker
+// morto pelo ctx so diz "signal: killed").
 type deadline struct {
-	ctx   context.Context
-	limit time.Duration
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	limit  time.Duration
+	timer  *time.Timer // nil: sem limite
+	left   time.Duration
+	start  time.Time
 }
 
-func (d deadline) wrap(err error) error {
-	if err != nil && errors.Is(d.ctx.Err(), context.DeadlineExceeded) {
+func newDeadline(parent context.Context, limit time.Duration) (context.Context, *deadline) {
+	ctx, cancel := context.WithCancelCause(parent)
+	d := &deadline{ctx: ctx, cancel: cancel, limit: limit, left: limit, start: time.Now()}
+	if limit > 0 {
+		d.timer = time.AfterFunc(limit, func() { cancel(context.DeadlineExceeded) })
+	}
+	return ctx, d
+}
+
+// pause para o relogio; se ele ja disparou, o ctx ja esta cancelado.
+func (d *deadline) pause() {
+	if d.timer != nil && d.timer.Stop() {
+		d.left -= time.Since(d.start)
+	}
+}
+
+// resume volta a contar o que sobrou do limite.
+func (d *deadline) resume() {
+	if d.timer != nil && d.ctx.Err() == nil {
+		d.start = time.Now()
+		d.timer.Reset(max(d.left, 0))
+	}
+}
+
+func (d *deadline) stop() {
+	if d.timer != nil {
+		d.timer.Stop()
+	}
+	d.cancel(context.Canceled)
+}
+
+func (d *deadline) wrap(err error) error {
+	if err != nil && errors.Is(context.Cause(d.ctx), context.DeadlineExceeded) {
 		return &TimeoutError{Limit: d.limit, Err: err}
 	}
 	return err
@@ -127,7 +160,7 @@ func (d deadline) wrap(err error) error {
 // deployTarget le o app, confere a ref (vazia: a branch do app) e devolve
 // o commit que vai subir. Antes, arruma as pastas de um deploy que o daemon
 // nao terminou.
-func (m Manager) deployTarget(ctx context.Context, name, ref string, dl deadline) (App, string, error) {
+func (m Manager) deployTarget(ctx context.Context, name, ref string, dl *deadline) (App, string, error) {
 	a, err := m.Get(name)
 	if err != nil {
 		return App{}, "", err
@@ -158,7 +191,7 @@ func (m Manager) deployTarget(ctx context.Context, name, ref string, dl deadline
 // formato do cais (problemas e avisos vao em res) e faz o build, ou usa as
 // imagens guardadas de um rollback. Devolve o compose resolvido e as
 // imagens que o build gera.
-func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy, res *DeployResult) (cfg []byte, built []string, err error) {
+func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy, res *DeployResult, dl *deadline) (cfg []byte, built []string, err error) {
 	name, dir, next := a.Name, m.dir(a.Name), NextDir
 	if _, err := os.Stat(filepath.Join(dir, next, a.ComposeFile())); err != nil {
 		return nil, nil, fmt.Errorf("o commit %s nao tem o compose %s", short(commit), a.ComposeFile())
@@ -184,6 +217,11 @@ func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy
 	built = builtImages(cfg, p.Name)
 	res.Images = tag.Rollback && m.restoreImages(ctx, built, commit)
 	if !res.Images {
+		release, err := m.Builds.acquire(ctx, name, dl.pause, dl.resume)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer release()
 		if err := m.Docker.Build(ctx, p); err != nil {
 			return nil, nil, err
 		}
@@ -345,6 +383,8 @@ func (m Manager) upCurrent(ctx context.Context, a App) error {
 	p := m.project(a, SrcDir)
 	// as imagens guardadas da versao no ar voltam sem build; sem elas, o
 	// build refaz (com o cache das camadas)
+	// este build nao entra na fila de build: e a producao voltando (deploy
+	// que falhou, daemon que parou no meio) e nao espera o build de outro app
 	cfg, err := m.Docker.Config(ctx, p)
 	if err != nil || !m.restoreImages(ctx, builtImages(cfg, p.Name), a.Commit) {
 		if err := m.Docker.Build(ctx, p); err != nil {

@@ -19,7 +19,7 @@ func (c *Core) appManager() apps.Manager {
 		src = githubSource{c}
 	}
 	m := apps.Manager{Root: c.deps.AppsDir, Source: src, Docker: c.deps.AppDocker, Now: c.deps.Now, Settle: c.deps.AppSettle, Timeout: c.deps.DeployTimeout,
-		DBCredentials: c.dbCredentials, BucketCredentials: c.bucketCredentials}
+		DBCredentials: c.dbCredentials, BucketCredentials: c.bucketCredentials, Builds: c.builds}
 	if cfg, err := config.Load(c.deps.ConfigPath); err == nil {
 		m.Networks = infraNetworks(cfg)
 		// sem o proxy ligado, app com dominio nao tem quem o publique
@@ -88,7 +88,7 @@ func (c *Core) CheckApps(ctx context.Context) (Apps, error) {
 		// um deploy em andamento continua marcado
 		for i := range result.List {
 			if prev := findApp(s.Apps.List, result.List[i].Name); prev != nil {
-				result.List[i].Deploying = prev.Deploying
+				result.List[i].Deploying, result.List[i].BuildQueued = prev.Deploying, prev.BuildQueued
 			}
 		}
 		s.Apps = result
@@ -113,6 +113,20 @@ func (c *Core) setDeploying(name string, on bool) {
 			a.Deploying = on
 		} else if on {
 			list = append(list, AppStatus{App: apps.App{Name: name}, Deploying: true})
+		}
+		s.Apps.List = list
+	})
+}
+
+// setBuildQueued marca no estado o deploy esperando a fila de build.
+func (c *Core) setBuildQueued(name string, on bool) {
+	if on {
+		c.deps.Logger.Info("deploy esperando a fila de build", "acao", "deploy", "app", name)
+	}
+	c.update(func(s *State) {
+		list := slices.Clone(s.Apps.List)
+		if a := findApp(list, name); a != nil {
+			a.BuildQueued = on
 		}
 		s.Apps.List = list
 	})

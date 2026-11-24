@@ -158,6 +158,8 @@ func appStatus(a core.AppStatus, t theme) (string, string, color.Color) {
 		}
 	}
 	switch {
+	case a.BuildQueued:
+		return "◌", "na fila de build", t.warn
 	case a.Deploying:
 		return "◌", "deploy...", t.warn
 	case a.Error != "":

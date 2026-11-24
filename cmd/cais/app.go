@@ -74,6 +74,9 @@ func (e *cli) runApps(args []string) error {
 		if a.Deploying {
 			last = "deploy em andamento"
 		}
+		if a.BuildQueued {
+			last = "deploy na fila de build"
+		}
 		mode := "manual"
 		if a.AutoDeploy {
 			mode = "auto (" + cmpOr(a.Branch, "principal") + ")"

@@ -503,3 +503,25 @@ func TestDeleteDatabaseEBucket(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// a espera na fila de build aparece no estado, a checagem dos apps nao
+// apaga e o manager do core usa a fila do core (uma so pra todos os apps)
+func TestBuildNaFilaNoEstado(t *testing.T) {
+	c, _, _ := newAppsCore(t)
+	ctx := context.Background()
+	if _, err := c.CreateApp(ctx, apps.App{Name: "meu-app", Repo: "trdSystemDev/meu-app"}); err != nil {
+		t.Fatal(err)
+	}
+	if c.appManager().Builds != c.builds || c.builds == nil {
+		t.Fatal("o manager do core nao usa a fila global de build")
+	}
+	c.builds.Waiting("meu-app", true)
+	c.CheckApps(ctx)
+	if s := snap(t, c).Apps; len(s.List) != 1 || !s.List[0].BuildQueued {
+		t.Fatalf("estado sem a fila: %+v", s.List)
+	}
+	c.builds.Waiting("meu-app", false)
+	if s := snap(t, c).Apps; s.List[0].BuildQueued {
+		t.Fatal("a marca da fila ficou depois de sair dela")
+	}
+}
