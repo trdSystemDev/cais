@@ -103,7 +103,7 @@ func openSetupGitHub(t *testing.T) (*model, *githubtest.Server) {
 		"trdSystemDev/loja": {"docker-compose.yml": "services: {}\n"},
 	})
 	root := t.TempDir()
-	c := core.New(core.Deps{CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
+	c := core.New(core.Deps{TraefikMetrics: noTraffic, CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
 		SecretsDir: filepath.Join(root, "secrets"), AppsDir: filepath.Join(root, "apps"), GitHubURL: gh.URL,
 		AppDocker: &fakeApps{up: map[string]bool{}},
 		AppSettle: -1,

@@ -28,7 +28,7 @@ const (
 
 // helps sao os atalhos de cada aba, no rodape.
 var helps = map[int]string{
-	tabDashboard: "enter/r verifica · ",
+	tabDashboard: "↑↓/roda rola · enter/r verifica · ",
 	tabApps:      "↑↓ app · / busca · ←→ secao · enter/tab entra no formulario · esc volta · n novo app · ",
 	tabInfra:     "↑↓ card · ←→ secao · enter/tab entra nos botoes · esc volta · a aplica · r atualiza · ",
 	tabSetup:     "←→ secao · enter/tab entra · ctrl+s salva · ",
@@ -102,7 +102,9 @@ type model struct {
 
 	// uso da maquina no dashboard: a ultima leitura e a geracao do
 	// polling (trocar de aba para o anterior)
+	dashScroll    int // linhas do dashboard roladas pra cima
 	sys           core.SystemStats
+	traffic       core.Traffic
 	sysErr        string
 	sysGeneration uint64
 	sysTicks      int
@@ -214,6 +216,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.tab == tabApps && !m.disconnected && m.zones.Get("app-detail").InBounds(msg) {
 			m.apps.wheel(msg.Button == tea.MouseWheelUp)
+			return m, nil
+		}
+		if m.tab == tabDashboard && !m.disconnected {
+			if msg.Button == tea.MouseWheelUp {
+				m.dashScroll = max(0, m.dashScroll-3)
+			} else {
+				m.dashScroll += 3 // o desenho limita ao fim
+			}
 			return m, nil
 		}
 		if m.tab != tabInfra || m.disconnected {
@@ -411,6 +421,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	switch m.tab {
 	case tabDashboard:
+		if m.dashKey(k) {
+			return nil
+		}
 		if (k == "enter" || k == "r") && !m.state.Environment.Checking {
 			return tea.Batch(m.checkCmd(), m.dashRefresh(true))
 		}

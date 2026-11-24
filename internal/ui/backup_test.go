@@ -26,7 +26,7 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	defer s.Close()
 	root := t.TempDir()
 	data := filepath.Join(root, "data")
-	c := core.New(core.Deps{
+	c := core.New(core.Deps{TraefikMetrics: noTraffic,
 		CheckDocker: okChecker, ConfigPath: filepath.Join(root, "etc", "config.yaml"),
 		DataDir: data, SecretsDir: filepath.Join(data, "secrets"), BackupsDir: filepath.Join(data, "backups"),
 		AppsDir: filepath.Join(data, "apps"), StackDir: func(n string) string { return filepath.Join(data, "stacks", n) },
@@ -125,7 +125,7 @@ func TestBackupNoOneDrivePelaTUI(t *testing.T) {
 	defer o.Close()
 	root := t.TempDir()
 	data := filepath.Join(root, "data")
-	c := core.New(core.Deps{
+	c := core.New(core.Deps{TraefikMetrics: noTraffic,
 		CheckDocker: okChecker, ConfigPath: filepath.Join(root, "etc", "config.yaml"),
 		DataDir: data, SecretsDir: filepath.Join(data, "secrets"), BackupsDir: filepath.Join(data, "backups"),
 		AppsDir: filepath.Join(data, "apps"), StackDir: func(n string) string { return filepath.Join(data, "stacks", n) },

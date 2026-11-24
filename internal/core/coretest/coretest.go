@@ -104,6 +104,9 @@ func (f *Recorder) CheckEnvironment(context.Context) (core.Environment, error) {
 func (f *Recorder) SystemStats(context.Context) (core.SystemStats, error) {
 	return ret[core.SystemStats](f, "SystemStats")
 }
+func (f *Recorder) TrafficStats(context.Context) (core.Traffic, error) {
+	return ret[core.Traffic](f, "TrafficStats")
+}
 func (f *Recorder) ContainerStats(context.Context) (core.ContainerUsage, error) {
 	return ret[core.ContainerUsage](f, "ContainerStats")
 }

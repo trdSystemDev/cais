@@ -24,6 +24,7 @@ type (
 		generation uint64
 		stats      core.SystemStats
 		err        error
+		traffic    core.Traffic // as requisicoes do proxy, lidas junto
 	}
 	sysTick uint64
 )
@@ -34,7 +35,11 @@ func (m *model) sysCmd() tea.Cmd {
 	generation := m.sysGeneration
 	return func() tea.Msg {
 		st, err := m.api.SystemStats(context.Background())
-		return sysStatsMsg{generation, st, err}
+		tr, terr := m.api.TrafficStats(context.Background())
+		if terr != nil {
+			tr = core.Traffic{Rate: -1, Error: firstLine(terr.Error())}
+		}
+		return sysStatsMsg{generation, st, err, tr}
 	}
 }
 
@@ -44,7 +49,7 @@ func (m *model) onSysStats(msg sysStatsMsg) tea.Cmd {
 	if msg.generation != m.sysGeneration {
 		return nil
 	}
-	m.sys, m.sysErr = msg.stats, ""
+	m.sys, m.sysErr, m.traffic = msg.stats, "", msg.traffic
 	if msg.err != nil {
 		m.sysErr = firstLine(msg.err.Error())
 	}
@@ -66,10 +71,43 @@ func (m *model) viewDashboard(h int) string {
 	env := m.renderEnvironment(m.state.Environment, w)
 	// os graficos ficam com a altura que sobra (entre 3 e 10 linhas)
 	body := func(chartH int) string {
-		return top + m.renderSystem(w, chartH) + "\n" + t.rule(w) + "\n" + env
+		return top + m.renderSystem(w, chartH) + "\n" + t.rule(w) + "\n" +
+			m.renderTraffic(w, max(3, chartH-2)) + "\n" + t.rule(w) + "\n" + env
 	}
 	chartH := min(10, max(3, 3+h-2-lipgloss.Height(body(3))))
-	return t.panel(false, m.w, h-2).MaxHeight(h).Render(body(chartH))
+	// o que nao cabe rola (roda do mouse, setas, pgup/pgdn)
+	lines := strings.Split(strings.TrimSuffix(body(chartH), "\n"), "\n")
+	avail := max(1, h-2)
+	m.dashScroll = max(0, min(m.dashScroll, len(lines)-avail))
+	visible := lines[m.dashScroll:min(len(lines), m.dashScroll+avail)]
+	if m.dashScroll > 0 {
+		visible[0] = t.fg(t.muted).Render("  ↑ mais acima")
+	}
+	if m.dashScroll+avail < len(lines) {
+		visible[len(visible)-1] = t.fg(t.muted).Render("  ↓ mais abaixo (roda do mouse ou setas)")
+	}
+	return t.panel(false, m.w, h-2).MaxHeight(h).Render(strings.Join(visible, "\n"))
+}
+
+// dashKey rola o dashboard pelo teclado; ok diz se a tecla era de rolar.
+func (m *model) dashKey(k string) bool {
+	switch k {
+	case "down", "j":
+		m.dashScroll++
+	case "up", "k":
+		m.dashScroll = max(0, m.dashScroll-1)
+	case "pgdown", "space":
+		m.dashScroll += max(1, m.h/2)
+	case "pgup":
+		m.dashScroll = max(0, m.dashScroll-max(1, m.h/2))
+	case "home", "g":
+		m.dashScroll = 0
+	case "end", "G":
+		m.dashScroll = 1 << 20 // o desenho limita ao fim
+	default:
+		return false
+	}
+	return true
 }
 
 func (m *model) renderSystem(w, chartH int) string {
@@ -154,6 +192,12 @@ func (m *model) level(p float64) color.Color {
 // colunas de blocos de w x h, com a escala na esquerda; os mais novos ficam
 // na direita, todos na cor c do grafico.
 func (m *model) chart(values []float64, w, h int, c color.Color) string {
+	return m.chartScaled(values, w, h, c, "100%", " 50%")
+}
+
+// chartScaled e o chart com a escala propria (topLabel e midLabel, 4
+// colunas): os valores continuam de 0 a 100 (% do topo).
+func (m *model) chartScaled(values []float64, w, h int, c color.Color, topLabel, midLabel string) string {
 	t := m.th
 	axis := t.fg(t.border)
 	cols := max(1, w-5)
@@ -169,11 +213,11 @@ func (m *model) chart(values []float64, w, h int, c color.Color) string {
 		label, tick, grid := "    ", "│", " "
 		switch {
 		case r == 0:
-			label, tick, grid = "100%", "┤", "·"
+			label, tick, grid = topLabel, "┤", "·"
 		case r == h-1:
-			label, tick = "  0%", "┤"
+			label, tick = map[bool]string{true: "  0%", false: "   0"}[topLabel == "100%"], "┤"
 		case r == h/2 && h >= 5 && h%2 == 1:
-			label, tick, grid = " 50%", "┤", "·"
+			label, tick, grid = midLabel, "┤", "·"
 		}
 		var line strings.Builder
 		line.WriteString(axis.Render(label + tick))
@@ -198,12 +242,17 @@ func (m *model) chart(values []float64, w, h int, c color.Color) string {
 
 // bar e uma barra de uso de w colunas.
 func (m *model) bar(p float64, w int) string {
+	return m.barColor(p, w, m.level(p))
+}
+
+// barColor e a barra numa cor so (sem o alerta do uso alto).
+func (m *model) barColor(p float64, w int, c color.Color) string {
 	t := m.th
 	n := min(w, max(0, int(math.Round(p/100*float64(w)))))
 	if p > 0 && n == 0 {
 		n = 1
 	}
-	return t.fg(m.level(p)).Render(strings.Repeat("█", n)) + t.fg(t.border).Render(strings.Repeat("░", w-n))
+	return t.fg(c).Render(strings.Repeat("█", n)) + t.fg(t.border).Render(strings.Repeat("░", w-n))
 }
 
 // spread poe a e b nas pontas de uma linha de w colunas.

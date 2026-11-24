@@ -232,6 +232,7 @@ var handlers = map[string]handler{
 	MethodEnvironmentCheck: get(core.API.CheckEnvironment),
 	MethodSystemStats:      get(core.API.SystemStats),
 	MethodContainerStats:   get(core.API.ContainerStats),
+	MethodTrafficStats:     get(core.API.TrafficStats),
 	MethodHealthCheck:      get(core.API.CheckHealth),
 	MethodInfraCheck:       get(core.API.CheckStacks),
 	MethodContainerLogs: func(s *server, c *conn, m message) (any, *Error) {

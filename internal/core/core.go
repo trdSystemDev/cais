@@ -100,6 +100,9 @@ type Deps struct {
 	// ReadSystem le o uso da maquina (padrao: /proc e os discos da raiz,
 	// do cais e do docker).
 	ReadSystem func() (sysstat.Sample, error)
+	// TraefikMetrics le os contadores do proxy (padrao: docker exec no
+	// Traefik, formato do Prometheus).
+	TraefikMetrics func(ctx context.Context) (string, error)
 	// DockerStats le o uso de cada container rodando (padrao: docker stats).
 	DockerStats func(ctx context.Context) ([]docker.ContainerStats, error)
 	// Version e a versao do cais rodando (comparada com o release mais
@@ -148,6 +151,7 @@ type Core struct {
 
 	sys        systemRuntime
 	containers containersRuntime
+	traffic    trafficRuntime
 	health     healthRuntime
 
 	// builds e a fila global de build: um build por vez na VPS
@@ -280,6 +284,9 @@ func New(d Deps) *Core {
 	}
 	if d.ExecInput == nil {
 		d.ExecInput = docker.ExecInput
+	}
+	if d.TraefikMetrics == nil {
+		d.TraefikMetrics = docker.TraefikMetrics
 	}
 	if d.DockerStats == nil {
 		d.DockerStats = docker.Stats

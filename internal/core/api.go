@@ -34,6 +34,9 @@ type API interface {
 	// ContainerStats le o uso (processador e memoria) de cada container
 	// rodando, pro dashboard dizer qual app pesa na maquina.
 	ContainerStats(ctx context.Context) (ContainerUsage, error)
+	// TrafficStats le as requisicoes que passam pelo proxy: a taxa, o
+	// historico e por service.
+	TrafficStats(ctx context.Context) (Traffic, error)
 	// CheckHealth confere a validade dos certificados do proxy e se ha
 	// versao nova do cais (com intervalo minimo entre consultas) e publica
 	// em State.Health.

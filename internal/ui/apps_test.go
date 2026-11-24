@@ -90,7 +90,7 @@ func appsCore(t *testing.T) (*core.Core, *fakeApps, *githubtest.Server) {
 		"trdSystemDev/loja": {"docker-compose.yml": "services: {web: {build: .}}\n", "Dockerfile": "FROM nginx\n"},
 	})
 	fa := &fakeApps{up: map[string]bool{}}
-	c := core.New(core.Deps{
+	c := core.New(core.Deps{TraefikMetrics: noTraffic,
 		CheckDocker:   okChecker,
 		ConfigPath:    filepath.Join(root, "config.yaml"),
 		SecretsDir:    filepath.Join(root, "secrets"),

@@ -211,6 +211,20 @@ dominio dele pro Traefik do cais, que entrega pro container.
    cais service proxy on
    ```
 
+## Requisicoes no dashboard
+
+O Dashboard mostra as requisicoes que passam pelo proxy: quantas por segundo
+agora, o grafico dos ultimos minutos, a porcentagem de erros 5xx, o total
+desde que o proxy subiu e os services do Traefik que mais recebem (o nome e
+o do router no compose do app). Os numeros vem dos contadores do proprio
+Traefik, lidos pelo daemon por `docker exec`: nenhuma porta nova. O
+redirecionamento do `http` pro `https` nao conta (seria a mesma visita duas
+vezes).
+
+Proxy que ja estava no ar antes desta versao: aplique de novo na aba Infra
+(proxy > Aplicar, ou `cais service proxy on`) pra ligar os contadores. O
+Traefik reinicia e os contadores voltam a zero.
+
 ## Acesso aos bancos
 
 Os bancos nao tem painel web: so escutam no loopback da VPS (`127.0.0.1:5432` e

@@ -47,7 +47,7 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 	vps := testVPS
 	*vps = fakeVPS{}
 	stack := func(file string) string { return filepath.Base(filepath.Dir(file)) }
-	c := core.New(core.Deps{
+	c := core.New(core.Deps{TraefikMetrics: noTraffic,
 		CheckDocker: check,
 		// a VPS da aba Seguranca: o Corrigir liga o firewall e o Preparar
 		// VPS acerta o SSH (e fica esperando a confirmacao)
@@ -746,3 +746,9 @@ type fakeVPS struct {
 }
 
 var testVPS = &fakeVPS{}
+
+// noTraffic e o proxy dos testes: metricas ligadas, sem requisicao (nunca
+// o docker de verdade da maquina).
+func noTraffic(context.Context) (string, error) {
+	return "# HELP traefik_config_reloads_total x\ntraefik_config_reloads_total 1\n", nil
+}

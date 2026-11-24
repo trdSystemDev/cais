@@ -60,6 +60,12 @@ services:
       # docker exec quais containers o Traefik usa antes de parar o antigo
       - --api.insecure=true
       - --entrypoints.traefik.address=127.0.0.1:8080
+      # contadores de requisicoes (dashboard do cais), no mesmo endereco da
+      # API: so o loopback do container, lido por docker exec
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=traefik
+      - --metrics.prometheus.addentrypointslabels=true
+      - --metrics.prometheus.addserviceslabels=true
       - --accesslog=true
       - --global.checknewversion=false
       - --global.sendanonymoususage=false

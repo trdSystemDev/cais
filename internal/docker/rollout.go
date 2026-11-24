@@ -257,3 +257,15 @@ func serviceChanged(ctx context.Context, run runner, p Project, service, image s
 	}
 	return false, nil
 }
+
+// traefikMetrics e o endereco das metricas do Traefik (o mesmo da API, so
+// no loopback do container).
+const traefikMetrics = "http://127.0.0.1:8080/metrics"
+
+// TraefikMetrics le as metricas do Traefik (formato do Prometheus) por
+// docker exec: nenhuma porta publicada.
+func TraefikMetrics(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return execRunner(ctx, "docker", "exec", TraefikContainer, "wget", "-qO-", traefikMetrics)
+}
