@@ -1383,3 +1383,30 @@ func TestCheckComposeSemProxyLigado(t *testing.T) {
 		t.Fatalf("worker sem proxy: %v", problems)
 	}
 }
+
+// segredo do build: build secret do ${CAIS_SECRETS} passa sem aviso; de fora
+// do app e recusado; build arg com nome de segredo avisa (fica na imagem)
+func TestCheckComposeBuildSecret(t *testing.T) {
+	src, secretsDir := t.TempDir(), "/var/lib/cais/apps/web/secrets"
+	os.WriteFile(filepath.Join(src, ".dockerignore"), []byte(".env\n"), 0o644)
+	r := Rules{App: "web", Src: src, SecretsDir: secretsDir, DotEnv: filepath.Join(src, ".env")}
+	cfg := func(build, file string) []byte {
+		return []byte(`{"services": {"web": {"build": {"context": "` + src + `"` + build + `},
+			"logging": {"driver": "json-file", "options": {"max-size": "20m", "max-file": "5"}}}},
+			"secrets": {"npm_token": {"name": "web_npm_token", "file": "` + file + `"}}}`)
+	}
+
+	p, w := CheckCompose(cfg(`, "secrets": [{"source": "npm_token"}]`, secretsDir+"/npm_token"), r)
+	if len(p) != 0 || len(w) != 0 {
+		t.Fatalf("build secret do app: problemas %v avisos %v", p, w)
+	}
+	if p, _ := CheckCompose(cfg(`, "secrets": [{"source": "npm_token"}]`, "/root/.npmrc"), r); len(p) != 1 || !strings.Contains(p[0], "fora do app") {
+		t.Errorf("build secret de fora do app: %v", p)
+	}
+
+	_, w = CheckCompose(cfg(`, "args": {"NPM_TOKEN": "x", "NODE_ENV": "production", "STRIPE_API_KEY": null, "PASSENGER": "1"}`, secretsDir+"/npm_token"), r)
+	if len(w) != 2 || !strings.Contains(w[0], "NPM_TOKEN parece segredo") || !strings.Contains(w[0], "id=npm_token") ||
+		!strings.Contains(w[1], "STRIPE_API_KEY parece segredo") {
+		t.Errorf("avisos dos build args %v", w)
+	}
+}

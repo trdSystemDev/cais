@@ -160,14 +160,40 @@ a lista em `problems`):
 - labels do Traefik sem `proxy_network`, ou router/service/middleware com nome
   que nao comeca pelo nome do app (um app nao pode pisar na rota de outro).
 
-Avisos (nao bloqueiam): `.env` fora do `.dockerignore`, bind com escrita
-dentro do codigo (some no proximo deploy), volumes do app (nao entram no
-backup).
+Avisos (nao bloqueiam): `.env` fora do `.dockerignore`, build arg com nome
+de segredo (`TOKEN`, `PASSWORD`, `API_KEY`...: fica na imagem), bind com
+escrita dentro do codigo (some no proximo deploy), volumes do app (nao entram
+no backup).
 
 Variaveis vao no `.env` (`env_file: .env` ou `${VAR}` no compose) e valem no
 proximo deploy. Secret em arquivo e opcional, pra quem nao quer o valor no
 `docker inspect`. Ponha `.env` no `.dockerignore` pra as variaveis nao entrarem
 na imagem num `COPY . .` (o deploy avisa).
+
+### Segredo no build
+
+Segredo que so o build precisa (token de um pacote npm privado, chave de um
+registry) vai como **build secret**, nao como build arg: build arg fica na
+imagem e aparece no `docker history`. O build secret so existe durante o
+`RUN` que o monta e nao entra em camada, historico nem metadado da imagem.
+
+```yaml
+services:
+  web:
+    build:
+      context: .
+      secrets: [npm_token]
+secrets:
+  npm_token:
+    file: ${CAIS_SECRETS}/npm_token   # cais app secret meu-app npm_token
+```
+
+```dockerfile
+RUN --mount=type=secret,id=npm_token \
+    NPM_TOKEN=$(cat /run/secrets/npm_token) npm ci
+```
+
+O mesmo secret pode ir pro build e pro container (`secrets:` do service).
 
 O GitHub App do cais e configurado uma vez na aba **Setup** (App ID e a chave:
 cole o .pem ou o caminho do arquivo) ou com `cais setup config --github-app-id`

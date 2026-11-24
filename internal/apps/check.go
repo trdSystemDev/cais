@@ -97,6 +97,7 @@ type composeService struct {
 		Dockerfile         string            `json:"dockerfile"`
 		AdditionalContexts map[string]string `json:"additional_contexts"`
 		SSH                any               `json:"ssh"`
+		Args               map[string]any    `json:"args"`
 	} `json:"build"`
 	Labels      map[string]string `json:"labels"`
 	Networks    map[string]any    `json:"networks"`
@@ -149,6 +150,10 @@ type fileRef struct {
 	File     string `json:"file"`
 	External bool   `json:"external"`
 }
+
+// secretArg e nome de build arg que parece segredo (TOKEN, NPM_TOKEN,
+// DB_PASSWORD, STRIPE_API_KEY...)
+var secretArg = regexp.MustCompile(`(?i)(^|_)(token|secret|password|passwd|pass|pwd|apikey|api_key|private_key|credentials?)(_|$)`)
 
 // nomes de router/service/middleware nos labels do Traefik
 var traefikName = regexp.MustCompile(`^traefik\.(?:http|tcp|udp)\.(routers|services|middlewares)\.([^.]+)\.`)
@@ -297,6 +302,12 @@ func (k *composeCheck) build(n string, s *composeService) {
 		}
 		if b.SSH != nil {
 			k.bad(n, "build com ssh repassa as chaves do servidor pro build. Tire o ssh do build")
+		}
+		for _, arg := range sortedKeys(b.Args) {
+			if secretArg.MatchString(arg) {
+				k.warn(n, "o build arg %s parece segredo: build arg fica na imagem (docker history). Use build secret: secrets: [%s] no build, "+
+					"o secret no ${CAIS_SECRETS} e RUN --mount=type=secret,id=%s no Dockerfile (veja %s)", arg, strings.ToLower(arg), strings.ToLower(arg), k.guide)
+			}
 		}
 		if dotEnv := filepath.Clean(k.r.DotEnv); k.r.DotEnv != "" && within(dotEnv, filepath.Clean(b.Context)) && !ignoresEnv(b.Context) {
 			k.warn(n, "o .env (com as variaveis do app) fica no contexto do build e nao esta no .dockerignore: um COPY . grava as variaveis na imagem. Ponha .env no .dockerignore")

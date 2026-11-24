@@ -146,5 +146,10 @@ func Guide(in GuideInput) string {
 	w("#\n")
 	w("# Variaveis do cais no .env: CAIS_APP, CAIS_COMMIT (commit no ar) e\n")
 	w("# CAIS_SECRETS (pasta dos secrets).\n")
+	w("#\n")
+	w("# Segredo que so o build precisa (token de pacote privado): build secret,\n")
+	w("# nao build arg (fica na imagem). No build: secrets: [npm_token], o secret\n")
+	w("# do app no secrets: de cima e, no Dockerfile:\n")
+	w("#   RUN --mount=type=secret,id=npm_token NPM_TOKEN=$(cat /run/secrets/npm_token) npm ci\n")
 	return b.String()
 }
