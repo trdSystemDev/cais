@@ -242,6 +242,14 @@ var handlers = map[string]handler{
 	MethodConfigSave: do(core.API.SaveConfig),
 	MethodSetupPlan:  get(core.API.PlanSetup),
 	MethodNotifyTest: run(core.API.TestNotify),
+	MethodHostHarden: do(core.API.HardenHost),
+	MethodHostFix: call(func(a core.API, ctx context.Context, p hostFixParams) (textResult, error) {
+		text, err := a.FixHostItem(ctx, p.ID)
+		return textResult{Text: text}, err
+	}),
+	MethodHostConfirm: do(func(a core.API, ctx context.Context, p hostConfirmParams) error {
+		return a.ConfirmHost(ctx, p.Since)
+	}),
 	MethodSecretSet: do(func(a core.API, ctx context.Context, p secretParams) error {
 		return a.SetSecret(ctx, p.Name, p.Value)
 	}),

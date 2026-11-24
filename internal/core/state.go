@@ -6,6 +6,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 // State e uma foto imutavel de tudo que o cais sabe naquele momento.
@@ -23,6 +24,8 @@ type State struct {
 	Apps        Apps         `json:"apps"`
 	Backup      BackupStatus `json:"backup"`
 	Health      Health       `json:"health"`
+	// Hardening e o Preparar VPS e as correcoes da aba Seguranca.
+	Hardening Hardening `json:"hardening"`
 	// Import e a importacao de banco em andamento (nil: nenhuma).
 	Import *DBImport `json:"import,omitempty"`
 }
@@ -111,6 +114,9 @@ type Environment struct {
 	CheckedAt time.Time `json:"checked_at,omitzero"`
 	Host      Host      `json:"host"`
 	Docker    Docker    `json:"docker"`
+	// Security e a checagem de seguranca da VPS (cais host check): SSH,
+	// firewall, fail2ban, atualizacoes, portas abertas.
+	Security []host.Item `json:"security,omitempty"`
 }
 
 // Checked diz se ja houve ao menos uma checagem concluida.

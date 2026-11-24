@@ -17,6 +17,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/host"
 	"github.com/trdSystemDev/cais/internal/inflight"
 	"github.com/trdSystemDev/cais/internal/notify"
 	"github.com/trdSystemDev/cais/internal/sysstat"
@@ -26,7 +27,18 @@ import (
 // implementacao real; os testes trocam por fakes.
 type Deps struct {
 	CheckDocker func(context.Context) docker.Status
-	Now         func() time.Time
+	// Seguranca da VPS (padrao: o pacote host na propria maquina): a
+	// checagem, o Preparar VPS, a correcao de um item, a confirmacao do SSH
+	// (cancela a volta automatica) e se a config do SSH esta no lugar.
+	CheckHost   func(context.Context) []host.Item
+	HardenHost  func(context.Context, host.Options, func(host.Step)) (host.Result, error)
+	FixHost     func(ctx context.Context, id string) (string, error)
+	ConfirmSSH  func(context.Context) (bool, error)
+	SSHHardened func() bool
+	// RollbackDelay e em quanto o SSH volta sozinho sem a confirmacao
+	// (padrao host.RollbackDelay, o mesmo do timer do systemd).
+	RollbackDelay time.Duration
+	Now           func() time.Time
 
 	// Caminhos no disco (padrao: internal/config/paths.go).
 	ConfigPath string
@@ -167,6 +179,26 @@ func (c *Core) Close() {
 func New(d Deps) *Core {
 	if d.CheckDocker == nil {
 		d.CheckDocker = docker.Check
+	}
+	if d.CheckHost == nil {
+		d.CheckHost = func(ctx context.Context) []host.Item { return host.Check(ctx, host.Local()) }
+	}
+	if d.HardenHost == nil {
+		d.HardenHost = func(ctx context.Context, o host.Options, p func(host.Step)) (host.Result, error) {
+			return host.Harden(ctx, host.Local(), o, p)
+		}
+	}
+	if d.FixHost == nil {
+		d.FixHost = func(ctx context.Context, id string) (string, error) { return host.Fix(ctx, host.Local(), id) }
+	}
+	if d.ConfirmSSH == nil {
+		d.ConfirmSSH = func(ctx context.Context) (bool, error) { return host.Confirm(ctx, host.Local()) }
+	}
+	if d.SSHHardened == nil {
+		d.SSHHardened = func() bool { return host.SSHHardened(host.Local()) }
+	}
+	if d.RollbackDelay == 0 {
+		d.RollbackDelay = host.RollbackDelay
 	}
 	if d.Now == nil {
 		d.Now = time.Now

@@ -114,7 +114,7 @@ func TestClienteChamaAcaoERecebeResultado(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Environment != env {
+	if !reflect.DeepEqual(st.Environment, env) {
 		t.Fatalf("snapshot remoto diverge:\n%+v\n%+v", st.Environment, env)
 	}
 }

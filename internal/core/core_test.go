@@ -4,17 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 var fixedNow = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 
 func newTestCore(check func(context.Context) docker.Status) *Core {
-	return New(Deps{CheckDocker: check, Now: func() time.Time { return fixedNow }})
+	return New(Deps{CheckDocker: check, Now: func() time.Time { return fixedNow }, CheckHost: func(context.Context) []host.Item {
+		return []host.Item{{ID: "firewall", Title: "Firewall (ufw)", Detail: "desligado"}}
+	}})
 }
 
 func okStatus(context.Context) docker.Status {
@@ -48,7 +52,10 @@ func TestCheckEnvironmentAtualizaEDevolve(t *testing.T) {
 	if !env.CheckedAt.Equal(fixedNow) {
 		t.Fatalf("CheckedAt = %v", env.CheckedAt)
 	}
-	if got := snap(t, c).Environment; got != env {
+	if len(env.Security) != 1 || env.Security[0].ID != "firewall" {
+		t.Fatalf("seguranca: %+v", env.Security)
+	}
+	if got := snap(t, c).Environment; !reflect.DeepEqual(got, env) {
 		t.Fatalf("Snapshot diverge do retorno:\n%+v\n%+v", got, env)
 	}
 }

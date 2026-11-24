@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -66,16 +67,27 @@ func TestInstallPeloRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// run roda o install.sh; argumentos NOME=valor vao pro ambiente
 	run := func(url string, args ...string) (string, error) {
 		f, err := os.Open(script)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer f.Close()
+		env := append(os.Environ(), "CAIS_RELEASE_URL="+url)
+		flags := []string{"-s", "--", "--dry-run"}
+		for _, a := range args {
+			if k, _, ok := strings.Cut(a, "="); ok && strings.ToUpper(k) == k && !strings.HasPrefix(a, "-") {
+				env = append(env, a)
+			} else {
+				flags = append(flags, a)
+			}
+		}
 		// pelo stdin, numa pasta qualquer: o $0 e o sh, sem clone
-		cmd := exec.Command("sh", append([]string{"-s", "--", "--dry-run"}, args...)...)
+		sh, _ := exec.LookPath("sh")
+		cmd := exec.Command(sh, flags...)
 		cmd.Stdin, cmd.Dir = f, t.TempDir()
-		cmd.Env = append(os.Environ(), "CAIS_RELEASE_URL="+url)
+		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
@@ -105,10 +117,47 @@ func TestInstallPeloRelease(t *testing.T) {
 		t.Fatalf("tag sem release: %v\n%s", err, out)
 	}
 
+	// VPS nova sem Docker: no Ubuntu, instala pelo repositorio oficial
+	noDocker := pathWithout(t, "docker")
+	osRelease := filepath.Join(t.TempDir(), "os-release")
+	os.WriteFile(osRelease, []byte("ID=ubuntu\nVERSION_CODENAME=noble\n"), 0o644)
+	out, err = run(srv.URL, "PATH="+noDocker, "CAIS_OS_RELEASE="+osRelease)
+	if err != nil || !strings.Contains(out, "Instalando o Docker (repositorio oficial, ubuntu noble)") ||
+		!strings.Contains(out, "https://download.docker.com/linux/ubuntu noble stable") ||
+		!strings.Contains(out, "docker-compose-plugin") || !strings.Contains(out, "+ grava /etc/systemd/system/cais.service") {
+		t.Fatalf("sem docker no ubuntu: %v\n%s", err, out)
+	}
+	if out, err := run(srv.URL, "--harden", "deploy"); err != nil || !strings.Contains(out, "+ /usr/local/bin/cais host harden -user deploy") {
+		t.Fatalf("--harden: %v\n%s", err, out)
+	}
+	if out, err := run(srv.URL, "--harden"); err == nil || !strings.Contains(out, "--harden precisa do nome") {
+		t.Fatalf("--harden sem nome: %v\n%s", err, out)
+	}
+	os.WriteFile(osRelease, []byte("ID=arch\n"), 0o644)
+	if out, err := run(srv.URL, "PATH="+noDocker, "CAIS_OS_RELEASE="+osRelease); err == nil || !strings.Contains(out, "instale o Docker antes") {
+		t.Fatalf("sem docker fora do ubuntu/debian: %v\n%s", err, out)
+	}
+
 	mu.Lock()
 	sums = strings.Repeat("0", 64) + "  cais-linux-" + arch + "\n"
 	mu.Unlock()
 	if out, err := run(srv.URL); err == nil || !strings.Contains(out, "SHA-256") || strings.Contains(out, "Instalando") {
 		t.Fatalf("checksum errado: %v\n%s", err, out)
 	}
+}
+
+// pathWithout e um PATH com tudo do PATH atual menos os comandos de skip
+// (links numa pasta temporaria).
+func pathWithout(t *testing.T, skip ...string) string {
+	dir := t.TempDir()
+	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if slices.Contains(skip, e.Name()) {
+				continue
+			}
+			os.Symlink(filepath.Join(d, e.Name()), filepath.Join(dir, e.Name())) // o primeiro do PATH ganha
+		}
+	}
+	return dir
 }

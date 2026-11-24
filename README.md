@@ -20,10 +20,14 @@ proprio: o acesso e o seu SSH.
 - **Backup diario** dos bancos e do estado, criptografado, pro Google Drive ou OneDrive.
 - **Avisos por e-mail** quando um deploy automatico ou um backup falha.
 - **Pela IA**, com o MCP pelo mesmo SSH, sem nada que apague dados.
+- **VPS segura desde o inicio.** `cais host harden` cria o admin, deixa o SSH
+  so com chave e sem root e liga firewall, fail2ban e atualizacoes
+  automaticas. Depois, o painel avisa se algo abrir.
 
 ## Requisitos
 
-- Uma VPS com Linux (amd64 ou arm64), systemd e
+- Uma VPS com Linux (amd64 ou arm64) e systemd. No Ubuntu e no Debian o
+  instalador poe o Docker; em outra distro, instale antes o
   [Docker](https://docs.docker.com/engine/install/) com o Compose v2.
 - Sua chave SSH na VPS (o usuario que vai instalar).
 - Pros apps: um GitHub App que le os repositorios e o DNS do dominio de cada
@@ -38,8 +42,24 @@ curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install
   sudo sh -s -- --ssh
 ```
 
-Instala o cais, sobe o servico e cria o usuario `cais` do SSH com as suas
-chaves. Opcoes e detalhes em [docs/instalacao.md](docs/instalacao.md).
+Instala o cais (e o Docker, se faltar), sobe o servico e cria o usuario `cais`
+do SSH com as suas chaves. Opcoes e detalhes em
+[docs/instalacao.md](docs/instalacao.md).
+
+VPS nova, so com o root (Hostinger e afins)? Instale e prepare de uma vez,
+como root:
+
+```sh
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
+  sh -s -- --ssh --harden deploy
+```
+
+O `--harden deploy` cria o admin `deploy` com sudo e as chaves do root. Deixa
+o SSH so com chave e sem login do root, e liga o firewall (so 22, 80 e 443),
+o fail2ban e as atualizacoes de seguranca. Depois entre de outro terminal com
+`ssh deploy@ip-da-vps` e rode `sudo cais host confirm`. O mesmo pela TUI, em
+**Setup > Seguranca > Preparar VPS**, com um **Corrigir** por item. Passo a
+passo em [docs/seguranca.md](docs/seguranca.md).
 
 ## Primeiros passos
 

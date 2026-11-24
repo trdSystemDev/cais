@@ -2,9 +2,11 @@
 
 Como instalar, atualizar e remover o cais numa VPS. O caminho rapido esta no [README](../README.md#instalar).
 
-A VPS precisa de Linux (amd64 ou arm64) com systemd e Docker com o Compose
-v2. O `install.sh` baixa o binario do ultimo release do GitHub: sem clone,
-sem Go e sem compilar nada na VPS.
+A VPS precisa de Linux (amd64 ou arm64) com systemd. Sem Docker no Ubuntu
+ou no Debian, o `install.sh` instala o Docker e o Compose pelo repositorio
+oficial do Docker; em outra distro, instale antes. O `install.sh` baixa o
+binario do ultimo release do GitHub: sem clone, sem Go e sem compilar nada na
+VPS.
 
 ```sh
 curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
@@ -28,12 +30,17 @@ dentro do `install.sh`). Opcoes (passe depois do `sh -s --`):
   MCP. Sem shell, sem tunel e so por chave (a config fica em
   `/etc/ssh/sshd_config.d/cais.conf`, conferida com `sshd -T` pra nao mudar o
   ssh dos outros usuarios). Implica `--group cais`.
+- `--harden NOME`: VPS nova. No fim, roda o `cais host harden -user NOME`
+  (admin com sudo e chave, SSH sem root e sem senha, firewall, fail2ban,
+  atualizacoes); as perguntas vao pro terminal. Ver
+  [Seguranca da VPS](seguranca.md).
 - `--dry-run`: mostra o que faria, sem mudar nada.
 - `--version vX.Y.Z`: pelo release, essa versao em vez da mais nova.
 - `--uninstall`: remove o binario, o servico e o usuario `cais` do ssh;
   `/etc/cais`, `/var/lib/cais` e os containers ficam.
 
-Depois da instalacao, o [Setup](setup.md).
+Depois da instalacao, numa VPS nova: `cais host harden -user deploy`
+([Seguranca da VPS](seguranca.md)). Em seguida, o [Setup](setup.md).
 
 ---
 

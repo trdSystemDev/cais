@@ -112,6 +112,7 @@ mesmos argumentos, e cada constante do protocolo tem que ter handler.
 | `internal/apps` | apps em `/var/lib/cais/apps/<app>`: deploy, variaveis (`run.env` e `.env`), avisos e ajuda do compose |
 | `internal/github` | GitHub App: token por repositorio, commit e tarball do codigo |
 | `internal/config` | `/etc/cais/config.yaml` e os caminhos no disco |
+| `internal/host` | seguranca da VPS: checagem (`cais host check`, estado) e preparo (`cais host harden`) |
 | `install.sh` | instalador: baixa o release e traz a unidade do systemd |
 | `.github/workflows/` | release a cada tag `v*` |
 | `docs/` | esta documentacao |
@@ -214,6 +215,7 @@ make release V=v0.3.0-rc1
 6. Backups (feito: bancos e estado do cais, criptografados com age, pro Google Drive ou OneDrive)
 7. `install.sh` (feito: por curl, do release do GitHub)
 8. MCP (feito: `cais mcp` pelo SSH, sem exclusoes nem Setup)
+9. Seguranca da VPS (feito: `cais host harden` e a checagem no painel; o `install.sh` instala o Docker)
 
 ---
 

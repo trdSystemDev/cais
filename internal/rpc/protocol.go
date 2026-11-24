@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Metodos aceitos pelo daemon.
@@ -27,6 +28,9 @@ const (
 	MethodSecretSet        = "secret.set"  // params: secretParams
 	MethodSetupPlan        = "setup.plan"
 	MethodNotifyTest       = "notify.test"
+	MethodHostHarden       = "host.harden"     // params: core.HardenRequest
+	MethodHostFix          = "host.fix"        // params: hostFixParams
+	MethodHostConfirm      = "host.confirm"    // params: hostConfirmParams
 	MethodGitHubTest       = "github.test"     // params: githubTestParams
 	MethodServiceSet       = "service.set"     // params: serviceParams
 	MethodServiceControl   = "service.control" // params: serviceControlParams
@@ -185,6 +189,16 @@ type backupClientParams struct {
 type backupScheduleParams struct {
 	Time string `json:"time"`
 	Days int    `json:"days"`
+}
+
+// hostFixParams e o item da checagem de seguranca a corrigir.
+type hostFixParams struct {
+	ID string `json:"id"`
+}
+
+// hostConfirmParams: Since e o inicio da sessao que confirma.
+type hostConfirmParams struct {
+	Since time.Time `json:"since"`
 }
 
 type textResult struct {

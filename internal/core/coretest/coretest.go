@@ -126,6 +126,15 @@ func (f *Recorder) SetSecret(_ context.Context, name, value string) error {
 	return only(f, "SetSecret", name, value)
 }
 func (f *Recorder) TestNotify(context.Context) error { return only(f, "TestNotify") }
+func (f *Recorder) HardenHost(_ context.Context, req core.HardenRequest) error {
+	return only(f, "HardenHost", req)
+}
+func (f *Recorder) FixHostItem(_ context.Context, id string) (string, error) {
+	return ret[string](f, "FixHostItem", id)
+}
+func (f *Recorder) ConfirmHost(_ context.Context, since time.Time) error {
+	return only(f, "ConfirmHost", since)
+}
 func (f *Recorder) TestGitHub(_ context.Context, appID int64, key string) (github.Check, error) {
 	return ret[github.Check](f, "TestGitHub", appID, key)
 }

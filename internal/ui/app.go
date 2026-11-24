@@ -315,12 +315,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) onState(s core.State) tea.Cmd {
 	m.state = s
 	m.db.importing = s.Import
+	secCmd := m.setup.setState(s)
 	appsCmd := m.apps.onState(m.state)
 	var panels tea.Cmd
 	if m.tab == tabInfra {
 		panels = m.syncInfraPanels()
 	}
-	return tea.Batch(m.syncInfraLogs(false), panels, appsCmd, m.syncAppLogs(false))
+	return tea.Batch(m.syncInfraLogs(false), panels, appsCmd, m.syncAppLogs(false), secCmd)
 }
 
 // setTab troca de aba; a Infra pergunta ao docker toda vez que abre.

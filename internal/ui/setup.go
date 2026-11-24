@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -36,12 +37,15 @@ var setupSections = []struct{ title, hint string }{
 	{"Geral", "O GitHub App do cais. A config de cada servico (certificados e portas do proxy, endereco do S3) fica no card dele, na aba Infra."},
 	{"Avisos", "E-mail pela Brevo quando um deploy automatico ou um backup falha."},
 	{"Backups", ""},
+	{"Seguranca", "SSH, firewall, fail2ban, atualizacoes e portas abertas desta VPS; o daemon confere de hora em hora. " +
+		"Numa VPS nova, o Preparar VPS (abaixo) arruma tudo de uma vez."},
 }
 
 const (
 	secGeral = iota
 	secAvisos
 	secBackups
+	secSeguranca
 )
 
 const (
@@ -74,6 +78,18 @@ type setupPage struct {
 	saveErr string // por que o ultimo Salvar falhou (varias linhas)
 	ghMsg   string // resultado do Testar do GitHub App
 	ghMsgC  string
+	env     core.Environment // a checagem de seguranca, do estado
+	hard    core.Hardening   // o Preparar VPS, do estado
+
+	// Preparar VPS: o formulario (admin e a senha do sudo duas vezes), a
+	// hora em que esta sessao abriu (so uma sessao aberta depois da mudanca
+	// no SSH pode confirmar) e o tick da contagem regressiva.
+	hardenForm   bool
+	hUser, hPass *textinput.Model
+	hPass2       *textinput.Model
+	started      time.Time
+	ticking      bool
+	secSig       string // o que muda os itens da Seguranca
 }
 
 // Respostas das chamadas ao core (feitas fora do Update).
@@ -93,7 +109,15 @@ type (
 		keys []string // chaves gravadas junto (GitHub App, Brevo)
 	}
 	notifyTestMsg struct{ err error }
-	githubTestMsg struct {
+	hostCheckMsg  struct{ err error }
+	hostFixMsg    struct {
+		id, detail string
+		err        error
+	}
+	hardenMsg      struct{ err error }
+	hostConfirmMsg struct{ err error }
+	hostTick       struct{}
+	githubTestMsg  struct {
 		res github.Check
 		err error
 	}
@@ -125,6 +149,20 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	p.tail = []*item{
 		{id: "save", label: "Salvar", kind: kindButton, section: -1},
 		{id: "notifyTest", label: "Testar e-mail", kind: kindButton, section: secAvisos}}
+	newInput := func(placeholder string, secret bool) *textinput.Model {
+		ti := textinput.New()
+		ti.Prompt = ""
+		ti.Placeholder = placeholder
+		ti.SetWidth(28)
+		if secret {
+			ti.EchoMode = textinput.EchoPassword
+		}
+		return &ti
+	}
+	p.hUser = newInput("ex: deploy", false)
+	p.hPass = newInput("pelo menos 8 caracteres", true)
+	p.hPass2 = newInput("a mesma senha", true)
+	p.started = time.Now()
 	p.th = th
 	p.rebuild()
 	p.setTheme(th)
@@ -156,7 +194,8 @@ func (p *setupPage) rebuild() {
 			&item{id: fmt.Sprintf("to-del:%d", i), label: "✕ excluir", kind: kindButton, section: secAvisos})
 	}
 	items = append(items, &item{id: "to-add", label: "+ Novo e-mail", kind: kindButton, section: secAvisos})
-	p.items = append(items, p.tail...)
+	items = append(items, p.tail...)
+	p.items = append(items, p.securityItems()...)
 	p.focus = 0
 	for i, it := range p.items {
 		if it.id == cur {
@@ -181,6 +220,11 @@ func (p *setupPage) get(id string) *item {
 
 func (p *setupPage) setTheme(th theme) {
 	p.th = th
+	for _, ti := range []*textinput.Model{p.hUser, p.hPass, p.hPass2} {
+		if ti != nil {
+			th.styleInput(ti)
+		}
+	}
 	for _, it := range p.items {
 		if it.input == nil {
 			continue
@@ -191,7 +235,7 @@ func (p *setupPage) setTheme(th theme) {
 
 // typing diz se o foco esta num campo de texto (numeros nao trocam de aba).
 func (p *setupPage) typing() bool {
-	return p.inForm && p.sec < secBackups && p.items[p.focus].kind == kindInput
+	return p.inForm && p.sec != secBackups && p.items[p.focus].kind == kindInput
 }
 
 // blur tira o foco do formulario (volta pras sub-abas).
@@ -264,6 +308,38 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 				"instale na pagina do app (Install App) e libere os repositorios."
 		default:
 			p.ghMsgC, p.ghMsg = "ok", "Conectou no app \""+msg.res.Name+"\", instalado em: "+strings.Join(msg.res.Installations, ", ")+"."
+		}
+	case hostFixMsg:
+		if msg.err != nil {
+			p.setStatus("danger", "Nao deu pra corrigir: "+firstLine(msg.err.Error()))
+		} else {
+			p.setStatus("ok", "Corrigido. "+msg.detail)
+		}
+	case hardenMsg:
+		switch {
+		case msg.err != nil:
+			p.setStatus("danger", "O Preparar VPS parou: "+firstLine(msg.err.Error()))
+		case p.hard.Pending():
+			p.setStatus("warn", "Falta confirmar o SSH por uma janela nova (abaixo).")
+		default:
+			p.setStatus("ok", "VPS preparada.")
+		}
+	case hostConfirmMsg:
+		if msg.err != nil {
+			p.setStatus("danger", firstLine(msg.err.Error()))
+		} else {
+			p.setStatus("ok", "SSH confirmado: so chave, sem o root.")
+		}
+	case hostTick:
+		if p.hard.Pending() {
+			return hostTickCmd()
+		}
+		p.ticking = false
+	case hostCheckMsg:
+		if msg.err != nil {
+			p.setStatus("danger", "A checagem falhou: "+firstLine(msg.err.Error()))
+		} else {
+			p.setStatus("ok", "Checado agora.")
 		}
 	case notifyTestMsg:
 		if msg.err != nil {
@@ -454,6 +530,34 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		return p.save()
 	case it.id == "notifyTest":
 		return p.notifyTest()
+	case strings.HasPrefix(it.id, "fix:"):
+		id := strings.TrimPrefix(it.id, "fix:")
+		p.setStatus("warn", "Corrigindo...")
+		return func() tea.Msg {
+			detail, err := p.api.FixHostItem(context.Background(), id)
+			return hostFixMsg{id, detail, err}
+		}
+	case it.id == "harden-open":
+		p.hardenForm = true
+		p.rebuild()
+		return p.focusAt(p.index("hUser"))
+	case it.id == "harden-cancel":
+		p.closeHardenForm()
+		return p.focusAt(max(0, p.index("harden-open")))
+	case it.id == "harden-apply":
+		return p.hardenApply()
+	case it.id == "hostConfirm":
+		p.setStatus("warn", "Confirmando...")
+		since := p.started
+		return func() tea.Msg {
+			return hostConfirmMsg{p.api.ConfirmHost(context.Background(), since)}
+		}
+	case it.id == "hostCheck":
+		p.setStatus("warn", "Checando...")
+		return func() tea.Msg {
+			_, err := p.api.CheckEnvironment(context.Background())
+			return hostCheckMsg{err}
+		}
 	case it.id == "ghTest":
 		return p.githubTest()
 	case it.id == "to-add":
@@ -537,7 +641,7 @@ func (m *model) setupKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch {
 	case p.sec == secBackups && m.bk.active:
 		return m.bk.key(st, msg)
-	case p.sec < secBackups && p.inForm:
+	case p.sec != secBackups && p.inForm:
 		return p.key(msg)
 	}
 	n := len(setupSections)
@@ -570,7 +674,9 @@ func (p *setupPage) key(msg tea.KeyPressMsg) tea.Cmd {
 		p.blur()
 		return nil
 	case "ctrl+s":
-		return p.save()
+		if p.sec < secBackups {
+			return p.save()
+		}
 	case "tab", "down":
 		return p.move(1)
 	case "shift+tab", "up":
@@ -613,7 +719,11 @@ func (p *setupPage) view(w, h int, pills string) string {
 	wrap := lipgloss.NewStyle().Width(inner)
 	var b strings.Builder
 	b.WriteString(pills + "\n\n" + wrap.Inherit(t.fg(t.muted)).Render(setupSections[p.sec].hint) + "\n")
-	b.WriteString("\n" + p.viewForm(inner))
+	if p.sec == secSeguranca {
+		b.WriteString(p.viewSecurity(inner))
+	} else {
+		b.WriteString("\n" + p.viewForm(inner))
+	}
 	if p.status != "" {
 		c := map[string]color.Color{"ok": t.ok, "warn": t.warn, "danger": t.danger}[p.statusC]
 		b.WriteString("\n\n" + wrap.Bold(true).Foreground(c).Render(p.status))

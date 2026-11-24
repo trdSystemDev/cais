@@ -341,6 +341,8 @@ func TestSetupSubAbasPeloTeclado(t *testing.T) {
 	key(tea.KeyRight)
 	waitFor(t, m, "OAuth client do Google")
 	key(tea.KeyRight)
+	waitFor(t, m, "Checar de novo")
+	key(tea.KeyRight)
 	waitFor(t, m, "GitHub App")
 	press(t, m, "1")
 	if m.tab != tabDashboard {
@@ -373,4 +375,57 @@ func TestSetupTestaOGitHubApp(t *testing.T) {
 	m.setup.ghMsg = ""
 	click(t, m, "ghTest")
 	waitFor(t, m, "instalado em: trdSystemDev.")
+}
+
+// a Seguranca mostra a checagem da VPS que o daemon fez; o Corrigir de um
+// item e o Preparar VPS rodam pelo daemon, e o SSH so se confirma por uma
+// sessao aberta depois da mudanca
+func TestSetupSeguranca(t *testing.T) {
+	m, _ := openSetup(t)
+	click(t, m, "setup-sec:Seguranca")
+	waitFor(t, m, "3 de 3 itens pra corrigir")
+	s := screen(m)
+	for _, want := range []string{"✗ Login do root pelo SSH", "corrige no Preparar VPS", "✗ Firewall (ufw)  desligado  [Corrigir]",
+		"pare o servico ou escute so no 127.0.0.1", "Preparar VPS"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("falta %q:\n%s", want, s)
+		}
+	}
+
+	// corrigir so o firewall
+	click(t, m, "fix:firewall")
+	waitFor(t, m, "Corrigido. ufw ligado")
+	waitFor(t, m, "2 de 3 itens pra corrigir")
+
+	// Preparar VPS: senhas diferentes nao vao
+	click(t, m, "harden-open")
+	if !m.setup.typing() || m.setup.items[m.setup.focus].id != "hUser" {
+		t.Fatal("o formulario nao abriu no Admin")
+	}
+	m.setup.hUser.SetValue("deploy")
+	m.setup.hPass.SetValue("s3nha-forte")
+	m.setup.hPass2.SetValue("outra")
+	click(t, m, "harden-apply")
+	waitFor(t, m, "As senhas nao conferem.")
+	m.setup.hPass2.SetValue("s3nha-forte")
+	click(t, m, "harden-apply")
+	waitFor(t, m, "O SSH mudou: confirme em")
+	s = screen(m)
+	if !strings.Contains(s, "[ok] SSH sem root e sem senha") || !strings.Contains(s, "ssh deploy@<ip-da-vps>") ||
+		!strings.Contains(s, "Esta janela foi aberta antes da mudanca") {
+		t.Errorf("pendente:\n%s", s)
+	}
+	if testVPS.user != "deploy" || testVPS.pass != "s3nha-forte" || m.setup.hPass.Value() != "" {
+		t.Errorf("harden: %+v, senha no campo: %q", testVPS, m.setup.hPass.Value())
+	}
+	if m.setup.index("hostConfirm") >= 0 {
+		t.Fatal("a sessao antiga pode confirmar")
+	}
+
+	// a sessao nova confirma
+	m.setup.started = time.Now()
+	m.setup.setState(m.state)
+	click(t, m, "hostConfirm")
+	waitFor(t, m, "SSH confirmado: so chave, sem o root.")
+	waitFor(t, m, "SSH confirmado: entra so com chave")
 }

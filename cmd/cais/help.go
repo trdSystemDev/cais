@@ -88,6 +88,43 @@ Exemplos:
   cais help app            comandos de app
   cais help app deploy     o mesmo que: cais app deploy -h`},
 	}},
+	{title: "Seguranca da VPS (na propria VPS, com sudo; nao usa o daemon):", group: "host", cmds: []command{
+		{name: "host check", usage: "host [check]", short: "confere a seguranca da VPS e diz como corrigir", long: `
+So le. Confere: sistema (Ubuntu/Debian), login do root e senha no SSH,
+firewall (ufw), fail2ban, atualizacoes de seguranca automaticas, portas
+abertas pra internet (inclusive as publicadas por containers, que passam
+por cima do firewall), limite nos logs dos containers e reinicio pendente.
+Sai com 1 se algum item precisa de correcao. O mesmo aparece na TUI, em
+Setup > Seguranca, com o Corrigir de cada item e o Preparar VPS.`},
+		{name: "host harden", usage: "host harden -user NOME [-key arquivo] [-yes]", short: "prepara uma VPS nova: admin com sudo e so chave, SSH sem\nroot e sem senha, firewall, fail2ban, atualizacoes", long: `
+Pra VPS recem-criada (Ubuntu ou Debian), logo depois do install.sh, como
+root. Mostra o que vai fazer e pede "sim". Passos (rodar de novo so
+completa o que falta):
+  1. atualiza o sistema; instala ufw, fail2ban e unattended-upgrades
+  2. atualizacoes de seguranca automaticas, sem reiniciar sozinho
+  3. limite nos logs dos containers (/etc/docker/daemon.json)
+  4. o admin NOME: criado se faltar, no grupo sudo, com as chaves SSH do
+     root (e as do -key); pede a senha do sudo dele
+  5. firewall: entram so 22 (SSH), 80 e 443 (proxy)
+  6. fail2ban no SSH (5 erros em 10 min bloqueiam o IP por 1 hora)
+  7. SSH sem login do root e sem senha, so chave
+
+Sem nenhuma chave SSH recusa: desligar a senha trancaria voce fora. Depois
+do passo 7, entre de outro terminal com ssh NOME@vps e rode
+"sudo cais host confirm" em ate 5 minutos; sem isso o SSH volta sozinho
+a aceitar o root e a senha.
+
+Flags:
+  -user NOME     o admin que substitui o root no SSH (ex: deploy)
+  -key arquivo   chave publica a mais pro admin (.pub ou authorized_keys)
+  -yes           nao pede confirmacao (a senha do sudo ainda e pedida)
+
+O mesmo pela TUI: Setup > Seguranca > Preparar VPS. Ou ja na instalacao:
+  curl -fsSL <link do install.sh no README> | sh -s -- --ssh --harden deploy`},
+		{name: "host confirm", usage: "host confirm", short: "do login novo do admin: mantem o SSH do harden (senao\nvolta sozinho em 5 min)", long: `
+Rode de um login novo (ssh NOME@vps, depois sudo cais host confirm): e ele
+que prova que a chave funciona. Da sessao do root, recusa.`},
+	}},
 	{title: "Setup da VPS (so configura; os servicos ligam com cais service):", group: "setup", cmds: []command{
 		{name: "setup plan", usage: "setup", short: "mostra a config, o que falta e o que aplicar", long: `
 Nao muda nada. Mostra a configuracao, o que falta informar e, dos servicos

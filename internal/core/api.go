@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/backup"
@@ -50,6 +51,16 @@ type API interface {
 	// SetSecret grava um secret que o usuario informa (ex: a chave do
 	// GitHub App). Secrets gerados pelo cais nao podem ser sobrescritos.
 	SetSecret(ctx context.Context, name, value string) error
+
+	// HardenHost prepara a VPS (Preparar VPS da TUI, o cais host harden):
+	// admin com chave, firewall, fail2ban, atualizacoes, SSH sem root e sem
+	// senha. Bloqueia ate terminar; o progresso fica em State.Hardening.
+	HardenHost(ctx context.Context, req HardenRequest) error
+	// FixHostItem corrige so um item da checagem de seguranca (os Fixable).
+	FixHostItem(ctx context.Context, id string) (string, error)
+	// ConfirmHost mantem o SSH do Preparar VPS; since e o inicio da sessao
+	// que confirma (tem que ser depois da mudanca).
+	ConfirmHost(ctx context.Context, since time.Time) error
 
 	// TestNotify manda agora um e-mail de teste pros destinatarios dos
 	// avisos (config notify, chave no secret brevo_api_key).

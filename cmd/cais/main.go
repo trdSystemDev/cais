@@ -103,6 +103,8 @@ func (e *cli) run(args []string) int {
 		err = e.runMCP(args)
 	case "run":
 		err = e.runRun(args)
+	case "host":
+		err = e.runHost(args)
 	case "version":
 		fmt.Fprintln(e.out, versionLine())
 	case "help":
@@ -169,6 +171,8 @@ func (e *cli) runDaemon(args []string) error {
 
 	c := core.New(core.Deps{DeployTimeout: *deployTimeout, Version: version, Logger: logger})
 	go c.CheckEnvironment(ctx)
+	// seguranca da VPS (e o Docker) de novo de hora em hora
+	go c.RunEnvironmentChecks(ctx, time.Hour)
 	// deploy que o daemon anterior nao terminou (queda, kill, reboot): volta
 	// a versao que estava no ar
 	go c.RecoverApps(ctx)

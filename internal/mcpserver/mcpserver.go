@@ -171,7 +171,7 @@ func (t tools) register(s *mcp.Server) {
 // registerRead registra as ferramentas so de leitura: estado, logs, listas.
 func (t tools) registerRead(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "status", Annotations: readOnly(),
-		Description: "Estado geral da VPS: ambiente (Docker), Setup, stacks da infra e apps com os containers."},
+		Description: "Estado geral da VPS: ambiente (Docker e a checagem de seguranca: SSH, firewall, fail2ban, atualizacoes, portas abertas, cada item com o conserto), Setup, stacks da infra e apps com os containers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, core.State, error) {
 			st, err := t.api.Snapshot(ctx)
 			return nil, st, err

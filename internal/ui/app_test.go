@@ -15,6 +15,7 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/host"
 	"github.com/trdSystemDev/cais/internal/rpc"
 )
 
@@ -40,9 +41,38 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 	// Parar deixa os containers da stack parados ate o proximo up
 	var mu sync.Mutex
 	stopped := map[string]bool{}
+	vps := testVPS
+	*vps = fakeVPS{}
 	stack := func(file string) string { return filepath.Base(filepath.Dir(file)) }
 	c := core.New(core.Deps{
 		CheckDocker: check,
+		// a VPS da aba Seguranca: o Corrigir liga o firewall e o Preparar
+		// VPS acerta o SSH (e fica esperando a confirmacao)
+		CheckHost: func(context.Context) []host.Item {
+			mu.Lock()
+			defer mu.Unlock()
+			return []host.Item{
+				{ID: "ssh-root", Title: "Login do root pelo SSH", OK: vps.ssh, Detail: map[bool]string{true: "bloqueado", false: "permitido"}[vps.ssh]},
+				{ID: "firewall", Title: "Firewall (ufw)", OK: vps.firewall, Detail: "desligado", Fixable: !vps.firewall, Fix: host.HardenFix},
+				{ID: "ports", Title: "Portas abertas pra internet", Detail: "3306/tcp", Fix: "pare o servico ou escute so no 127.0.0.1"},
+			}
+		},
+		FixHost: func(_ context.Context, id string) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.firewall = true
+			return "ufw ligado", nil
+		},
+		HardenHost: func(_ context.Context, o host.Options, progress func(host.Step)) (host.Result, error) {
+			progress(host.Step{ID: "admin", Desc: "Usuario admin " + o.User, Status: host.StepChanged})
+			progress(host.Step{ID: "ssh", Desc: "SSH sem root e sem senha", Status: host.StepChanged})
+			mu.Lock()
+			defer mu.Unlock()
+			vps.ssh, vps.user, vps.pass = true, o.User, o.Password
+			return host.Result{PendingConfirm: true}, nil
+		},
+		ConfirmSSH:  func(context.Context) (bool, error) { return true, nil },
+		SSHHardened: func() bool { return true },
 		ConfigPath:  filepath.Join(root, "config.yaml"),
 		SecretsDir:  filepath.Join(root, "secrets"),
 		StackDir:    func(n string) string { return filepath.Join(root, "stacks", n) },
@@ -153,6 +183,9 @@ func run(t *testing.T, m *model, cmd tea.Cmd) tea.Msg {
 		}
 		if _, ok := msg.(sysStatsMsg); ok {
 			return last
+		}
+		if _, ok := msg.(hostTick); ok {
+			return last // a contagem do SSH pendente se repete a cada segundo
 		}
 		if _, ok := msg.(stateMsg); ok {
 			return last
@@ -694,3 +727,11 @@ func TestInfraImportarBanco(t *testing.T) {
 		t.Errorf("a string de conexao ficou no campo: %q", v)
 	}
 }
+
+// fakeVPS e a maquina que a aba Seguranca ve nos testes.
+type fakeVPS struct {
+	ssh, firewall bool
+	user, pass    string
+}
+
+var testVPS = &fakeVPS{}

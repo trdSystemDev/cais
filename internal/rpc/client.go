@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/backup"
@@ -101,6 +102,20 @@ func (c *Client) SaveConfig(ctx context.Context, cfg config.Config) error {
 
 func (c *Client) SetSecret(ctx context.Context, name, value string) error {
 	return c.call(ctx, MethodSecretSet, secretParams{Name: name, Value: value}, nil)
+}
+
+// HardenHost bloqueia ate o Preparar VPS terminar (apt incluso: minutos).
+func (c *Client) HardenHost(ctx context.Context, req core.HardenRequest) error {
+	return c.call(ctx, MethodHostHarden, req, nil)
+}
+
+func (c *Client) FixHostItem(ctx context.Context, id string) (string, error) {
+	r, err := result[textResult](c, ctx, MethodHostFix, hostFixParams{ID: id})
+	return r.Text, err
+}
+
+func (c *Client) ConfirmHost(ctx context.Context, since time.Time) error {
+	return c.call(ctx, MethodHostConfirm, hostConfirmParams{Since: since}, nil)
 }
 
 func (c *Client) TestNotify(ctx context.Context) error {

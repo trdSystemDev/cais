@@ -4,9 +4,10 @@
 #   curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
 #     sudo sh -s -- --ssh
 #
-# O mesmo comando atualiza. Baixa o binario desta arquitetura, confere o
-# SHA-256, instala em /usr/local/bin/cais, instala a unidade do systemd e
-# sobe (ou reinicia) o daemon. Os containers das stacks e dos apps nao
+# O mesmo comando atualiza. Sem Docker (VPS nova com Ubuntu ou Debian),
+# instala o Docker pelo repositorio oficial. Baixa o binario desta
+# arquitetura, confere o SHA-256, instala em /usr/local/bin/cais, instala a
+# unidade do systemd e sobe (ou reinicia) o daemon. Os containers das stacks e dos apps nao
 # param: so o daemon reinicia.
 set -eu
 
@@ -21,6 +22,8 @@ SOCKET=/run/cais/cais.sock
 SSH_USER=cais
 SSH_WRAPPER=/usr/local/bin/cais-ssh
 SSHD_DROPIN=/etc/ssh/sshd_config.d/cais.conf
+# CAIS_OS_RELEASE troca o /etc/os-release (testes)
+OS_RELEASE=${CAIS_OS_RELEASE:-/etc/os-release}
 
 usage() {
 	cat <<EOF
@@ -38,6 +41,10 @@ Opcoes:
                     sudo (authorized_keys); implica --group cais.
   --ssh-key ARQUIVO chave publica (.pub ou authorized_keys) pro usuario cais,
                     no lugar das suas
+  --harden NOME     VPS nova: no fim, roda o cais host harden -user NOME (cria o
+                    admin com sudo e as chaves do root, SSH so com chave e sem
+                    root, firewall, fail2ban, atualizacoes). Pergunta no
+                    terminal; depois confirme de outro terminal
   --version vX.Y.Z  pelo release: essa versao em vez da mais nova
   --dry-run         mostra o que faria, sem mudar nada (baixa mesmo assim)
   --uninstall       remove o binario, o servico e o usuario cais do ssh;
@@ -68,6 +75,7 @@ WANT=
 UNINSTALL=
 SSH=
 SSH_KEY=
+HARDEN=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--group)
@@ -90,6 +98,11 @@ while [ $# -gt 0 ]; do
 		SSH_KEY=$2
 		shift 2
 		;;
+	--harden)
+		[ $# -ge 2 ] || die "--harden precisa do nome do admin (ex: --harden deploy)"
+		HARDEN=$2
+		shift 2
+		;;
 	--dry-run)
 		DRY_RUN=1
 		shift
@@ -108,6 +121,41 @@ while [ $# -gt 0 ]; do
 		;;
 	esac
 done
+
+# install_docker instala o Docker e o Compose pelo repositorio oficial do
+# Docker (Ubuntu e Debian; VPS nova). Em outra distro, pede pra instalar antes.
+DOCKER_INSTALLED=
+install_docker() {
+	id=$(. "$OS_RELEASE" 2>/dev/null && echo "${ID:-}")
+	codename=$(. "$OS_RELEASE" 2>/dev/null && echo "${VERSION_CODENAME:-}")
+	case "$id" in
+	ubuntu | debian) ;;
+	*) die "Docker nao encontrado: instale o Docker antes (https://docs.docker.com/engine/install/)" ;;
+	esac
+	[ -n "$codename" ] || die "Docker nao encontrado e $OS_RELEASE sem VERSION_CODENAME: instale o Docker antes"
+	case "$(uname -m)" in
+	x86_64 | amd64) darch=amd64 ;;
+	aarch64 | arm64) darch=arm64 ;;
+	*) die "arquitetura nao suportada: $(uname -m)" ;;
+	esac
+	say "Instalando o Docker (repositorio oficial, $id $codename)"
+	run apt-get update -q
+	run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q ca-certificates curl
+	run install -m 0755 -d /etc/apt/keyrings
+	run curl -fsSL "https://download.docker.com/linux/$id/gpg" -o /etc/apt/keyrings/docker.asc
+	run chmod a+r /etc/apt/keyrings/docker.asc
+	line="deb [arch=$darch signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$id $codename stable"
+	if [ -n "$DRY_RUN" ]; then
+		echo "    + grava /etc/apt/sources.list.d/docker.list com: $line"
+	else
+		echo "$line" >/etc/apt/sources.list.d/docker.list
+	fi
+	run apt-get update -q
+	run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+		docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+	run systemctl enable --now docker
+	DOCKER_INSTALLED=1
+}
 
 # write_unit grava a unidade do systemd. Fica aqui (e nao num arquivo do
 # repositorio) pra instalacao pelo curl ter tudo.
@@ -320,9 +368,14 @@ EOF
 	exit 0
 fi
 
-command -v docker >/dev/null 2>&1 || die "Docker nao encontrado: instale o Docker antes (https://docs.docker.com/engine/install/)"
-docker info >/dev/null 2>&1 || die "o Docker nao respondeu (o servico esta no ar? rode como root)"
-docker compose version >/dev/null 2>&1 || die "Docker Compose v2 nao encontrado (o plugin docker compose)"
+if ! command -v docker >/dev/null 2>&1; then
+	install_docker
+fi
+# no --dry-run o Docker recem "instalado" nao existe: nada a conferir
+if [ -z "$DOCKER_INSTALLED" ] || [ -z "$DRY_RUN" ]; then
+	docker info >/dev/null 2>&1 || die "o Docker nao respondeu (o servico esta no ar? rode como root)"
+	docker compose version >/dev/null 2>&1 || die "Docker Compose v2 nao encontrado (o plugin docker compose)"
+fi
 
 # --- binario -----------------------------------------------------------------
 
@@ -394,6 +447,7 @@ else
 fi
 
 if [ -n "$DRY_RUN" ]; then
+	[ -n "$HARDEN" ] && echo "    + $BIN host harden -user $HARDEN (pergunta no terminal)"
 	echo
 	echo "(--dry-run: nada foi mudado; o binario baixado e o $NEW)"
 	exit 0
@@ -409,6 +463,17 @@ done
 "$BIN" state >/dev/null 2>&1 || die "o daemon nao respondeu: veja journalctl -u cais -n 50"
 
 say "$NEW no ar"
+
+# --harden: prepara a VPS. As perguntas (confirmacao e senha do sudo) vao
+# pro terminal: no "curl | sh" a entrada padrao e o proprio script.
+if [ -n "$HARDEN" ]; then
+	say "Preparando a VPS (admin $HARDEN, SSH so com chave, firewall, fail2ban)"
+	if ! (exec </dev/tty) 2>/dev/null; then
+		die "--harden precisa de um terminal pra perguntar a senha do sudo; rode depois: sudo cais host harden -user $HARDEN"
+	fi
+	"$BIN" host harden -user "$HARDEN" </dev/tty ||
+		die "o cais ficou instalado, mas o preparo parou (acima); rode de novo: sudo cais host harden -user $HARDEN"
+fi
 OPEN="sudo cais"
 if [ -f "$SSHD_DROPIN" ]; then
 	OPEN="ssh $SSH_USER@<esta-vps>"
@@ -426,6 +491,7 @@ fi
 cat <<EOF
 
 Proximos passos (ou pela TUI: $OPEN, abas Setup e Infra):
+$( [ -z "$HARDEN" ] && echo "  sudo cais host harden -user deploy   # VPS nova: admin, SSH so com chave, firewall")
   sudo cais setup config --email voce@exemplo.com.br --github-app-id <id>
   sudo cais setup secret github_app_key < chave-do-github-app.pem
   sudo cais service proxy on   # sobe o proxy (HTTPS dos apps)

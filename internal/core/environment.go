@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/docker"
 )
@@ -22,6 +23,7 @@ func (c *Core) CheckEnvironment(ctx context.Context) (Environment, error) {
 
 	status := c.deps.CheckDocker(ctx)
 	host := currentHost()
+	security := c.deps.CheckHost(ctx)
 
 	s := c.update(func(s *State) {
 		c.checks--
@@ -29,8 +31,24 @@ func (c *Core) CheckEnvironment(ctx context.Context) (Environment, error) {
 		s.Environment.CheckedAt = c.deps.Now()
 		s.Environment.Host = host
 		s.Environment.Docker = dockerFromStatus(status)
+		s.Environment.Security = security
 	})
 	return s.Environment, nil
+}
+
+// RunEnvironmentChecks refaz a checagem do ambiente a cada every: uma porta
+// aberta ou o firewall desligado depois do harden aparecem no painel.
+func (c *Core) RunEnvironmentChecks(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.CheckEnvironment(ctx)
+		}
+	}
 }
 
 func currentHost() Host {
