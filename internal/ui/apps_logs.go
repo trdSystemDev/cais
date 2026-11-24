@@ -158,12 +158,20 @@ func (m *model) viewAppLogs(a core.AppStatus, w, h int) string {
 	for i, f := range p.fields {
 		if f.id == "log-container" {
 			b.WriteString(p.zones.Mark(f.id, "  "+t.fg(t.text).Width(18).Render("Container")+t.selector("‹ "+name+" ›", p.inForm && i == p.focus)))
+			for j, sf := range p.fields {
+				if sf.id == "app-shell" {
+					b.WriteString("  " + p.zones.Mark(sf.id, t.button(sf.label, btnInfo, p.inForm && j == p.focus)))
+				}
+			}
 			// linhas na tela durante a selecao, como no titulo dos logs da Infra
 			if pos := m.logPosition(); pos != "" {
 				b.WriteString("  " + t.bold().Render("Logs · "+pos))
 			}
 			b.WriteString("\n")
 		}
+	}
+	if p.shellErr != "" {
+		b.WriteString(lipgloss.NewStyle().Width(w-4).Foreground(t.danger).Render("  "+p.shellErr) + "\n")
 	}
 	b.WriteString("\n")
 	empty := ""

@@ -132,6 +132,7 @@ type appsPage struct {
 	status     string
 	statusC    string
 	detailErr  string
+	shellErr   string   // por que o Shell dos Logs nao abriu
 	info       *infoBox // ajuda aberta pelo [i] (modal)
 }
 
@@ -662,8 +663,12 @@ func (p *appsPage) fieldsLogs(a *core.AppStatus) {
 		if n := len(a.Containers); n > 0 {
 			p.container = (p.container + 1) % n
 		}
+		p.shellErr = ""
 		return nil
 	}})
+	if len(a.Containers) > 0 {
+		p.add(&field{id: "app-shell", label: "Shell", kind: btnInfo, press: p.shell})
+	}
 }
 
 func (p *appsPage) setFocus(i int) tea.Cmd {

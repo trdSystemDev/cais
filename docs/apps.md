@@ -18,6 +18,7 @@ cais app deploy meu-app                      # o commit mais novo da branch
 cais app deploy meu-app -ref 3f2a1c9         # ou um commit/branch
 cais apps                                    # estado de todos
 cais app logs meu-app meu-app-web-1
+cais app shell meu-app web                   # bash (ou sh) dentro do container
 cais app history meu-app                     # ultimos deploys
 cais app rollback meu-app [commit]           # volta pra um deploy anterior (sem build)
 cais app restart meu-app [service]
@@ -333,6 +334,24 @@ app e por instalacao) mesmo com dezenas de apps:
   manuais (o log diz quanto sobra e ate quando); com a cota esgotada, nem
   chama (insistir faz o GitHub bloquear por mais tempo) e o erro diz o
   horario em que volta.
+
+## Shell no container
+
+Pra rodar comandos dentro do app (uma migracao, um `rails console`, olhar
+um arquivo), abra o shell de um container: o bash, ou o sh se a imagem nao
+tiver bash. Sai com `exit` ou ctrl+d.
+
+- **TUI:** aba **Apps**, secao **Logs**: escolha o container no seletor e
+  clique em **Shell**. A TUI sai da tela enquanto o shell roda e volta
+  quando ele termina.
+- **CLI:** `cais app shell <app> [service]`. Sem o service, vale quando o
+  app tem um container so rodando. Pelo ssh, use `-t`:
+  `ssh -t cais@vps app shell loja`.
+
+Quem abre o `docker exec -it` e o daemon: o terminal chega pela conexao com
+ele. Por isso funciona pelo usuario `cais` do ssh, que nao fala com o Docker.
+So abre em container de app rodando. Imagem sem shell (distroless, scratch)
+nao abre: o erro diz isso. Nao existe pelo MCP.
 
 ---
 

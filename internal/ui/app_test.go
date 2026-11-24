@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/host"
+	"github.com/trdSystemDev/cais/internal/ptyio"
 	"github.com/trdSystemDev/cais/internal/rpc"
 )
 
@@ -105,6 +108,13 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 		},
 		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 		Exec:      fakeGarage,
+		// o psql/mysql da Infra: um sh local no lugar do docker exec
+		StartTerminal: func(container, term string, rows, cols uint16, args ...string) (*os.File, error) {
+			mu.Lock()
+			vps.terminal = append([]string{container}, args...)
+			mu.Unlock()
+			return ptyio.Start(exec.Command("sh", "-c", "echo console"), rows, cols)
+		},
 		// sem docker stats de verdade nos testes
 		DockerStats: func(context.Context) ([]docker.ContainerStats, error) { return nil, nil },
 		Hostname:    func() (string, error) { return "vps-teste", nil },
@@ -732,6 +742,7 @@ func TestInfraImportarBanco(t *testing.T) {
 type fakeVPS struct {
 	ssh, firewall bool
 	user, pass    string
+	terminal      []string // o ultimo console aberto: container e comando
 }
 
 var testVPS = &fakeVPS{}

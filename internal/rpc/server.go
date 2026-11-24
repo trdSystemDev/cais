@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
@@ -146,6 +147,10 @@ func (s *server) handle(nc net.Conn) {
 		}
 		if m.ID == 0 {
 			continue // cliente nao manda notificacoes; ignora
+		}
+		if m.Method == MethodAppShell {
+			s.shell(c, m)
+			continue
 		}
 		if !s.calls.Begin() {
 			c.send(message{ID: m.ID, Error: &Error{Code: CodeActionFailed, Message: ErrShuttingDown}})
@@ -429,4 +434,32 @@ func marshal(v any) (json.RawMessage, *Error) {
 		return nil, actionError(err)
 	}
 	return b, nil
+}
+
+// shell atende o app.shell: abre o shell e manda o terminal (o mestre do
+// pty) como descritor junto com a resposta. O daemon fecha a copia dele: o
+// shell vive enquanto o cliente segura o terminal.
+func (s *server) shell(c *conn, m message) {
+	fail := func(e *Error) { c.send(message{ID: m.ID, Error: e}) }
+	var p core.ShellRequest
+	if err := params(m, &p); err != nil {
+		fail(err)
+		return
+	}
+	opener, isOpener := s.api.(core.ShellOpener)
+	uc, isUnix := c.Conn.(*net.UnixConn)
+	if !isOpener || !isUnix {
+		fail(&Error{Code: CodeActionFailed, Message: "este daemon nao abre shell"})
+		return
+	}
+	f, err := opener.OpenShell(s.work, p)
+	if err != nil {
+		fail(actionError(err))
+		return
+	}
+	defer f.Close()
+	b, _ := json.Marshal(message{JSONRPC: "2.0", ID: m.ID, Result: json.RawMessage(`{"ok":true}`)})
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	uc.WriteMsgUnix(append(b, '\n'), syscall.UnixRights(int(f.Fd())), nil)
 }

@@ -226,6 +226,18 @@ Exemplos:
   cais db create mysql estoque -import
   cais app db portal postgres/portal      # liga ao app`},
 		{name: "db list", usage: "db list", short: "databases criados pelo cais: variaveis, espaco e app"},
+		{name: "db console", usage: "db console postgres|mysql [database]", short: "abre o psql ou o mysql, como administrador", long: `
+Abre o cliente do banco neste terminal, dentro do container (psql como o
+usuario postgres; mysql como root), no database pedido ou no padrao. Sai
+com \q, exit ou ctrl+d. O mesmo na TUI: aba Infra, card do banco, botao
+psql ou mysql.
+
+Precisa de um terminal: pelo ssh, use -t.
+
+Exemplos:
+  cais db console postgres
+  cais db console postgres loja
+  ssh -t cais@vps db console mysql`},
 		{name: "db delete", usage: "db delete postgres|mysql <nome> [-yes]", short: "apaga o database e o usuario (nao pode estar ligado a app)", long: `
 Apaga todos os dados do database, o usuario e a senha guardada. Nao tem
 volta. Recusa se algum app ainda usa o banco: desligue antes com
@@ -425,6 +437,19 @@ Exemplos:
 Volta com: cais app restart <nome>`},
 		{name: "app logs", usage: "app logs <nome> <container>", short: "ultimas linhas do log", long: `
 O nome do container aparece em "cais apps" (ex: portal-web-1).`},
+		{name: "app shell", usage: "app shell <nome> [service]", short: "shell interativo (bash ou sh) num container do app", long: `
+Abre o bash do container (ou o sh, se nao tiver bash) neste terminal, como
+um docker exec -it. Sai com exit ou ctrl+d. Sem o service, vale quando o
+app tem um container so rodando; com varios, diga qual (o service do
+compose, ex: web, ou o nome do container). Imagem sem shell (distroless,
+scratch) nao abre. O mesmo na TUI: aba Apps, secao Logs, botao Shell.
+
+Precisa de um terminal: pelo ssh, use -t.
+
+Exemplos:
+  cais app shell loja
+  cais app shell loja worker
+  ssh -t cais@vps app shell loja`},
 		{name: "app delete", usage: "app delete <nome> [-volumes] [-yes]", short: "exclui o app (containers, imagens, codigo, variaveis,\nsecrets); -volumes apaga tambem os dados. O database\nda infra fica", long: `
 Pede o nome digitado pra confirmar. Bancos e buckets da infra ficam.
 

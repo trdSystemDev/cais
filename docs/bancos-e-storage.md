@@ -99,6 +99,24 @@ nao sao chaves S3.
 
 Os bancos nunca entram na `proxy_network`.
 
+## Console do banco (psql e mysql)
+
+Pra rodar SQL a mao, abra o cliente do banco dentro do container, como
+administrador (psql como o usuario `postgres`; mysql como `root`, com a
+senha que ja esta no container). Sai com `\q`, `exit` ou ctrl+d.
+
+- **TUI:** aba **Infra**, card do **postgres** ou do **mysql** (no ar):
+  botao **psql** ou **mysql**. A TUI sai da tela enquanto o console roda e
+  volta quando ele termina.
+- **CLI:** `cais db console postgres [database]` ou
+  `cais db console mysql [database]`. Pelo ssh, use `-t`:
+  `ssh -t cais@vps db console postgres loja`.
+
+Como o shell dos apps, quem abre e o daemon: funciona pelo usuario `cais`
+do ssh, sem porta nem tunel. Nao existe pelo MCP. Pra usar um cliente
+grafico (DBeaver, TablePlus), veja o acesso por tunel SSH em
+[setup](setup.md#acesso-aos-bancos).
+
 ---
 
 [Voltar pra documentacao](README.md)

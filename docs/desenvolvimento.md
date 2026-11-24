@@ -115,6 +115,7 @@ mesmos argumentos, e cada constante do protocolo tem que ter handler.
 | `internal/host` | seguranca da VPS: checagem (`cais host check`, estado) e preparo (`cais host harden`) |
 | `install.sh` | instalador: baixa o release e traz a unidade do systemd |
 | `.github/workflows/` | release a cada tag `v*` |
+| `docs/logo/` | a logo: a imagem original (`cais.png`), os SVG em pixel art e o `gen.py`, que gera os SVG e os mapas do `internal/ui/logo` |
 | `docs/` | esta documentacao |
 
 ## Pastas na VPS

@@ -13,7 +13,9 @@ import (
 	"text/tabwriter"
 
 	"github.com/trdSystemDev/cais/internal/apps"
+	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/ptyio"
 )
 
 func (e *cli) runApps(args []string) error {
@@ -122,7 +124,7 @@ func (e *cli) runApp(args []string) error {
 	}
 	need := map[string][2]int{ // minimo e maximo de argumentos
 		"create": {2, 2}, "deploy": {1, 1}, "rollback": {1, 2}, "history": {1, 1}, "promote": {1, 1}, "set": {1, 1}, "guide": {1, 1}, "env": {1, -1},
-		"restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "delete": {1, 1}, "db": {1, 3}, "bucket": {1, 3},
+		"restart": {1, 2}, "stop": {1, 1}, "logs": {2, 2}, "shell": {1, 2}, "delete": {1, 1}, "db": {1, 3}, "bucket": {1, 3},
 	}
 	lim, ok := need[sub]
 	if !ok {
@@ -181,6 +183,8 @@ func (e *cli) runApp(args []string) error {
 		return e.appBucket(ctx, c, name, pos[1:])
 	case "delete":
 		return e.appDelete(ctx, c, name, *volumes, *yes)
+	case "shell":
+		return e.appShell(ctx, c, name, arg(1))
 	case "logs":
 		out, err := c.AppLogs(ctx, name, arg(1))
 		if err != nil {
@@ -630,4 +634,31 @@ func (e *cli) appHistory(ctx context.Context, c daemonAPI, name string) error {
 func firstLineOf(s string) string {
 	line, _, _ := strings.Cut(s, "\n")
 	return line
+}
+
+// appShell abre o shell de um container do app neste terminal (o daemon
+// abre o docker exec -it e manda o terminal pelo socket).
+func (e *cli) appShell(ctx context.Context, c daemonAPI, name, service string) error {
+	return e.openTerminal(ctx, c, core.ShellRequest{App: name, Service: service}, "Shell em "+cmpOr(service, name),
+		"ssh -t cais@vps app shell "+name)
+}
+
+// openTerminal abre o terminal pedido (shell de app ou console de banco)
+// neste terminal, ate ele sair.
+func (e *cli) openTerminal(ctx context.Context, c daemonAPI, req core.ShellRequest, title, viaSSH string) error {
+	if !ptyio.IsTerminal(e.in) {
+		return errors.New("precisa de um terminal; pelo ssh, use -t: " + viaSSH)
+	}
+	opener, ok := c.(core.ShellOpener)
+	if !ok {
+		return errors.New("este cliente nao abre terminal")
+	}
+	req.Term = os.Getenv("TERM")
+	req.Rows, req.Cols = ptyio.Size(e.out)
+	f, err := opener.OpenShell(ctx, req)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.err, "%s (exit ou ctrl+d sai).\r\n", title)
+	return ptyio.Attach(f, e.in, e.out)
 }

@@ -3,6 +3,7 @@ package databases
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -267,4 +268,32 @@ func RestoreCommand(e Engine, name string) ([]string, error) {
 		return []string{"sh", "-c", `MYSQL_PWD="$(cat /run/secrets/mysql_root_password)" exec mysql -uroot "$1"`, "sh", name}, nil
 	}
 	return nil, fmt.Errorf("banco %q nao suportado", e.Name)
+}
+
+// validDB e um nome de database aceito no console (os do cais seguem o
+// Identifier: minusculas, numeros e _).
+var validDB = regexp.MustCompile(`^[A-Za-z0-9_]{1,63}$`)
+
+// ConsoleCommand e o cliente interativo do banco dentro do container (psql
+// ou mysql), como administrador, no database db (vazio: o padrao).
+func ConsoleCommand(engine, db string) ([]string, error) {
+	if db != "" && !validDB.MatchString(db) {
+		return nil, fmt.Errorf("nome de database invalido: %q", db)
+	}
+	switch engine {
+	case Postgres:
+		if db == "" {
+			db = "postgres"
+		}
+		// socket local do container: o usuario postgres entra sem senha
+		return []string{"psql", "-U", "postgres", "-d", db}, nil
+	case MySQL:
+		// a senha do root e lida do secret dentro do proprio container
+		args := []string{"sh", "-c", `MYSQL_PWD="$(cat /run/secrets/mysql_root_password)" exec mysql -uroot "$@"`, "sh"}
+		if db != "" {
+			args = append(args, db)
+		}
+		return args, nil
+	}
+	return nil, fmt.Errorf("banco %q nao suportado (use %s ou %s)", engine, Postgres, MySQL)
 }

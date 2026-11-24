@@ -48,7 +48,11 @@ const (
 	MethodAppEnvGet        = "app.env.get"       // params: appParams
 	MethodAppEnvSet        = "app.env.set"       // params: envParams
 	MethodAppGuide         = "app.guide"         // params: appParams
-	MethodDatabaseCreate   = "db.create"         // params: core.DatabaseRequest
+	// MethodAppShell abre o shell de um container: a resposta leva o
+	// terminal (mestre do pty) como descritor (SCM_RIGHTS), numa conexao
+	// so pra ele.
+	MethodAppShell         = "app.shell" // params: core.ShellRequest
+	MethodDatabaseCreate   = "db.create" // params: core.DatabaseRequest
 	MethodDatabases        = "db.list"
 	MethodAppDBLink        = "app.db.link"   // params: appDBParams
 	MethodAppDBUnlink      = "app.db.unlink" // params: appDBParams

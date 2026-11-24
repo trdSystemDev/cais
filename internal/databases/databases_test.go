@@ -158,3 +158,21 @@ func TestDrop(t *testing.T) {
 		t.Error("aceitou nome invalido")
 	}
 }
+
+func TestConsoleCommand(t *testing.T) {
+	pg, _ := ConsoleCommand(Postgres, "")
+	pgDB, _ := ConsoleCommand(Postgres, "loja")
+	my, _ := ConsoleCommand(MySQL, "loja")
+	if strings.Join(pg, " ") != "psql -U postgres -d postgres" || strings.Join(pgDB, " ") != "psql -U postgres -d loja" {
+		t.Errorf("psql: %v %v", pg, pgDB)
+	}
+	if my[0] != "sh" || !strings.Contains(my[2], "mysql_root_password") || my[len(my)-1] != "loja" {
+		t.Errorf("mysql: %v", my)
+	}
+	if _, err := ConsoleCommand(Postgres, "loja; drop"); err == nil {
+		t.Error("aceitou nome invalido")
+	}
+	if _, err := ConsoleCommand("mongo", ""); err == nil {
+		t.Error("aceitou banco desconhecido")
+	}
+}

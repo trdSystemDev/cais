@@ -1,10 +1,15 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/apps"
@@ -22,6 +27,7 @@ import (
 // pendentes e futuras devolvem ErrDisconnected e os canais de Subscribe
 // sao fechados.
 type Client struct {
+	path string // o socket: o shell abre uma conexao so pra ele
 	conn net.Conn
 	wmu  sync.Mutex
 	enc  *json.Encoder
@@ -54,6 +60,7 @@ func Dial(ctx context.Context, path string) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{
+		path:    path,
 		conn:    conn,
 		enc:     json.NewEncoder(conn),
 		pending: map[uint64]chan message{},
@@ -446,4 +453,52 @@ func (c *Client) RestoreBackup(ctx context.Context, req core.RestoreRequest) (co
 
 func (c *Client) RollbackApp(ctx context.Context, name, commit string) (apps.DeployResult, error) {
 	return result[apps.DeployResult](c, ctx, MethodAppRollback, deployParams{Name: name, Ref: commit})
+}
+
+var _ core.ShellOpener = (*Client)(nil)
+
+// OpenShell abre o shell de um container: numa conexao nova, recebe o
+// terminal (mestre do pty) como descritor junto com a resposta.
+func (c *Client) OpenShell(ctx context.Context, req core.ShellRequest) (*os.File, error) {
+	var d net.Dialer
+	nc, err := d.DialContext(ctx, "unix", c.path)
+	if err != nil {
+		return nil, err
+	}
+	defer nc.Close()
+	uc, ok := nc.(*net.UnixConn)
+	if !ok {
+		return nil, errors.New("o shell precisa do socket unix do daemon")
+	}
+	params, _ := json.Marshal(req)
+	b, _ := json.Marshal(message{JSONRPC: "2.0", ID: 1, Method: MethodAppShell, Params: params})
+	if _, err := uc.Write(append(b, '\n')); err != nil {
+		return nil, err
+	}
+	uc.SetReadDeadline(time.Now().Add(time.Minute))
+	buf := make([]byte, 64*1024)
+	oob := make([]byte, syscall.CmsgSpace(4))
+	n, oobn, _, _, err := uc.ReadMsgUnix(buf, oob)
+	if err != nil {
+		return nil, err
+	}
+	var m message
+	if err := json.Unmarshal(bytes.TrimSpace(buf[:n]), &m); err != nil {
+		return nil, fmt.Errorf("resposta do shell: %w", err)
+	}
+	if m.Error != nil {
+		return nil, m.Error
+	}
+	scms, err := syscall.ParseSocketControlMessage(oob[:oobn])
+	if err != nil || len(scms) == 0 {
+		return nil, errors.New("o daemon nao mandou o terminal")
+	}
+	fds, err := syscall.ParseUnixRights(&scms[0])
+	if err != nil || len(fds) == 0 {
+		return nil, errors.New("o daemon nao mandou o terminal")
+	}
+	for _, fd := range fds[1:] {
+		syscall.Close(fd)
+	}
+	return os.NewFile(uintptr(fds[0]), "pty"), nil
 }

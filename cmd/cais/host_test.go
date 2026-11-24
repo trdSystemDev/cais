@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/trdSystemDev/cais/internal/core/coretest"
 	"github.com/trdSystemDev/cais/internal/host"
 )
 
@@ -107,5 +108,13 @@ func TestHostCheckSaiComUm(t *testing.T) {
 	if code != 1 || !strings.Contains(c.out.String(), "[ok] Sistema") || !strings.Contains(c.out.String(), "[!!] Login do root") ||
 		!strings.Contains(c.errb.String(), "itens pra corrigir") {
 		t.Errorf("%d\n%s\n%s", code, c.out, c.errb)
+	}
+}
+
+// sem terminal (ssh sem -t, pipe) o shell nao abre e diz como
+func TestAppShellPedeTerminal(t *testing.T) {
+	c := newTestCLI(coretest.NewRecorder())
+	if code := c.run([]string{"app", "shell", "loja"}); code != 1 || !strings.Contains(c.errb.String(), "ssh -t cais@vps app shell loja") {
+		t.Errorf("%d %s", code, c.errb)
 	}
 }

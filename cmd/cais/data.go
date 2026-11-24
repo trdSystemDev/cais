@@ -21,7 +21,7 @@ func (e *cli) runBucket(args []string) error {
 	if err != nil {
 		return err
 	}
-	if sub != "create" && sub != "list" && sub != "delete" {
+	if sub != "create" && sub != "list" && sub != "delete" && sub != "console" {
 		return groupError("bucket", sub)
 	}
 	c, err := e.connect(*socket)
@@ -107,6 +107,16 @@ func (e *cli) runDB(args []string) error {
 	ctx := context.Background()
 
 	switch sub {
+	case "console":
+		if len(pos) < 1 || len(pos) > 2 {
+			return errors.New("uso: cais db console postgres|mysql [database]")
+		}
+		var db string
+		if len(pos) == 2 {
+			db = pos[1]
+		}
+		return e.openTerminal(ctx, c, core.ShellRequest{Engine: pos[0], Database: db}, map[string]string{"postgres": "psql", "mysql": "mysql"}[pos[0]],
+			"ssh -t cais@vps db console "+pos[0])
 	case "create":
 		if len(pos) != 2 {
 			return errors.New("uso: cais db create postgres|mysql <nome> [-extensions postgis] [-import]")

@@ -52,6 +52,7 @@ func (a *App) Run() error {
 	defer unsubscribe()
 
 	m := newModel(a.api, states)
+	m.splashUntil = time.Now().Add(splashFor)
 	defer m.zones.Close()
 	_, err = tea.NewProgram(m).Run()
 	return err
@@ -67,11 +68,14 @@ type model struct {
 	states <-chan core.State
 	// a conexao com o daemon caiu: nada na tela e confiavel, so sair
 	disconnected bool
-	setup        *setupPage
-	apps         *appsPage
-	db           *dbPanel   // Novo banco, na aba Infra
-	svc          *svcConfig // config do servico (proxy, Garage), na aba Infra
-	bk           *bkPanel   // Backups, na aba Setup
+	// splashUntil: ate quando a abertura (a logo) fica na tela; uma tecla
+	// ou um clique pula
+	splashUntil time.Time
+	setup       *setupPage
+	apps        *appsPage
+	db          *dbPanel   // Novo banco, na aba Infra
+	svc         *svcConfig // config do servico (proxy, Garage), na aba Infra
+	bk          *bkPanel   // Backups, na aba Setup
 
 	selectionGeneration uint64
 	logSelection        logSelection
@@ -124,7 +128,7 @@ func newModel(api core.API, states <-chan core.State) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.waitState(), m.checkCmd(), m.setup.load(), m.sysCmd(), m.dashRefresh(true))
+	return tea.Batch(m.splashCmd(), tea.RequestBackgroundColor, m.waitState(), m.checkCmd(), m.setup.load(), m.sysCmd(), m.dashRefresh(true))
 }
 
 // waitState entrega a proxima foto do core; o Update pede a seguinte.
@@ -167,6 +171,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.svc.setTheme(m.th)
 		m.bk.setTheme(m.th)
 		return m, nil
+	case splashDoneMsg:
+		m.splashUntil = time.Time{}
+		return m, nil
+	case tea.KeyPressMsg, tea.MouseClickMsg:
+		if m.splashing() {
+			m.splashUntil = time.Time{}
+			return m, nil
+		}
+	}
+	switch msg := msg.(type) {
 	case stateMsg:
 		return m, tea.Batch(m.waitState(), m.onState(core.State(msg)))
 	case closedMsg:
@@ -303,6 +317,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if cmd, ok := m.bk.update(m.state.Backup, msg); ok {
 		return m, cmd
 	}
+	if cmd, ok := m.onShell(msg); ok {
+		return m, cmd
+	}
 	if cmd, ok := m.apps.update(msg); ok {
 		return m, tea.Batch(cmd, m.syncAppLogs(false))
 	}
@@ -417,6 +434,10 @@ func (m *model) View() tea.View {
 	}
 	if m.disconnected {
 		v.SetContent(m.zones.Scan(m.viewDisconnected()))
+		return v
+	}
+	if m.splashing() {
+		v.SetContent(m.viewSplash())
 		return v
 	}
 

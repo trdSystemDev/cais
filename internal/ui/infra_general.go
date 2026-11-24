@@ -82,6 +82,9 @@ func (m *model) serviceActions(st core.StackStatus) []string {
 	}
 	if st.Enabled && st.Installed {
 		ids = append(ids, "ctl:"+st.Name, "restart:"+st.Name)
+		if (st.Name == "postgres" || st.Name == "mysql") && running(st) {
+			ids = append(ids, "console:"+st.Name)
+		}
 	}
 	return ids
 }
@@ -162,6 +165,8 @@ func (m *model) pressAction(id string) tea.Cmd {
 		return m.controlService(name, core.ServiceStart)
 	case "restart":
 		return m.controlService(name, core.ServiceRestart)
+	case "console":
+		return m.openConsole(name)
 	}
 	return nil
 }
@@ -264,6 +269,8 @@ func (m *model) viewInfraGeneral(w, h int) string {
 			}
 		case "restart":
 			label, k = "Reiniciar", btnInfo
+		case "console":
+			label, k = map[string]string{"postgres": "psql", "mysql": "mysql"}[st.Name], btnInfo
 		}
 		if len(parts) > 1 {
 			parts = append(parts, " ")

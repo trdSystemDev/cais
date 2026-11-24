@@ -37,6 +37,8 @@ Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis] [-import]
                                      database e usuario com senha nova (vazio ou importado)
   cais db list                       databases criados pelo cais: variaveis, espaco e app
+  cais db console postgres|mysql [database]
+                                     abre o psql ou o mysql, como administrador
   cais db delete postgres|mysql <nome> [-yes]
                                      apaga o database e o usuario (nao pode estar ligado a app)
 
@@ -89,6 +91,7 @@ Apps (repositorio no GitHub com o compose de producao pronto):
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
+  cais app shell <nome> [service]    shell interativo (bash ou sh) num container do app
   cais app delete <nome> [-volumes] [-yes]
                                      exclui o app (containers, imagens, codigo, variaveis,
                                      secrets); -volumes apaga tambem os dados. O database
@@ -137,6 +140,8 @@ Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis] [-import]
                                      database e usuario com senha nova (vazio ou importado)
   cais db list                       databases criados pelo cais: variaveis, espaco e app
+  cais db console postgres|mysql [database]
+                                     abre o psql ou o mysql, como administrador
   cais db delete postgres|mysql <nome> [-yes]
                                      apaga o database e o usuario (nao pode estar ligado a app)
 
@@ -189,6 +194,7 @@ Apps (repositorio no GitHub com o compose de producao pronto):
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
+  cais app shell <nome> [service]    shell interativo (bash ou sh) num container do app
   cais app delete <nome> [-volumes] [-yes]
                                      exclui o app (containers, imagens, codigo, variaveis,
                                      secrets); -volumes apaga tambem os dados. O database
@@ -500,6 +506,8 @@ Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis] [-import]
                                      database e usuario com senha nova (vazio ou importado)
   cais db list                       databases criados pelo cais: variaveis, espaco e app
+  cais db console postgres|mysql [database]
+                                     abre o psql ou o mysql, como administrador
   cais db delete postgres|mysql <nome> [-yes]
                                      apaga o database e o usuario (nao pode estar ligado a app)
 
@@ -546,6 +554,25 @@ O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando 
 Uso: cais db list
 
 Databases criados pelo cais: variaveis, espaco e app.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais db console -h
+Uso: cais db console postgres|mysql [database]
+
+Abre o psql ou o mysql, como administrador.
+
+Abre o cliente do banco neste terminal, dentro do container (psql como o
+usuario postgres; mysql como root), no database pedido ou no padrao. Sai
+com \q, exit ou ctrl+d. O mesmo na TUI: aba Infra, card do banco, botao
+psql ou mysql.
+
+Precisa de um terminal: pelo ssh, use -t.
+
+Exemplos:
+  cais db console postgres
+  cais db console postgres loja
+  ssh -t cais@vps db console mysql
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 
@@ -785,6 +812,7 @@ Apps (repositorio no GitHub com o compose de producao pronto):
   cais app restart <nome> [service]  reinicia o app (ou um service)
   cais app stop <nome>               para o app sem apagar nada
   cais app logs <nome> <container>   ultimas linhas do log
+  cais app shell <nome> [service]    shell interativo (bash ou sh) num container do app
   cais app delete <nome> [-volumes] [-yes]
                                      exclui o app (containers, imagens, codigo, variaveis,
                                      secrets); -volumes apaga tambem os dados. O database
@@ -1004,6 +1032,26 @@ Uso: cais app logs <nome> <container>
 Ultimas linhas do log.
 
 O nome do container aparece em "cais apps" (ex: portal-web-1).
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais app shell -h
+Uso: cais app shell <nome> [service]
+
+Shell interativo (bash ou sh) num container do app.
+
+Abre o bash do container (ou o sh, se nao tiver bash) neste terminal, como
+um docker exec -it. Sai com exit ou ctrl+d. Sem o service, vale quando o
+app tem um container so rodando; com varios, diga qual (o service do
+compose, ex: web, ou o nome do container). Imagem sem shell (distroless,
+scratch) nao abre. O mesmo na TUI: aba Apps, secao Logs, botao Shell.
+
+Precisa de um terminal: pelo ssh, use -t.
+
+Exemplos:
+  cais app shell loja
+  cais app shell loja worker
+  ssh -t cais@vps app shell loja
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 

@@ -156,6 +156,12 @@ func TestInfraParaIniciaEReiniciaServico(t *testing.T) {
 	click(t, m, "restart:postgres")
 	waitFor(t, m, "postgres reiniciado.")
 
+	// o psql: o daemon abre no container do banco, como o usuario postgres
+	click(t, m, "console:postgres")
+	if got := strings.Join(testVPS.terminal, " "); got != "postgres psql -U postgres -d postgres" {
+		t.Errorf("console: %q (%s)", got, m.infraMsg)
+	}
+
 	// desligado: nem o botao aparece, e o core recusa
 	if err := c.ControlService(context.Background(), "mysql", core.ServiceStop); err == nil || !strings.Contains(err.Error(), "desligado") {
 		t.Fatalf("parar servico desligado: %v", err)

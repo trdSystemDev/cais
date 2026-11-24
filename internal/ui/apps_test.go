@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,6 +23,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github/githubtest"
+	"github.com/trdSystemDev/cais/internal/ptyio"
 )
 
 // fakeApps e o docker dos apps nos testes: todo projeto que subiu aparece
@@ -100,6 +104,10 @@ func appsCore(t *testing.T) (*core.Core, *fakeApps, *githubtest.Server) {
 		DockerStats:   func(context.Context) ([]docker.ContainerStats, error) { return nil, nil },
 		ExecInput:     func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 		Exec:          fakeGarage,
+		StartTerminal: func(container, term string, rows, cols uint16, args ...string) (*os.File, error) {
+			shellsOpened.Add(1)
+			return ptyio.Start(exec.Command("sh", "-c", "echo dentro do "+container), rows, cols)
+		},
 	})
 	cfg := config.Default()
 	cfg.TestDomain, cfg.Email, cfg.TLS = "trd.localhost", "a@trd.localhost", config.TLSSelfSigned
@@ -310,6 +318,27 @@ func TestAppsLogsDoApp(t *testing.T) {
 		t.Fatalf("logs do app: alvo %q texto %q", m.logsTarget, m.logsText)
 	}
 	waitFor(t, m, "log do loja-web-1")
+
+	// o Shell do container: o daemon abre e a TUI liga o terminal a ele
+	if !strings.Contains(screen(m), "‹ loja-web-1 ›") || !strings.Contains(screen(m), "Shell") {
+		t.Fatalf("sem o botao Shell:\n%s", screen(m))
+	}
+	before := shellsOpened.Load()
+	click(t, m, "app-shell")
+	if shellsOpened.Load() != before+1 || m.apps.shellErr != "" {
+		t.Fatalf("shell: %d abertos, erro %q", shellsOpened.Load()-before, m.apps.shellErr)
+	}
+	var out bytes.Buffer
+	f, err := m.api.(core.ShellOpener).OpenShell(ctx, core.ShellRequest{App: "loja"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sx := &shellExec{f: f, container: "loja-web-1"}
+	sx.SetStdin(strings.NewReader(""))
+	sx.SetStdout(&out)
+	if err := sx.Run(); err != nil || !strings.Contains(out.String(), "dentro do loja-web-1") {
+		t.Errorf("shell: %v %q", err, out.String())
+	}
 
 	// saindo da aba, para de consultar
 	run(t, m, m.setTab(tabDashboard))
@@ -782,3 +811,5 @@ func TestAppsListaRola(t *testing.T) {
 		t.Fatalf("a roda trocou a selecao: %+v", a)
 	}
 }
+
+var shellsOpened atomic.Int32

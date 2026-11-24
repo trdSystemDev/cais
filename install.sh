@@ -462,6 +462,11 @@ done
 [ -S "$SOCKET" ] || die "o daemon nao subiu: veja journalctl -u cais -n 50"
 "$BIN" state >/dev/null 2>&1 || die "o daemon nao respondeu: veja journalctl -u cais -n 50"
 
+# a logo (o cais version mostra so num terminal)
+if [ -t 1 ]; then
+	echo
+	"$BIN" version
+fi
 say "$NEW no ar"
 
 # --harden: prepara a VPS. As perguntas (confirmacao e senha do sudo) vao

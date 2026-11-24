@@ -15,7 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/term"
 
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/mcpserver"
@@ -106,6 +108,10 @@ func (e *cli) run(args []string) int {
 	case "host":
 		err = e.runHost(args)
 	case "version":
+		// no terminal, com a logo; capturado (install.sh, scripts), so a linha
+		if f, ok := e.out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+			lipgloss.Fprintln(e.out, ui.Logo()+"\n")
+		}
 		fmt.Fprintln(e.out, versionLine())
 	case "help":
 		fmt.Fprint(e.out, helpFor(strings.Join(args, " ")))

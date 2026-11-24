@@ -92,6 +92,9 @@ type Deps struct {
 	// limita): build ou download travado prenderia o app pra sempre.
 	DeployTimeout time.Duration
 	Exec          func(ctx context.Context, container string, args ...string) (string, error)
+	// StartTerminal roda args (vazio: o shell) num container, num pty, e
+	// devolve o mestre (padrao: docker.StartTerminal).
+	StartTerminal func(container, term string, rows, cols uint16, args ...string) (*os.File, error)
 	// ExecInput e o Exec com stdin: SQL com senha nunca vai na linha de comando.
 	ExecInput func(ctx context.Context, container string, input []byte, args ...string) (string, error)
 	// ReadSystem le o uso da maquina (padrao: /proc e os discos da raiz,
@@ -271,6 +274,9 @@ func New(d Deps) *Core {
 	}
 	if d.Exec == nil {
 		d.Exec = docker.Exec
+	}
+	if d.StartTerminal == nil {
+		d.StartTerminal = docker.StartTerminal
 	}
 	if d.ExecInput == nil {
 		d.ExecInput = docker.ExecInput
