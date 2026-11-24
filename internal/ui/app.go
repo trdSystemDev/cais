@@ -29,7 +29,7 @@ const (
 // helps sao os atalhos de cada aba, no rodape.
 var helps = map[int]string{
 	tabDashboard: "enter/r verifica · ",
-	tabApps:      "↑↓ app · ←→ secao · enter/tab entra no formulario · esc volta · n novo app · ",
+	tabApps:      "↑↓ app · / busca · ←→ secao · enter/tab entra no formulario · esc volta · n novo app · ",
 	tabInfra:     "↑↓ card · ←→ secao · enter/tab entra nos botoes · esc volta · a aplica · r atualiza · ",
 	tabSetup:     "←→ secao · enter/tab entra · ctrl+s salva · ",
 }
@@ -192,6 +192,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.tab == tabApps && !m.disconnected && m.zones.Get("app-logs").InBounds(msg) {
 			m.scrollLogs(msg.Button == tea.MouseWheelUp)
+			return m, nil
+		}
+		if m.tab == tabApps && !m.disconnected && m.zones.Get("app-list").InBounds(msg) {
+			m.apps.listWheel(msg.Button == tea.MouseWheelUp)
 			return m, nil
 		}
 		if m.tab == tabApps && !m.disconnected && m.zones.Get("app-detail").InBounds(msg) {
@@ -417,6 +421,9 @@ func (m *model) View() tea.View {
 
 	header := m.viewTabs()
 	help := helps[m.tab]
+	if m.tab == tabApps && m.apps.searching {
+		help = "digite parte do nome · ↑↓ app · enter volta pra lista · esc limpa a busca · "
+	}
 	if m.tab == tabApps && m.apps.inForm {
 		help = "tab/↑↓ campo · ←→ escolhe · enter/espaco ativa · esc volta pra lista · roda rola · "
 	}

@@ -49,13 +49,21 @@ type appsPage struct {
 	zones *zone.Manager
 	th    theme
 
-	list     []core.AppStatus
-	sel      int
-	inForm   bool // o foco esta no formulario (senao, na lista)
-	section  int
-	creating bool
-	fields   []*field
-	focus    int
+	list      []core.AppStatus
+	sel       int
+	search    *textinput.Model // busca pelo nome na lista
+	searching bool             // o foco esta na busca
+	// rolagem da lista: listTop e o primeiro app visivel (entre os que a
+	// busca mostra); listSeen/listQuery sao o selecionado e a busca da
+	// ultima vez que a lista foi atras do selecionado
+	listTop   int
+	listSeen  string
+	listQuery string
+	inForm    bool // o foco esta no formulario (senao, na lista)
+	section   int
+	creating  bool
+	fields    []*field
+	focus     int
 
 	// editores do app selecionado: so recarregam quando troca de app ou
 	// depois de salvar, pra uma foto nova do estado nao apagar a edicao
@@ -168,6 +176,7 @@ func newAppsPage(api core.API, zones *zone.Manager, th theme) *appsPage {
 	p.newRepo = p.input("https://github.com/dono/repo", 40)
 	p.newBranch = p.input("a principal do repositorio", 28)
 	p.newCompose = p.input(apps.DefaultCompose, 30)
+	p.search = p.input("/ buscar app", 30)
 	p.rebuild()
 	return p
 }
@@ -186,7 +195,7 @@ func (p *appsPage) style(ti *textinput.Model) { p.th.styleInput(ti) }
 func (p *appsPage) setTheme(th theme) {
 	p.th = th
 	for _, ti := range []*textinput.Model{p.repo, p.branch, p.compose, p.ref, p.secretName, p.secretValue,
-		p.newName, p.newRepo, p.newBranch, p.newCompose, p.delConfirm} {
+		p.newName, p.newRepo, p.newBranch, p.newCompose, p.delConfirm, p.search} {
 		p.style(ti)
 	}
 	for _, r := range p.envRows {
@@ -197,7 +206,7 @@ func (p *appsPage) setTheme(th theme) {
 
 // typing diz se o foco esta num campo de texto (numeros nao trocam de aba).
 func (p *appsPage) typing() bool {
-	return p.inForm && p.focus < len(p.fields) && p.fields[p.focus].input != nil
+	return p.searching || p.inForm && p.focus < len(p.fields) && p.fields[p.focus].input != nil
 }
 
 func (p *appsPage) selected() *core.AppStatus {
@@ -211,8 +220,8 @@ func (p *appsPage) selected() *core.AppStatus {
 // recarregam quando o app selecionado muda.
 func (p *appsPage) onState(s core.State) tea.Cmd {
 	name := ""
-	if a := p.selected(); a != nil {
-		name = a.Name
+	if p.sel < len(p.list) {
+		name = p.list[p.sel].Name
 	}
 	p.list = nestHomologs(s.Apps.List)
 	if p.pendingSel != "" {
@@ -233,6 +242,43 @@ func (p *appsPage) onState(s core.State) tea.Cmd {
 		p.rebuild() // os secrets (botoes de apagar) vem do estado
 	}
 	return tea.Batch(p.loadSelected(false), p.promoRefresh(false))
+}
+
+// matches diz se o app aparece na lista com a busca digitada (parte do
+// nome, sem diferenca de maiusculas).
+func (p *appsPage) matches(a core.AppStatus) bool {
+	q := strings.ToLower(strings.TrimSpace(p.search.Value()))
+	return q == "" || strings.Contains(strings.ToLower(a.Name), q)
+}
+
+// moveSel anda d apps na lista, pulando os que a busca esconde.
+func (p *appsPage) moveSel(d int) tea.Cmd {
+	n := len(p.list)
+	for i, j := 1, p.sel; i <= n; i++ {
+		j = (j + d + n) % n
+		if p.matches(p.list[j]) {
+			if j != p.sel {
+				p.sel, p.focus = j, 0
+			}
+			return p.loadSelected(false)
+		}
+	}
+	return nil
+}
+
+// searched seleciona o primeiro app que aparece quando a busca esconde o
+// selecionado (sem nenhum, o detalhe continua no que estava).
+func (p *appsPage) searched() tea.Cmd {
+	if p.creating || p.sel >= len(p.list) || p.matches(p.list[p.sel]) {
+		return nil
+	}
+	for i, a := range p.list {
+		if p.matches(a) {
+			p.sel, p.focus = i, 0
+			return p.loadSelected(false)
+		}
+	}
+	return nil
 }
 
 // nestHomologs poe cada homologacao logo depois da producao dela.

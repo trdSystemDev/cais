@@ -120,10 +120,15 @@ func (p *appsPage) activate(f *field) tea.Cmd {
 
 func (p *appsPage) click(msg tea.MouseMsg) tea.Cmd {
 	if p.zones.Get("app-new").InBounds(msg) && p.busy == "" {
+		p.endSearch()
 		return p.startCreate()
 	}
+	if p.zones.Get("app-search").InBounds(msg) {
+		return p.startSearch()
+	}
 	for i, a := range p.list {
-		if p.zones.Get("app:" + a.Name).InBounds(msg) {
+		if p.matches(a) && p.zones.Get("app:"+a.Name).InBounds(msg) {
+			p.endSearch()
 			p.creating, p.inForm, p.sel, p.focus = false, false, i, 0
 			return tea.Batch(p.loadSelected(false), p.setFocus(0))
 		}
@@ -139,6 +144,7 @@ func (p *appsPage) click(msg tea.MouseMsg) tea.Cmd {
 	}
 	for i, f := range p.fields {
 		if p.zones.Get(f.id).InBounds(msg) {
+			p.endSearch()
 			p.inForm = true
 			cmd := p.setFocus(i)
 			if f.input == nil {
@@ -150,19 +156,63 @@ func (p *appsPage) click(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
+// startSearch poe o foco na busca da lista (pelo / ou clicando nela).
+func (p *appsPage) startSearch() tea.Cmd {
+	if p.creating {
+		return nil
+	}
+	p.searching, p.inForm = true, false
+	p.setFocus(p.focus) // tira o foco do campo do formulario
+	return p.search.Focus()
+}
+
+func (p *appsPage) endSearch() {
+	p.searching = false
+	p.search.Blur()
+}
+
+// searchKey e a tecla com o foco na busca: o texto filtra a lista, ↑↓
+// andam nos apps que aparecem, enter volta pra lista mantendo o filtro e
+// esc limpa a busca.
+func (p *appsPage) searchKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch msg.String() {
+	case "up":
+		return p.moveSel(-1)
+	case "down":
+		return p.moveSel(1)
+	case "enter", "tab":
+		p.endSearch()
+		return nil
+	case "esc":
+		p.endSearch()
+		p.search.SetValue("")
+		return nil
+	}
+	ti, cmd := p.search.Update(msg)
+	*p.search = ti
+	return tea.Batch(cmd, p.searched())
+}
+
 func (p *appsPage) key(msg tea.KeyPressMsg) tea.Cmd {
 	k := msg.String()
+	if p.searching {
+		return p.searchKey(msg)
+	}
 	if !p.inForm {
 		switch k {
 		case "up", "down":
-			if n := len(p.list); n > 0 && !p.creating {
+			if len(p.list) > 0 && !p.creating {
 				d := 1
 				if k == "up" {
 					d = -1
 				}
-				p.sel = (p.sel + d + n) % n
-				p.focus = 0
-				return p.loadSelected(false)
+				return p.moveSel(d)
+			}
+		case "/":
+			return p.startSearch()
+		case "esc":
+			if p.search.Value() != "" {
+				p.search.SetValue("") // tira o filtro
 			}
 		case "left", "right":
 			if p.creating {
@@ -232,6 +282,11 @@ func (p *appsPage) paste(msg tea.PasteMsg) tea.Cmd {
 			p.importErr = err.Error()
 		}
 		return nil
+	}
+	if p.searching {
+		ti, cmd := p.search.Update(msg)
+		*p.search = ti
+		return tea.Batch(cmd, p.searched())
 	}
 	if !p.typing() {
 		return nil

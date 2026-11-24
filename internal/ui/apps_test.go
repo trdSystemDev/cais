@@ -678,3 +678,98 @@ func TestAppsHistoricoEVoltar(t *testing.T) {
 		t.Fatalf("depois de voltar: %+v", a.App)
 	}
 }
+
+// a busca filtra a lista pelo nome: ↑↓ andam so nos que aparecem, os
+// numeros viram texto (nao trocam de aba) e esc limpa
+func TestAppsBuscaPeloNome(t *testing.T) {
+	m, _, _ := openApps(t)
+	ctx := context.Background()
+	for _, n := range []string{"blog", "loja", "lojinha"} {
+		if _, err := m.api.CreateApp(ctx, apps.App{Name: n, Repo: "trdSystemDev/loja"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, m, "lojinha")
+	click(t, m, "app:blog")
+	sel := func() string {
+		t.Helper()
+		a := m.apps.selected()
+		if a == nil {
+			t.Fatal("nenhum app selecionado")
+		}
+		return a.Name
+	}
+	key := func(code rune) { run(t, m, m.key(tea.KeyPressMsg{Code: code})) }
+
+	press(t, m, "/")
+	for _, r := range "LOJ" {
+		press(t, m, string(r))
+	}
+	list := func() string { return m.apps.viewList(40, 30) }
+	if l := ansi.Strip(list()); strings.Contains(l, "blog") || !strings.Contains(l, "lojinha") {
+		t.Fatalf("lista com a busca LOJ:\n%s", l)
+	}
+	if sel() != "loja" {
+		t.Fatalf("selecionado %s, queria loja (o blog sumiu da lista)", sel())
+	}
+	key(tea.KeyDown)
+	key(tea.KeyDown) // pula o blog: volta pra loja
+	if sel() != "loja" {
+		t.Fatalf("selecionado %s depois de descer duas vezes", sel())
+	}
+
+	press(t, m, "1")
+	if m.tab != tabApps || !strings.Contains(m.apps.search.Value(), "1") {
+		t.Fatalf("o 1 na busca trocou de aba (aba %d, busca %q)", m.tab, m.apps.search.Value())
+	}
+	if l := ansi.Strip(list()); !strings.Contains(l, "Nenhum app com") {
+		t.Fatalf("busca sem resultado:\n%s", l)
+	}
+
+	key(tea.KeyEscape)
+	if m.apps.searching || m.apps.search.Value() != "" || !strings.Contains(ansi.Strip(list()), "blog") {
+		t.Fatalf("esc nao limpou a busca (%v %q)", m.apps.searching, m.apps.search.Value())
+	}
+}
+
+// muitos apps: a lista rola atras do selecionado e a roda do mouse rola
+// sem trocar a selecao
+func TestAppsListaRola(t *testing.T) {
+	m, _, _ := openApps(t)
+	ctx := context.Background()
+	const n = 15
+	for i := range n {
+		if _, err := m.api.CreateApp(ctx, apps.App{Name: fmt.Sprintf("app%02d", i), Repo: "trdSystemDev/loja"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, m, "app00")
+	waitFor(t, m, "abaixo")
+	if strings.Contains(screen(m), fmt.Sprintf("app%02d", n-1)) {
+		t.Fatalf("a lista nao devia caber na tela:\n%s", screen(m))
+	}
+
+	click(t, m, "app:app00")
+	run(t, m, m.key(tea.KeyPressMsg{Code: tea.KeyUp})) // volta pro ultimo
+	last := fmt.Sprintf("app%02d", n-1)
+	if a := m.apps.selected(); a == nil || a.Name != last {
+		t.Fatalf("selecionado %+v, queria %s", a, last)
+	}
+	if s := screen(m); !strings.Contains(s, "│ · "+last) || !strings.Contains(s, "acima") || strings.Contains(s, "│ · app00 ") {
+		t.Fatalf("a lista nao foi atras do selecionado:\n%s", s)
+	}
+
+	// a roda sobe a lista toda e o selecionado continua o mesmo
+	m.View()
+	time.Sleep(15 * time.Millisecond)
+	z := m.zones.Get("app-list")
+	for range n {
+		m.Update(tea.MouseWheelMsg{X: (z.StartX + z.EndX) / 2, Y: (z.StartY + z.EndY) / 2, Button: tea.MouseWheelUp})
+	}
+	if s := screen(m); !strings.Contains(s, "│ · app00 ") || strings.Contains(s, "acima") {
+		t.Fatalf("a roda nao subiu a lista:\n%s", s)
+	}
+	if a := m.apps.selected(); a == nil || a.Name != last {
+		t.Fatalf("a roda trocou a selecao: %+v", a)
+	}
+}

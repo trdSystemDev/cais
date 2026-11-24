@@ -25,29 +25,121 @@ func (p *appsPage) viewList(w, h int) string {
 	b.WriteString(p.zones.Mark("app-new", t.button("+ Novo app", k, p.creating)) + "\n\n")
 	if len(p.list) == 0 {
 		b.WriteString(t.fg(t.muted).Width(w - 4).Render("Nenhum app ainda. Crie com + Novo app a partir do link do repositorio."))
+		return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(b.String())
 	}
+	b.WriteString(p.zones.Mark("app-search", t.input(p.search, max(1, w-4))) + "\n\n")
+
+	var cards []string
+	selIdx := -1
 	for i, a := range p.list {
-		mark, status, c := appStatus(a, t)
-		sel := !p.creating && i == p.sel
-		title := t.bold().Render(mark+" "+a.Name) + "  " + t.fg(c).Render(status)
-		sub := t.fg(t.muted).Render(a.Repo)
-		cw, indent := w-4, ""
-		if a.PromoteTo != "" && p.app(a.PromoteTo) != nil {
-			// homologacao: embaixo da producao, recuada
-			cw, indent = w-6, "  "
-			sub = t.fg(t.muted).Render("homologacao de " + a.PromoteTo)
+		if !p.matches(a) {
+			continue
 		}
-		if a.AutoDeploy {
-			sub += t.fg(t.muted).Render(" · auto")
+		if !p.creating && i == p.sel {
+			selIdx = len(cards)
 		}
-		// a largura do painel inclui borda e padding: sobram cw-4 colunas
-		card := t.panel(sel, cw, 2).Render(ansi.Truncate(title, cw-4, "…") + "\n" + ansi.Truncate(sub, cw-4, "…"))
-		if indent != "" {
-			card = lipgloss.NewStyle().MarginLeft(len(indent)).Render(card)
-		}
-		b.WriteString(p.zones.Mark("app:"+a.Name, card) + "\n")
+		cards = append(cards, p.zones.Mark("app:"+a.Name, p.appCard(a, i, w)))
 	}
-	return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(b.String())
+	if len(cards) == 0 {
+		b.WriteString(t.fg(t.muted).Width(w - 4).Render("Nenhum app com \"" + strings.TrimSpace(p.search.Value()) + "\" no nome. esc limpa a busca."))
+		return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(b.String())
+	}
+
+	avail := h - strings.Count(b.String(), "\n")
+	heights := make([]int, len(cards))
+	for i, c := range cards {
+		heights[i] = lipgloss.Height(c)
+	}
+	p.scrollList(heights, selIdx, avail)
+	end := listWindow(heights, p.listTop, avail)
+	muted := t.fg(t.muted)
+	if p.listTop > 0 {
+		b.WriteString(muted.Render(fmt.Sprintf("  ↑ %d acima", p.listTop)) + "\n")
+	}
+	b.WriteString(strings.Join(cards[p.listTop:end], "\n") + "\n")
+	if end < len(cards) {
+		b.WriteString(muted.Render(fmt.Sprintf("  ↓ %d abaixo", len(cards)-end)))
+	}
+	return p.zones.Mark("app-list", lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(b.String()))
+}
+
+// appCard e o cartao de um app na lista.
+func (p *appsPage) appCard(a core.AppStatus, i, w int) string {
+	t := p.th
+	mark, status, c := appStatus(a, t)
+	sel := !p.creating && i == p.sel
+	title := t.bold().Render(mark+" "+a.Name) + "  " + t.fg(c).Render(status)
+	sub := t.fg(t.muted).Render(a.Repo)
+	cw, indent := w-4, ""
+	if prod := p.app(a.PromoteTo); prod != nil && p.matches(*prod) {
+		// homologacao: embaixo da producao, recuada
+		cw, indent = w-6, "  "
+		sub = t.fg(t.muted).Render("homologacao de " + a.PromoteTo)
+	}
+	if a.AutoDeploy {
+		sub += t.fg(t.muted).Render(" · auto")
+	}
+	// a largura do painel inclui borda e padding: sobram cw-4 colunas
+	card := t.panel(sel, cw, 2).Render(ansi.Truncate(title, cw-4, "…") + "\n" + ansi.Truncate(sub, cw-4, "…"))
+	if indent != "" {
+		card = lipgloss.NewStyle().MarginLeft(len(indent)).Render(card)
+	}
+	return card
+}
+
+// listWindow diz ate onde (exclusivo) cabem os cartoes a partir de top em
+// avail linhas, guardando uma linha pro "acima" e outra pro "abaixo" quando
+// precisam aparecer. Sempre mostra ao menos um cartao.
+func listWindow(heights []int, top, avail int) int {
+	room := avail
+	if top > 0 {
+		room--
+	}
+	end, used := top, 0
+	for end < len(heights) && used+heights[end] <= room {
+		used += heights[end]
+		end++
+	}
+	if end < len(heights) {
+		for used > room-1 && end > top+1 {
+			end--
+			used -= heights[end]
+		}
+	}
+	return max(end, min(top+1, len(heights)))
+}
+
+// scrollList acerta o listTop: vai atras do selecionado quando ele (ou a
+// busca) muda -- a roda do mouse rola sem trocar a selecao -- e nao deixa
+// sobrar espaco embaixo quando cabem mais cartoes.
+func (p *appsPage) scrollList(heights []int, selIdx, avail int) {
+	n := len(heights)
+	name, query := "", p.search.Value()
+	if p.sel < len(p.list) {
+		name = p.list[p.sel].Name
+	}
+	p.listTop = max(0, min(p.listTop, n-1))
+	if selIdx >= 0 && (name != p.listSeen || query != p.listQuery) {
+		if selIdx < p.listTop {
+			p.listTop = selIdx
+		}
+		for listWindow(heights, p.listTop, avail) <= selIdx {
+			p.listTop++
+		}
+	}
+	p.listSeen, p.listQuery = name, query
+	for p.listTop > 0 && listWindow(heights, p.listTop-1, avail) == n {
+		p.listTop--
+	}
+}
+
+// listWheel rola a lista com a roda do mouse (o desenho limita).
+func (p *appsPage) listWheel(up bool) {
+	if up {
+		p.listTop = max(0, p.listTop-1)
+	} else {
+		p.listTop++
+	}
 }
 
 // appStatus resume o app num simbolo, texto e cor.
