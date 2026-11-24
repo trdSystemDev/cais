@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo/cais.png" alt="cais" width="260"></p>
+<p align="center"><img src="docs/logo/cais-fundo.svg" alt="cais" width="260"></p>
 
 # cais
 
