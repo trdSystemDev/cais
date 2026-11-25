@@ -20,8 +20,8 @@ type Provided struct {
 
 // provided sao os secrets que vem de fora, com o que mostrar no Setup.
 var provided = map[string]string{
-	"github_app_key": "Chave privada (.pem) do GitHub App do cais: baixa o codigo dos repositorios privados no deploy",
-	"brevo_api_key":  "Chave da API da Brevo (xkeysib-...): envia os e-mails de falha do deploy automatico e do backup",
+	"github_app_key":             "Chave privada (.pem) do GitHub App do cais: baixa o codigo dos repositorios privados no deploy",
+	"brevo_api_key":              "Chave da API da Brevo (xkeysib-...): envia os e-mails de falha do deploy automatico e do backup",
 	config.CloudflareTokenSecret: "Token da API da Cloudflare (Zone > DNS > Edit): o Let's Encrypt prova pelo DNS (proxy, aba Infra)",
 }
 
