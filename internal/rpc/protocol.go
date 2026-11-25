@@ -31,6 +31,7 @@ const (
 	MethodNotifyTest       = "notify.test"
 	MethodHostHarden       = "host.harden"     // params: core.HardenRequest
 	MethodHostFix          = "host.fix"        // params: hostFixParams
+	MethodUpdate           = "cais.update"     // params: updateParams
 	MethodHostConfirm      = "host.confirm"    // params: hostConfirmParams
 	MethodGitHubTest       = "github.test"     // params: githubTestParams
 	MethodServiceSet       = "service.set"     // params: serviceParams
@@ -194,6 +195,11 @@ type backupClientParams struct {
 type backupScheduleParams struct {
 	Time string `json:"time"`
 	Days int    `json:"days"`
+}
+
+// updateParams: Version e a tag (vazia: o release mais novo).
+type updateParams struct {
+	Version string `json:"version,omitempty"`
 }
 
 // hostFixParams e o item da checagem de seguranca a corrigir.

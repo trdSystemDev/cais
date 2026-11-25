@@ -132,6 +132,9 @@ func (f *Recorder) TestNotify(context.Context) error { return only(f, "TestNotif
 func (f *Recorder) HardenHost(_ context.Context, req core.HardenRequest) error {
 	return only(f, "HardenHost", req)
 }
+func (f *Recorder) UpdateCais(_ context.Context, version string) (core.UpdateResult, error) {
+	return ret[core.UpdateResult](f, "UpdateCais", version)
+}
 func (f *Recorder) FixHostItem(_ context.Context, id string) (string, error) {
 	return ret[string](f, "FixHostItem", id)
 }

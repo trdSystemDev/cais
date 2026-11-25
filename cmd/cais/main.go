@@ -107,6 +107,8 @@ func (e *cli) run(args []string) int {
 		err = e.runRun(args)
 	case "host":
 		err = e.runHost(args)
+	case "update":
+		err = e.runUpdate(args)
 	case "version":
 		// no terminal, com a logo; capturado (install.sh, scripts), so a linha
 		if f, ok := e.out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {

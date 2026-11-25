@@ -291,3 +291,31 @@ func TestCLIAppEnvLeOValor(t *testing.T) {
 		t.Errorf("o valor apareceu na saida: %s", tc.out)
 	}
 }
+
+// cais update: pede ao daemon e espera ele voltar na versao nova
+func TestCLIUpdate(t *testing.T) {
+	updateWait, updatePoll = time.Second, time.Millisecond
+	t.Cleanup(func() { updateWait, updatePoll = 10*time.Minute, 2*time.Second })
+
+	runCase(t, cliCase{name: "ja na mais nova", args: "update",
+		setup: func(f *coretest.Recorder) {
+			f.SetOut("UpdateCais", core.UpdateResult{From: "v0.5.3", To: "v0.5.3"})
+		},
+		calls: []string{"UpdateCais"}, out: []string{"o cais ja esta na v0.5.3"}})
+
+	runCase(t, cliCase{name: "atualiza", args: "update -version v0.6.0",
+		setup: func(f *coretest.Recorder) {
+			f.SetOut("UpdateCais", core.UpdateResult{From: "v0.5.3", To: "v0.6.0", Started: true})
+			f.SetOut("CheckHealth", core.Health{Version: "v0.6.0"})
+		},
+		calls: []string{"UpdateCais", "CheckHealth"},
+		out:   []string{"Atualizando de v0.5.3 pra v0.6.0", "Pronto: o cais esta na v0.6.0."}})
+
+	runCase(t, cliCase{name: "nao voltou", args: "update", code: 1,
+		setup: func(f *coretest.Recorder) {
+			f.SetOut("UpdateCais", core.UpdateResult{From: "v0.5.3", To: "v0.6.0", Started: true})
+			f.SetOut("CheckHealth", core.Health{Version: "v0.5.3"})
+		},
+		errOut: []string{"o daemon nao voltou na v0.6.0", "journalctl -u cais-update"}})
+	runCase(t, cliCase{name: "argumento sobrando", args: "update agora", code: 1, noCalls: true, errOut: []string{"uso: cais update"}})
+}

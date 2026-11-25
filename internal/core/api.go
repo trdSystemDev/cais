@@ -59,6 +59,9 @@ type API interface {
 	// admin com chave, firewall, fail2ban, atualizacoes, SSH sem root e sem
 	// senha. Bloqueia ate terminar; o progresso fica em State.Hardening.
 	HardenHost(ctx context.Context, req HardenRequest) error
+	// UpdateCais atualiza o cais pro release version (vazio: o mais novo)
+	// pelo install.sh; volta quando comeca e o daemon reinicia no fim.
+	UpdateCais(ctx context.Context, version string) (UpdateResult, error)
 	// FixHostItem corrige so um item da checagem de seguranca (os Fixable).
 	FixHostItem(ctx context.Context, id string) (string, error)
 	// ConfirmHost mantem o SSH do Preparar VPS; since e o inicio da sessao

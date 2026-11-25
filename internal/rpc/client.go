@@ -125,6 +125,10 @@ func (c *Client) FixHostItem(ctx context.Context, id string) (string, error) {
 	return r.Text, err
 }
 
+func (c *Client) UpdateCais(ctx context.Context, version string) (core.UpdateResult, error) {
+	return result[core.UpdateResult](c, ctx, MethodUpdate, updateParams{Version: version})
+}
+
 func (c *Client) ConfirmHost(ctx context.Context, since time.Time) error {
 	return c.call(ctx, MethodHostConfirm, hostConfirmParams{Since: since}, nil)
 }

@@ -82,6 +82,19 @@ Exemplo (no compose do app):
 
 Comando avulso com as variaveis (migracao, console):
   docker compose -p <app> exec web /cais run -- php artisan migrate`},
+		{name: "update", usage: "update [-version v0.5.3]", short: "atualiza o cais pro release mais novo (os apps continuam no ar)", long: `
+Pede ao daemon pra rodar o install.sh do release, o mesmo comando da
+instalacao, com as opcoes que ja estao no lugar (grupo e usuario cais do
+ssh). O install.sh confere o SHA-256 do binario e reinicia so o daemon, que
+espera deploys e backups em andamento; os apps e os bancos nao param. O
+comando espera o daemon voltar na versao nova.
+
+Pelo daemon, nao precisa de sudo: do seu computador, ssh cais@vps update.
+
+Flags:
+  -version tag   um release especifico (ex: v0.5.3); serve pra voltar de versao
+
+O log da atualizacao: sudo journalctl -u cais-update`},
 		{name: "version", usage: "version", short: "mostra a versao"},
 		{name: "help", usage: "help [comando]", short: "esta ajuda; com o comando, os detalhes dele", long: `
 Exemplos:

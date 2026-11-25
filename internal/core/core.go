@@ -109,6 +109,9 @@ type Deps struct {
 	// novo); LatestRelease pergunta a tag dele (padrao: o GitHub).
 	Version       string
 	LatestRelease func(ctx context.Context) (string, error)
+	// SelfUpdate comeca a atualizacao pro release version e volta sem
+	// esperar (padrao: o install.sh da tag numa unidade do systemd).
+	SelfUpdate func(ctx context.Context, version string) error
 	// Logger e o log do daemon (padrao: slog.Default(), que o main configura).
 	Logger *slog.Logger
 }
@@ -293,6 +296,9 @@ func New(d Deps) *Core {
 	}
 	if d.LatestRelease == nil {
 		d.LatestRelease = latestRelease
+	}
+	if d.SelfUpdate == nil {
+		d.SelfUpdate = selfUpdate
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()

@@ -95,9 +95,16 @@ cais app deploy loja
 
 ## Atualizar
 
-Rode o mesmo comando da instalacao. Ele baixa o release mais novo e
+Do seu computador:
+
+```sh
+ssh cais@ip-da-vps update
+```
+
+Ou `cais update` na VPS. Roda o `install.sh` do release mais novo, que
 reinicia so o daemon: os apps e os bancos continuam no ar. Pra uma versao
-especifica (inclusive voltar), `--version v0.3.0`.
+especifica (inclusive voltar), `cais update -version v0.3.0`. O comando da
+instalacao tambem atualiza.
 
 ## Usar pela IA (MCP)
 

@@ -253,6 +253,9 @@ var handlers = map[string]handler{
 		text, err := a.FixHostItem(ctx, p.ID)
 		return textResult{Text: text}, err
 	}),
+	MethodUpdate: call(func(a core.API, ctx context.Context, p updateParams) (core.UpdateResult, error) {
+		return a.UpdateCais(ctx, p.Version)
+	}),
 	MethodHostConfirm: do(func(a core.API, ctx context.Context, p hostConfirmParams) error {
 		return a.ConfirmHost(ctx, p.Since)
 	}),

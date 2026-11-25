@@ -169,7 +169,7 @@ func (m *model) alerts(now time.Time) []dashAlert {
 		}
 	}
 	if h.UpdateAvailable() {
-		add(sevInfo, "", -1, "Versao nova do cais: %s (rodando %s). Atualize rodando o install.sh de novo na VPS", h.Latest, h.Version)
+		add(sevInfo, "", -1, "Versao nova do cais: %s (rodando %s). Atualize com: ssh cais@vps update (ou cais update na VPS)", h.Latest, h.Version)
 	}
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].sev < out[j].sev })

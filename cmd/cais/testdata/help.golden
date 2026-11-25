@@ -9,6 +9,7 @@ Uso:
   cais mcp [--socket]                servidor MCP pelo stdin/stdout (pra IA, via ssh)
   cais run [-env arquivo] -- <comando> [args...]
                                      no container do app: injeta as variaveis e roda
+  cais update [-version v0.5.3]      atualiza o cais pro release mais novo (os apps continuam no ar)
   cais version                       mostra a versao
   cais help [comando]                esta ajuda; com o comando, os detalhes dele
 
@@ -112,6 +113,7 @@ Uso:
   cais mcp [--socket]                servidor MCP pelo stdin/stdout (pra IA, via ssh)
   cais run [-env arquivo] -- <comando> [args...]
                                      no container do app: injeta as variaveis e roda
+  cais update [-version v0.5.3]      atualiza o cais pro release mais novo (os apps continuam no ar)
   cais version                       mostra a versao
   cais help [comando]                esta ajuda; com o comando, os detalhes dele
 
@@ -287,6 +289,26 @@ Exemplo (no compose do app):
 
 Comando avulso com as variaveis (migracao, console):
   docker compose -p <app> exec web /cais run -- php artisan migrate
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais update -h
+Uso: cais update [-version v0.5.3]
+
+Atualiza o cais pro release mais novo (os apps continuam no ar).
+
+Pede ao daemon pra rodar o install.sh do release, o mesmo comando da
+instalacao, com as opcoes que ja estao no lugar (grupo e usuario cais do
+ssh). O install.sh confere o SHA-256 do binario e reinicia so o daemon, que
+espera deploys e backups em andamento; os apps e os bancos nao param. O
+comando espera o daemon voltar na versao nova.
+
+Pelo daemon, nao precisa de sudo: do seu computador, ssh cais@vps update.
+
+Flags:
+  -version tag   um release especifico (ex: v0.5.3); serve pra voltar de versao
+
+O log da atualizacao: sudo journalctl -u cais-update
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 

@@ -18,6 +18,13 @@ reinicia so o daemon (os containers ficam). Na mesma versao, nao faz nada.
 `--version v0.3.0` instala uma versao especifica (inclusive mais velha, pra
 voltar).
 
+Depois de instalado, `cais update` faz o mesmo sem o curl e sem sudo
+(`ssh cais@vps update` do seu computador): o daemon roda o `install.sh` do
+release numa unidade do systemd (`cais-update`, log em
+`sudo journalctl -u cais-update`), com as opcoes que ja estao no lugar, e o
+comando espera ele voltar na versao nova. `cais update -version v0.3.0` vai
+pra uma versao especifica. Fora do MCP: a IA nao atualiza o cais.
+
 Instala `/usr/local/bin/cais` e o servico `cais` (a unidade do systemd vai
 dentro do `install.sh`). Opcoes (passe depois do `sh -s --`):
 
