@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -49,6 +50,8 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 	stack := func(file string) string { return filepath.Base(filepath.Dir(file)) }
 	c := core.New(core.Deps{TraefikMetrics: noTraffic,
 		CheckDocker: check,
+		// nunca o systemd-run de verdade nos testes
+		SelfUpdate: func(context.Context, string) error { return errors.New("sem atualizar nos testes") },
 		// a VPS da aba Seguranca: o Corrigir liga o firewall e o Preparar
 		// VPS acerta o SSH (e fica esperando a confirmacao)
 		CheckHost: func(context.Context) []host.Item {

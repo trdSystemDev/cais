@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -150,5 +152,35 @@ func TestDashboardQuemMaisUsa(t *testing.T) {
 	m.ctrs = core.ContainerUsage{At: now, Error: "permissao negada"}
 	if !strings.Contains(screen(m), "sem o docker stats: permissao negada") {
 		t.Fatalf("erro:\n%s", screen(m))
+	}
+}
+
+// o Atualizar do aviso de versao nova: o primeiro clique pergunta, o
+// segundo pede ao daemon; quando ele reinicia, a tela diz pra abrir de novo
+func TestDashboardAtualiza(t *testing.T) {
+	var asked []string
+	root := t.TempDir()
+	c := core.New(core.Deps{TraefikMetrics: noTraffic, CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
+		SecretsDir: filepath.Join(root, "secrets"), Version: "v0.2.0",
+		LatestRelease: func(context.Context) (string, error) { return "v0.3.0", nil },
+		SelfUpdate:    func(_ context.Context, v string) error { asked = append(asked, v); return nil },
+		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
+	m := open(t, c)
+	waitFor(t, m, "Pronto.")
+	m.state.Health = core.Health{Version: "v0.2.0", Latest: "v0.3.0"}
+	waitFor(t, m, "Versao nova do cais: v0.3.0 (rodando v0.2.0)")
+	click(t, m, "dash-update")
+	waitFor(t, m, "Confirma? A TUI fecha e os apps seguem no ar")
+	if len(asked) > 0 {
+		t.Fatal("atualizou no primeiro clique")
+	}
+	press(t, m, "u")
+	waitFor(t, m, "Atualizando o cais pra v0.3.0")
+	if strings.Join(asked, " ") != "v0.3.0" {
+		t.Fatalf("pedidos: %v", asked)
+	}
+	m.Update(closedMsg{})
+	if s := screen(m); !strings.Contains(s, "Abra o cais de novo em alguns segundos") || strings.Contains(s, "caiu") {
+		t.Fatalf("depois do reinicio:\n%s", s)
 	}
 }

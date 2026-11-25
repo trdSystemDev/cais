@@ -49,6 +49,8 @@ type dashAlert struct {
 	text string
 	app  string // abre o app na aba Apps
 	tab  int    // senao, abre a aba (-1: nenhuma)
+	// update: o aviso de versao nova, com o botao Atualizar
+	update bool
 }
 
 // limites dos avisos
@@ -168,8 +170,17 @@ func (m *model) alerts(now time.Time) []dashAlert {
 			add(sevWarn, "", tabInfra, "Certificado de %s vence %s (o Traefik renova sozinho; se nao renovar, confira o DNS)", c.Domain, until(left))
 		}
 	}
-	if h.UpdateAvailable() {
-		add(sevInfo, "", -1, "Versao nova do cais: %s (rodando %s). Atualize com: ssh cais@vps update (ou cais update na VPS)", h.Latest, h.Version)
+	if h.UpdateAvailable() || m.updateTo != "" {
+		text := fmt.Sprintf("Versao nova do cais: %s (rodando %s)", h.Latest, h.Version)
+		switch {
+		case m.updateTo != "":
+			text = "Atualizando o cais pra " + m.updateTo + ": o daemon reinicia e esta tela fecha"
+		case m.updateErr != "":
+			text += ". Nao atualizou: " + m.updateErr
+		case m.updateArm:
+			text += ". Confirma? A TUI fecha e os apps seguem no ar (clique de novo ou u)"
+		}
+		out = append(out, dashAlert{sev: sevInfo, text: text, tab: -1, update: true})
 	}
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].sev < out[j].sev })
@@ -196,9 +207,17 @@ func (m *model) renderAlerts(w int) string {
 			break
 		}
 		c := m.sevColor(a.sev)
-		line := t.fg(c).Bold(true).Render(icons[a.sev]+" ") + t.fg(c).Render(a.text)
+		btn := ""
+		if a.update && m.updateTo == "" {
+			label := "Atualizar"
+			if m.updateArm {
+				label = "Confirmar"
+			}
+			btn = "  " + m.zones.Mark("dash-update", t.chip(label, btnInfo, false))
+		}
+		line := t.fg(c).Bold(true).Render(icons[a.sev]+" ") + t.fg(c).Render(a.text) + btn
 		if lipgloss.Width(line) > w {
-			line = t.fg(c).Bold(true).Render(icons[a.sev]+" ") + t.fg(c).Render(truncate(a.text, w-3))
+			line = t.fg(c).Bold(true).Render(icons[a.sev]+" ") + t.fg(c).Render(truncate(a.text, w-3-lipgloss.Width(btn))) + btn
 		}
 		if a.app != "" || a.tab >= 0 {
 			line = m.zones.Mark(fmt.Sprintf("alert:%d", i), line)
@@ -394,6 +413,9 @@ func (m *model) dashClick(msg tea.MouseMsg) tea.Cmd {
 	if m.zones.Get("check").InBounds(msg) && !m.state.Environment.Checking {
 		return tea.Batch(m.checkCmd(), m.dashRefresh(true))
 	}
+	if m.zones.Get("dash-update").InBounds(msg) {
+		return m.updateCais()
+	}
 	for i, a := range m.alerts(time.Now()) {
 		if i == maxAlerts {
 			break
@@ -472,3 +494,20 @@ func until(d time.Duration) string {
 
 // truncate corta s (com estilo) em w colunas.
 func truncate(s string, w int) string { return ansi.Truncate(s, max(1, w), "…") }
+
+// updateCais e o Atualizar do aviso de versao nova: o primeiro aperto
+// pergunta (a TUI fecha quando o daemon reinicia), o segundo pede ao daemon.
+func (m *model) updateCais() tea.Cmd {
+	if m.updateTo != "" || !m.state.Health.UpdateAvailable() {
+		return nil
+	}
+	if !m.updateArm {
+		m.updateArm, m.updateErr = true, ""
+		return nil
+	}
+	m.updateArm = false
+	return func() tea.Msg {
+		r, err := m.api.UpdateCais(context.Background(), "")
+		return updateMsg{r, err}
+	}
+}

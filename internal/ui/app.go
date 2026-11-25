@@ -68,6 +68,11 @@ type model struct {
 	states <-chan core.State
 	// a conexao com o daemon caiu: nada na tela e confiavel, so sair
 	disconnected bool
+	// Atualizar do dashboard: armado (falta confirmar), a versao pedida
+	// (o daemon vai reiniciar) e o erro
+	updateArm bool
+	updateTo  string
+	updateErr string
 	// splashUntil: ate quando a abertura (a logo) fica na tela; uma tecla
 	// ou um clique pula
 	splashUntil time.Time
@@ -114,8 +119,12 @@ type model struct {
 }
 
 type (
-	stateMsg            core.State
-	closedMsg           struct{}
+	stateMsg  core.State
+	closedMsg struct{}
+	updateMsg struct {
+		res core.UpdateResult
+		err error
+	}
 	copiedNoticeExpired uint64
 )
 
@@ -187,6 +196,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.waitState(), m.onState(core.State(msg)))
 	case closedMsg:
 		m.disconnected = true
+		return m, nil
+	case updateMsg:
+		switch {
+		case msg.err != nil:
+			m.updateErr = firstLine(msg.err.Error())
+		case !msg.res.Started:
+			m.updateErr = "ja esta na " + msg.res.To
+		default:
+			m.updateTo = msg.res.To
+		}
 		return m, nil
 	case tea.MouseClickMsg:
 		if m.startLogSelection(msg) {
@@ -424,6 +443,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		if m.dashKey(k) {
 			return nil
 		}
+		if k == "u" {
+			return m.updateCais()
+		}
 		if (k == "enter" || k == "r") && !m.state.Environment.Checking {
 			return tea.Batch(m.checkCmd(), m.dashRefresh(true))
 		}
@@ -539,6 +561,14 @@ func (m *model) viewVersion() string {
 // viewDisconnected troca a tela inteira por um aviso: sem o daemon nada do
 // que estava na tela e confiavel, entao nao deixa o usuario seguir.
 func (m *model) viewDisconnected() string {
+	if m.updateTo != "" {
+		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.th.ok).
+			Padding(1, 4).Align(lipgloss.Center).Render(
+			m.th.fg(m.th.ok).Bold(true).Render("Atualizando o cais pra "+m.updateTo+".") + "\n\n" +
+				"O daemon reiniciou na versao nova (os apps continuam no ar).\nAbra o cais de novo em alguns segundos: ssh cais@vps\n\n" +
+				m.zones.Mark("quit", m.th.dangerPill().Render("Sair")))
+		return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, box)
+	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.th.danger).
 		Padding(1, 4).Align(lipgloss.Center).Render(
 		m.th.fg(m.th.danger).Bold(true).Render("A conexao com o daemon do cais caiu.") + "\n\n" +
