@@ -515,8 +515,25 @@ func (m *model) viewTabs() string {
 	}
 	left := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 	quit := m.zones.Mark("quit", m.th.dangerPill().Render("Sair"))
+	// a versao do daemon antes do Sair (some se nao couber)
+	if ver := m.viewVersion(); ver != "" && m.w-lipgloss.Width(left)-lipgloss.Width(quit)-lipgloss.Width(ver) >= 3 {
+		quit = ver + "  " + quit
+	}
 	gap := max(m.w-lipgloss.Width(left)-lipgloss.Width(quit), 1)
 	return left + strings.Repeat(" ", gap) + quit
+}
+
+// viewVersion e a versao do cais no ar (a do daemon) e, se houver, a nova.
+func (m *model) viewVersion() string {
+	h := m.state.Health
+	if h.Version == "" {
+		return ""
+	}
+	ver := m.th.fg(m.th.muted).Render("cais " + h.Version)
+	if h.UpdateAvailable() {
+		ver += m.th.fg(m.th.warn).Render(" -> " + h.Latest + " (ssh cais@vps update)")
+	}
+	return ver
 }
 
 // viewDisconnected troca a tela inteira por um aviso: sem o daemon nada do

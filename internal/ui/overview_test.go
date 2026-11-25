@@ -84,6 +84,17 @@ func TestDashboardTudoCerto(t *testing.T) {
 	if out := screen(m); !strings.Contains(out, "✓ Tudo certo") {
 		t.Fatalf("sem avisos:\n%s", out)
 	}
+	// a versao do daemon no topo, com a nova quando houver
+	if out := screen(m); !strings.Contains(out, "cais v0.2.0  ") || strings.Contains(out, "->") {
+		t.Fatalf("versao no topo:\n%s", out)
+	}
+	st.Health.Latest = "v0.3.0"
+	m.state = st
+	if out := screen(m); !strings.Contains(out, "cais v0.2.0 -> v0.3.0 (ssh cais@vps update)") {
+		t.Fatalf("versao nova no topo:\n%s", out)
+	}
+	st.Health.Latest = "v0.2.0"
+	m.state = st
 
 	// backup sem configurar e atrasado
 	st.Backup = core.BackupStatus{}
