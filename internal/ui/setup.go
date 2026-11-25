@@ -356,7 +356,9 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		p.ghConnMsgC, p.ghConnMsg = "ok", fmt.Sprintf("Conectado: app %q (App ID %d) em %s, App ID e chave gravados. "+
 			"Agora instale nos repositorios pelo link acima e confira no Testar.", r.Name, r.AppID, r.Owner)
 		p.rebuild()
-		return p.focusAt(p.index("ghCopy"))
+		// o Conectar gravou a config: o plano embaixo (Ainda sem configuracao)
+		// tem que ser relido
+		return tea.Batch(p.focusAt(p.index("ghCopy")), p.planCmd())
 	case hostFixMsg:
 		if msg.err != nil {
 			p.setStatus("danger", "Nao deu pra corrigir: "+firstLine(msg.err.Error()))

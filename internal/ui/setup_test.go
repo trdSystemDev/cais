@@ -225,6 +225,31 @@ func TestInfraCertificadosNoProxy(t *testing.T) {
 		t.Fatalf("config: %+v", info.Config)
 	}
 
+	// Let's Encrypt pelo DNS da Cloudflare: token (vai pro secret) e curingas
+	click(t, m, "cert-tls")
+	waitFor(t, m, "‹ Let's Encrypt (DNS Cloudflare) ›")
+	if !slices.Contains(m.svc.ids(), "cert-token") || !slices.Contains(m.svc.ids(), "cert-wild") {
+		t.Fatalf("sem token e curingas: %v", m.svc.ids())
+	}
+	m.svc.token.SetValue("  tok-cloudflare  ")
+	m.svc.wild.SetValue("*.dev.trdsystem.cloud, DEV.trdsystem.cloud x.trdsystem.cloud")
+	click(t, m, "cfg-save")
+	// com o token e os curingas o painel passa da altura do terminal do
+	// teste: a mensagem fica embaixo, na rolagem
+	if !strings.Contains(m.infraMsg, "Config do proxy salva") || m.svc.err != "" {
+		t.Fatalf("salvar pelo DNS: %q %q", m.infraMsg, m.svc.err)
+	}
+	info, _ := m.api.LoadConfig(context.Background())
+	if !info.Config.DNSChallenge() || !slices.Equal(info.Config.Proxy.Wildcards, []string{"dev.trdsystem.cloud", "x.trdsystem.cloud"}) {
+		t.Fatalf("DNS nao gravado: %+v", info.Config.Proxy)
+	}
+	if tok, err := os.ReadFile(filepath.Join(filepath.Dir(info.Path), "secrets", "cloudflare_dns_token")); err != nil || string(tok) != "tok-cloudflare" {
+		t.Fatalf("token: %q %v", tok, err)
+	}
+	if m.svc.token.Value() != "" {
+		t.Fatal("o token ficou no campo")
+	}
+
 	click(t, m, "cert-tls")
 	waitFor(t, m, "‹ CA local (teste) ›")
 	if slices.Contains(m.svc.ids(), "cert-email") {
@@ -237,8 +262,8 @@ func TestInfraCertificadosNoProxy(t *testing.T) {
 	m.svc.domain.SetValue("trd.localhost")
 	click(t, m, "cfg-save")
 	waitFor(t, m, "Config do proxy salva")
-	info, _ := m.api.LoadConfig(context.Background())
-	if info.Config.LetsEncrypt() || info.Config.TestDomain != "trd.localhost" {
+	info, _ = m.api.LoadConfig(context.Background())
+	if info.Config.LetsEncrypt() || info.Config.TestDomain != "trd.localhost" || info.Config.Proxy.DNS != "" || info.Config.Proxy.Wildcards != nil {
 		t.Fatalf("CA local nao gravada: %+v", info.Config)
 	}
 }
@@ -471,6 +496,9 @@ func TestSetupConectaAoGitHub(t *testing.T) {
 	click(t, m, "ghDone")
 	waitFor(t, m, `Conectado: app "cais-teste" (App ID 5512022) em trdSystemDev`)
 	waitFor(t, m, "Instale o app nos repositorios")
+	if !m.setup.plan.Configured {
+		t.Fatal("o plano nao foi relido depois do Conectar (Ainda sem configuracao)")
+	}
 	if m.setup.ghLink != "https://github.com/apps/cais-teste/installations/new" || m.setup.visible(m.setup.get("ghCode")) {
 		t.Fatalf("link de instalacao: %s", m.setup.ghLink)
 	}
