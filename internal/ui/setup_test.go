@@ -383,7 +383,7 @@ func TestSetupTestaOGitHubApp(t *testing.T) {
 func TestSetupSeguranca(t *testing.T) {
 	m, _ := openSetup(t)
 	click(t, m, "setup-sec:Seguranca")
-	waitFor(t, m, "3 de 3 itens pra corrigir")
+	waitFor(t, m, "4 de 4 itens pra corrigir")
 	s := screen(m)
 	for _, want := range []string{"✗ Login do root pelo SSH", "corrige no Preparar VPS", "✗ Firewall (ufw)  desligado  [Corrigir]",
 		"pare o servico ou escute so no 127.0.0.1", "Preparar VPS"} {
@@ -395,7 +395,17 @@ func TestSetupSeguranca(t *testing.T) {
 	// corrigir so o firewall
 	click(t, m, "fix:firewall")
 	waitFor(t, m, "Corrigido. ufw ligado")
-	waitFor(t, m, "2 de 3 itens pra corrigir")
+	waitFor(t, m, "3 de 4 itens pra corrigir")
+
+	// reiniciar: o primeiro Corrigir so pergunta
+	click(t, m, "fix:reboot")
+	waitFor(t, m, "Reiniciar a VPS? Os apps ficam fora")
+	if testVPS.rebooted {
+		t.Fatal("reiniciou no primeiro aperto")
+	}
+	click(t, m, "fix:reboot")
+	waitFor(t, m, "Reiniciando: a VPS reinicia em 5 segundos")
+	waitFor(t, m, "2 de 4 itens pra corrigir")
 
 	// Preparar VPS: senhas diferentes nao vao
 	click(t, m, "harden-open")

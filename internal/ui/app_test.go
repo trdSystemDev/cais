@@ -58,11 +58,16 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 				{ID: "ssh-root", Title: "Login do root pelo SSH", OK: vps.ssh, Detail: map[bool]string{true: "bloqueado", false: "permitido"}[vps.ssh]},
 				{ID: "firewall", Title: "Firewall (ufw)", OK: vps.firewall, Detail: "desligado", Fixable: !vps.firewall, Fix: host.HardenFix},
 				{ID: "ports", Title: "Portas abertas pra internet", Detail: "3306/tcp", Fix: "pare o servico ou escute so no 127.0.0.1"},
+				{ID: "reboot", Title: "Reinicio pendente", OK: vps.rebooted, Detail: "kernel novo", Fixable: !vps.rebooted},
 			}
 		},
 		FixHost: func(_ context.Context, id string) (string, error) {
 			mu.Lock()
 			defer mu.Unlock()
+			if id == "reboot" {
+				vps.rebooted = true
+				return "a VPS reinicia em 5 segundos", nil
+			}
 			vps.firewall = true
 			return "ufw ligado", nil
 		},
@@ -741,6 +746,7 @@ func TestInfraImportarBanco(t *testing.T) {
 // fakeVPS e a maquina que a aba Seguranca ve nos testes.
 type fakeVPS struct {
 	ssh, firewall bool
+	rebooted      bool
 	user, pass    string
 	terminal      []string // o ultimo console aberto: container e comando
 }

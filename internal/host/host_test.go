@@ -420,6 +420,18 @@ func TestFixUmItem(t *testing.T) {
 	if _, err := Fix(context.Background(), f, "fail2ban"); err != nil || !f.active["fail2ban"] {
 		t.Fatalf("fail2ban: %v", err)
 	}
+	// reiniciar: agendado (a resposta chega antes), nunca na hora
+	f.calls = nil
+	if d, err := Fix(context.Background(), f, "reboot"); err != nil || !strings.Contains(d, "5 segundos") {
+		t.Fatalf("reboot: %q %v", d, err)
+	}
+	if i := f.index(t, "systemd-run --unit="+RebootUnit); !strings.Contains(f.calls[i], "--on-active=5s") ||
+		!strings.HasSuffix(f.calls[i], "/bin/systemctl reboot") {
+		t.Errorf("reboot: %s", f.calls[i])
+	}
+	if slices.ContainsFunc(f.calls, func(c string) bool { return strings.HasPrefix(c, "reboot") || c == "systemctl reboot" }) {
+		t.Errorf("reiniciou na hora:\n%s", strings.Join(f.calls, "\n"))
+	}
 	if _, err := Fix(context.Background(), f, "ssh-root"); err == nil || !strings.Contains(err.Error(), "Preparar VPS") {
 		t.Errorf("ssh-root avulso: %v", err)
 	}

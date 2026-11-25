@@ -397,7 +397,7 @@ func checkReboot(sys System) Item {
 	it := Item{ID: "reboot", Title: "Reinicio pendente"}
 	if sys.Exists(rebootRequiredPath) {
 		it.Detail = "uma atualizacao (kernel ou biblioteca) so vale depois de reiniciar"
-		it.Fix = "sudo reboot, num horario calmo (os containers voltam sozinhos)"
+		it.Fix = "sudo reboot (ou o Corrigir da TUI), num horario calmo: os containers voltam sozinhos"
 		return it
 	}
 	it.OK, it.Detail = true, "nenhum"

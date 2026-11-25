@@ -89,7 +89,9 @@ type setupPage struct {
 	hPass2       *textinput.Model
 	started      time.Time
 	ticking      bool
-	secSig       string // o que muda os itens da Seguranca
+	// rebootArm: o primeiro Corrigir do Reinicio pendente so pergunta
+	rebootArm bool
+	secSig    string // o que muda os itens da Seguranca
 }
 
 // Respostas das chamadas ao core (feitas fora do Update).
@@ -312,6 +314,8 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 	case hostFixMsg:
 		if msg.err != nil {
 			p.setStatus("danger", "Nao deu pra corrigir: "+firstLine(msg.err.Error()))
+		} else if msg.id == "reboot" {
+			p.setStatus("warn", "Reiniciando: "+msg.detail)
 		} else {
 			p.setStatus("ok", "Corrigido. "+msg.detail)
 		}
@@ -525,7 +529,13 @@ func (p *setupPage) move(d int) tea.Cmd {
 
 // activate e o Enter, espaco ou clique num item que nao e campo de texto.
 func (p *setupPage) activate(it *item) tea.Cmd {
+	armed := p.rebootArm
+	p.rebootArm = false
 	switch {
+	case it.id == "fix:reboot" && !armed:
+		p.rebootArm = true
+		p.setStatus("warn", "Reiniciar a VPS? Os apps ficam fora 1 a 2 minutos e esta sessao cai (entre de novo depois). Aperte Corrigir de novo pra reiniciar.")
+		return nil
 	case it.id == "save":
 		return p.save()
 	case it.id == "notifyTest":

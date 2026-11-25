@@ -146,7 +146,8 @@ func (c *Core) ConfirmHost(ctx context.Context, since time.Time) error {
 }
 
 // FixHostItem corrige um item da checagem de seguranca sozinho (firewall,
-// fail2ban, atualizacoes, logs do Docker) e confere de novo. Devolve o
+// fail2ban, atualizacoes, logs do Docker, chave do cais, reinicio) e confere
+// de novo. Fora do MCP: a IA nao reinicia a VPS. Devolve o
 // detalhe do que fez.
 func (c *Core) FixHostItem(ctx context.Context, id string) (string, error) {
 	if !c.infra.TryLock() {

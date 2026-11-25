@@ -40,6 +40,8 @@ const (
 	CaisUser      = "cais"
 	caisSSHDropin = "/etc/ssh/sshd_config.d/cais.conf"
 	RollbackUnit  = "cais-ssh-rollback"
+	// RebootUnit reinicia a VPS (Corrigir do Reinicio pendente).
+	RebootUnit    = "cais-reboot"
 	RollbackAfter = "5min"
 	// RollbackDelay e o RollbackAfter como duracao (contagem na TUI).
 	RollbackDelay = 5 * time.Minute
@@ -424,6 +426,20 @@ func caisKeys(ctx context.Context, sys System, extra []string) (string, bool, er
 	return fmt.Sprintf("%d chave(s) a mais: ssh cais@vps abre a TUI", len(keys)-len(current)), true, nil
 }
 
+// reboot agenda o reinicio pra dali a 5s: da tempo da resposta chegar na
+// TUI. O systemctl reboot para o cais.service como qualquer parada: espera
+// os deploys e backups em andamento (TimeoutStopSec da unidade). Os
+// containers voltam sozinhos (restart do compose) e o daemon tambem.
+func (h *hardener) reboot(ctx context.Context) (string, bool, error) {
+	h.sys.Run(ctx, "systemctl", "reset-failed", RebootUnit+".service")
+	if _, err := h.sys.Run(ctx, "systemd-run", "--unit="+RebootUnit, "--on-active=5s",
+		"--description=cais: reinicia a VPS (Corrigir do Reinicio pendente)",
+		"/bin/systemctl", "reboot"); err != nil {
+		return "", false, errors.New("nao deu pra agendar o reinicio: " + firstLine(err))
+	}
+	return "a VPS reinicia em 5 segundos (espera deploy ou backup em andamento); os apps ficam fora 1 a 2 minutos e voltam sozinhos", true, nil
+}
+
 func (h *hardener) firewall(ctx context.Context) (string, bool, error) {
 	s := readUFW(ctx, h.sys)
 	if s.Unavailable != "" {
@@ -583,10 +599,11 @@ var fixers = map[string]struct {
 	"updates":     {[]string{"unattended-upgrades"}, func(h *hardener) stepFunc { return h.updates }},
 	"docker-logs": {nil, func(h *hardener) stepFunc { return h.dockerLogs }},
 	"ssh-cais":    {nil, func(h *hardener) stepFunc { return h.caisKeys }},
+	"reboot":      {nil, func(h *hardener) stepFunc { return h.reboot }},
 }
 
 // Fix corrige um item da checagem (firewall, fail2ban, updates,
-// docker-logs, ssh-cais), instalando o pacote se faltar. Devolve o detalhe do que fez.
+// docker-logs, ssh-cais, reboot), instalando o pacote se faltar. Devolve o detalhe do que fez.
 func Fix(ctx context.Context, sys System, id string) (string, error) {
 	f, ok := fixers[id]
 	if !ok {
