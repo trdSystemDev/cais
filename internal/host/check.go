@@ -52,6 +52,9 @@ func Check(ctx context.Context, sys System) []Item {
 
 	items := []Item{checkOS(sys)}
 	items = append(items, checkSSH(ctx, sys)...)
+	if it, ok := checkCaisKeys(ctx, sys); ok {
+		items = append(items, it)
+	}
 	items = append(items,
 		checkFirewall(ctx, sys),
 		checkFail2ban(ctx, sys),
@@ -109,6 +112,24 @@ func checkSSH(ctx context.Context, sys System) []Item {
 		pass.Detail = "aceita senha pelo teclado (KbdInteractiveAuthentication yes)"
 	}
 	return []Item{root, pass}
+}
+
+// checkCaisKeys confere se o ssh cais@vps tem alguma chave pra entrar (so
+// com o usuario cais do install.sh --ssh).
+func checkCaisKeys(ctx context.Context, sys System) (Item, bool) {
+	home, ok := hasCaisUser(ctx, sys)
+	if !ok {
+		return Item{}, false
+	}
+	it := Item{ID: "ssh-cais", Title: "Chave do ssh cais@vps (a TUI)",
+		Fix: "copie as chaves do admin: sudo cp ~/.ssh/authorized_keys " + home + "/.ssh/ && sudo chown -R " + CaisUser + ": " + home + "/.ssh (ou o Corrigir da TUI, por sudo cais)"}
+	b, _ := sys.ReadFile(home + "/.ssh/authorized_keys")
+	if n := len(parseKeys(string(b))); n > 0 {
+		it.OK, it.Detail = true, fmt.Sprintf("%d chave(s)", n)
+	} else {
+		it.Detail = "sem nenhuma chave: ssh cais@vps da Permission denied"
+	}
+	return it, true
 }
 
 // ufwStatus e o que importa do ufw status verbose.

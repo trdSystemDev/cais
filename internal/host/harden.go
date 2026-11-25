@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -31,9 +32,13 @@ type Plan struct {
 
 // Arquivos que o harden escreve.
 const (
-	SSHDropin     = "/etc/ssh/sshd_config.d/00-cais-harden.conf"
-	fail2banJail  = "/etc/fail2ban/jail.d/cais.conf"
-	rootKeys      = "/root/.ssh/authorized_keys"
+	SSHDropin    = "/etc/ssh/sshd_config.d/00-cais-harden.conf"
+	fail2banJail = "/etc/fail2ban/jail.d/cais.conf"
+	rootKeys     = "/root/.ssh/authorized_keys"
+	// CaisUser e o usuario do ssh cais@vps (a TUI), criado pelo install.sh
+	// --ssh com o comando forcado no caisSSHDropin.
+	CaisUser      = "cais"
+	caisSSHDropin = "/etc/ssh/sshd_config.d/cais.conf"
 	RollbackUnit  = "cais-ssh-rollback"
 	RollbackAfter = "5min"
 	// RollbackDelay e o RollbackAfter como duracao (contagem na TUI).
@@ -211,6 +216,7 @@ func Harden(ctx context.Context, sys System, opts Options, progress func(Step)) 
 		{"updates", "Atualizacoes de seguranca automaticas", h.updates},
 		{"docker-logs", "Limite nos logs dos containers", h.dockerLogs},
 		{"admin", "Usuario admin " + opts.User + " (sudo, entra so com chave)", h.admin},
+		{"ssh-cais", "Chaves do usuario cais (ssh cais@vps abre a TUI)", h.caisKeys},
 		{"firewall", "Firewall: entram so 22, 80 e 443", h.firewall},
 		{"fail2ban", "fail2ban no SSH", h.fail2ban},
 		{"ssh", "SSH sem root e sem senha", h.ssh},
@@ -351,6 +357,71 @@ func (h *hardener) admin(ctx context.Context) (string, bool, error) {
 		changed = true
 	}
 	return "", changed, nil
+}
+
+func (h *hardener) caisKeys(ctx context.Context) (string, bool, error) {
+	return caisKeys(ctx, h.sys, h.plan.Keys)
+}
+
+// hasCaisUser diz se o install.sh --ssh criou o usuario cais (e onde fica a
+// pasta dele).
+func hasCaisUser(ctx context.Context, sys System) (string, bool) {
+	home, ok := userHome(ctx, sys, CaisUser)
+	return home, ok && sys.Exists(caisSSHDropin)
+}
+
+// adminKeys sao as chaves de quem ja administra a VPS: o root e os do grupo
+// sudo.
+func adminKeys(ctx context.Context, sys System) []string {
+	var keys []string
+	if b, err := sys.ReadFile(rootKeys); err == nil {
+		keys = parseKeys(string(b))
+	}
+	out, _ := sys.Run(ctx, "getent", "group", "sudo")
+	if f := strings.Split(out, ":"); len(f) == 4 && f[3] != "" {
+		for _, u := range strings.Split(f[3], ",") {
+			if home, ok := userHome(ctx, sys, u); ok {
+				if b, err := sys.ReadFile(home + "/.ssh/authorized_keys"); err == nil {
+					keys = mergeKeys(keys, parseKeys(string(b)))
+				}
+			}
+		}
+	}
+	return keys
+}
+
+// caisKeys da ao usuario cais as chaves dos admins (root, grupo sudo e as
+// extra do harden). O install.sh so copia as que o root tem na hora: quem
+// instala entrando por senha e so depois faz o ssh-copy-id ficava com o cais
+// sem chave (Permission denied no ssh cais@vps). Quem e admin ja abre a TUI
+// com sudo cais: a chave dele no cais nao da acesso novo.
+func caisKeys(ctx context.Context, sys System, extra []string) (string, bool, error) {
+	home, ok := hasCaisUser(ctx, sys)
+	if !ok {
+		return "sem o usuario cais (install.sh sem --ssh): pulado", false, nil
+	}
+	dir, file := home+"/.ssh", home+"/.ssh/authorized_keys"
+	var current []string
+	if b, err := sys.ReadFile(file); err == nil {
+		current = parseKeys(string(b))
+	}
+	keys := mergeKeys(mergeKeys(slices.Clone(current), extra), adminKeys(ctx, sys))
+	if len(keys) == 0 {
+		return "", false, errors.New("nenhuma chave dos admins pra copiar: do seu computador, ssh-copy-id root@<ip-da-vps> (ou o seu admin) e corrija de novo")
+	}
+	if len(keys) == len(current) {
+		return "", false, nil
+	}
+	if _, err := sys.Run(ctx, "install", "-d", "-m", "700", dir); err != nil {
+		return "", false, err
+	}
+	if err := sys.WriteFile(file, []byte(strings.Join(keys, "\n")+"\n"), 0o600); err != nil {
+		return "", false, err
+	}
+	if _, err := sys.Run(ctx, "chown", "-R", CaisUser+":", dir); err != nil {
+		return "", false, err
+	}
+	return fmt.Sprintf("%d chave(s) a mais: ssh cais@vps abre a TUI", len(keys)-len(current)), true, nil
 }
 
 func (h *hardener) firewall(ctx context.Context) (string, bool, error) {
@@ -511,10 +582,11 @@ var fixers = map[string]struct {
 	"fail2ban":    {[]string{"fail2ban", "python3-systemd"}, func(h *hardener) stepFunc { return h.fail2ban }},
 	"updates":     {[]string{"unattended-upgrades"}, func(h *hardener) stepFunc { return h.updates }},
 	"docker-logs": {nil, func(h *hardener) stepFunc { return h.dockerLogs }},
+	"ssh-cais":    {nil, func(h *hardener) stepFunc { return h.caisKeys }},
 }
 
 // Fix corrige um item da checagem (firewall, fail2ban, updates,
-// docker-logs), instalando o pacote se faltar. Devolve o detalhe do que fez.
+// docker-logs, ssh-cais), instalando o pacote se faltar. Devolve o detalhe do que fez.
 func Fix(ctx context.Context, sys System, id string) (string, error) {
 	f, ok := fixers[id]
 	if !ok {

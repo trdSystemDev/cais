@@ -18,9 +18,9 @@ MCP le. O daemon refaz a checagem de hora em hora.
 Em **Setup > Seguranca**:
 
 - Cada item com problema mostra o conserto. Firewall, fail2ban, atualizacoes
-  automaticas e logs dos containers tem o botao **Corrigir**: corrige so
-  aquele item, instalando o pacote se faltar, sem mexer no SSH nem nos
-  usuarios. Serve pra VPS que ja esta em uso.
+  automaticas, logs dos containers e a chave do `ssh cais@vps` tem o botao
+  **Corrigir**: corrige so aquele item, instalando o pacote se faltar, sem
+  mexer na config do SSH nem no admin. Serve pra VPS que ja esta em uso.
 - **Preparar VPS** e o `cais host harden` pela TUI. Voce preenche o nome do
   admin e a senha do sudo (duas vezes; vazia se o admin ja existe com senha),
   clica em **Aplicar** e os passos aparecem ao vivo. Nao precisa da senha do
@@ -85,12 +85,18 @@ Cada passo confere antes e so muda o que falta: rodar de novo e seguro.
 4. **Usuario admin**: criado se faltar, no grupo `sudo`, com as chaves SSH do
    root (`/root/.ssh/authorized_keys`) e as do `-key arquivo.pub`. Sem
    nenhuma chave o harden recusa, porque desligar a senha trancaria todo mundo.
-5. **Firewall (ufw)**: bloqueia a entrada por padrao e libera so 22 (SSH), 80
+5. **Chaves do usuario `cais`** (o `ssh cais@vps` da TUI, se o `install.sh`
+   rodou com `--ssh`): recebe as chaves do root, as dos admins do `sudo` e as
+   do `-key`. O instalador so copia as que o root tem na hora; quem instalou
+   entrando por senha e so depois fez o `ssh-copy-id` ficava com o `cais` sem
+   chave (`Permission denied (publickey)`). O `check` avisa e o **Corrigir**
+   copia (abra a TUI com `sudo cais` pelo admin).
+6. **Firewall (ufw)**: bloqueia a entrada por padrao e libera so 22 (SSH), 80
    e 443 (o proxy; 443/udp e o HTTP/3). O 22 e liberado antes de ligar. Regras
    antigas ficam, e o `check` aponta as que sobram.
-6. **fail2ban** no SSH: 5 erros em 10 minutos bloqueiam o IP por 1 hora
+7. **fail2ban** no SSH: 5 erros em 10 minutos bloqueiam o IP por 1 hora
    (`/etc/fail2ban/jail.d/cais.conf`, lendo o journal).
-7. **SSH so com chave e sem root**, em
+8. **SSH so com chave e sem root**, em
    `/etc/ssh/sshd_config.d/00-cais-harden.conf`: `PermitRootLogin no`,
    `PasswordAuthentication no`, `KbdInteractiveAuthentication no`. O `00-`
    vem antes do `50-cloud-init.conf` das imagens de nuvem, que liga a senha

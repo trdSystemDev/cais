@@ -67,6 +67,15 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 		last = args[len(args)-1]
 	}
 	switch {
+	case cmd == "getent group sudo":
+		var members []string
+		for u, gs := range f.groups {
+			if slices.Contains(gs, "sudo") {
+				members = append(members, u)
+			}
+		}
+		slices.Sort(members)
+		return "sudo:x:27:" + strings.Join(members, ","), nil
 	case name == "getent":
 		if !f.users[last] {
 			return "", errors.New("exit status 2")
@@ -421,5 +430,72 @@ func TestFixUmItem(t *testing.T) {
 		if !got["firewall"].Fixable || !got["updates"].Fixable || got["ssh-root"].Fixable || got["ports"].Fixable {
 			t.Errorf("fixable: %+v", got)
 		}
+	}
+}
+
+// install.sh --ssh com o root ainda sem chave (entrou por senha) e o
+// ssh-copy-id so depois: o cais ficava sem chave e o ssh cais@vps dava
+// Permission denied. A checagem avisa, o Corrigir e o harden copiam.
+func TestChavesDoCais(t *testing.T) {
+	f := newFake()
+	f.users["cais"] = true
+	f.files[caisSSHDropin] = "Match User cais\n"
+	f.files["/home/cais/.ssh/authorized_keys"] = ""
+	if runtime.GOOS == "linux" {
+		got := checkByID(Check(context.Background(), f))
+		if it := got["ssh-cais"]; it.OK || !it.Fixable || !strings.Contains(it.Detail, "Permission denied") {
+			t.Errorf("cais sem chave: %+v", it)
+		}
+	}
+
+	// Corrigir: as do root e as dos admins do sudo, sem repetir
+	f.users["ops"] = true
+	f.groups["ops"] = []string{"sudo"}
+	f.files["/home/ops/.ssh/authorized_keys"] = "ssh-ed25519 OPS ops@pc\nssh-ed25519 AAAAC3Nza patrick@note"
+	if _, err := Fix(context.Background(), f, "ssh-cais"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.files["/home/cais/.ssh/authorized_keys"]; got != "ssh-ed25519 AAAAC3Nza patrick@note\nssh-ed25519 OPS ops@pc\n" {
+		t.Errorf("chaves do cais: %q", got)
+	}
+	f.index(t, "chown -R cais: /home/cais/.ssh")
+	if runtime.GOOS == "linux" {
+		if it := checkByID(Check(context.Background(), f))["ssh-cais"]; !it.OK {
+			t.Errorf("depois do Corrigir: %+v", it)
+		}
+	}
+
+	// o harden tambem passa as chaves pro cais
+	f = newFake()
+	f.users["cais"] = true
+	f.files[caisSSHDropin] = "Match User cais\n"
+	_, status, err := harden(t, f, Options{User: "deploy", Password: "12345678"})
+	if err != nil || status["ssh-cais"] != StepChanged {
+		t.Fatalf("harden: %v %v", err, status)
+	}
+	if got := f.files["/home/cais/.ssh/authorized_keys"]; got != "ssh-ed25519 AAAAC3Nza patrick@note\n" {
+		t.Errorf("harden, chaves do cais: %q", got)
+	}
+
+	// sem o usuario cais (install.sh sem --ssh): nem checa nem mexe
+	f = newFake()
+	if _, status, err := harden(t, f, Options{User: "deploy", Password: "12345678"}); err != nil || status["ssh-cais"] != StepOK {
+		t.Fatalf("harden sem cais: %v %v", err, status)
+	}
+	if _, ok := f.files["/home/cais/.ssh/authorized_keys"]; ok {
+		t.Error("criou chave pra um cais que nao existe")
+	}
+	if runtime.GOOS == "linux" {
+		if _, ok := checkByID(Check(context.Background(), f))["ssh-cais"]; ok {
+			t.Error("checou o cais sem o usuario")
+		}
+	}
+	// sem nenhuma chave de admin pra copiar: diz o que fazer
+	f.users["cais"] = true
+	f.files[caisSSHDropin] = ""
+	delete(f.files, rootKeys)
+	f.files["/home/deploy/.ssh/authorized_keys"] = ""
+	if _, err := Fix(context.Background(), f, "ssh-cais"); err == nil || !strings.Contains(err.Error(), "ssh-copy-id") {
+		t.Errorf("sem chave nenhuma: %v", err)
 	}
 }
