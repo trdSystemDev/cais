@@ -45,7 +45,13 @@ daemon: cais
 tui: cais
 	$(DEV_ENV) ./cais
 
-build: build-amd64 build-arm64
+build: build-amd64 build-arm64 build-darwin
+
+# macOS: so o cliente (cais remote, cais -r, cais mcp --remotes) no
+# computador de quem administra; a VPS e Linux
+build-darwin:
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(BUILDFLAGS) -ldflags "$(LDFLAGS)" -o dist/cais-darwin-amd64 ./cmd/cais
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(BUILDFLAGS) -ldflags "$(LDFLAGS)" -o dist/cais-darwin-arm64 ./cmd/cais
 
 build-amd64:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILDFLAGS) -ldflags "$(LDFLAGS)" -o dist/cais-linux-amd64 ./cmd/cais

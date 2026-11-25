@@ -1,6 +1,20 @@
 # Instalacao
 
-Como instalar, atualizar e remover o cais numa VPS. O caminho rapido esta no [README](../README.md#instalar).
+Como instalar, atualizar e remover o cais. O caminho rapido esta no [README](../README.md#instalar).
+
+O cais vai em dois lugares, com o mesmo `install.sh`:
+
+| Onde | Comando | O que fica |
+|---|---|---|
+| **VPS** | `curl ... \| sudo sh -s -- --ssh` | binario, servico (o daemon), o usuario `cais` do ssh; Docker se faltar |
+| **Seu computador** (opcional) | `curl ... \| sh -s -- --client` | so o binario em `~/.local/bin`: sem sudo, sem servico, sem Docker |
+
+No seu computador o cais so serve pra varias VPS: `cais remote add`,
+`cais -r NOME` (a TUI ou um comando de uma VPS) e `cais mcp --remotes` (um MCP
+so pra todas). Com uma VPS so, nao precisa: `ssh cais@vps` ja abre a TUI e
+`ssh cais@vps cais mcp` e o MCP.
+
+## Na VPS
 
 A VPS precisa de Linux (amd64 ou arm64) com systemd. Sem Docker no Ubuntu
 ou no Debian, o `install.sh` instala o Docker e o Compose pelo repositorio
@@ -48,6 +62,24 @@ dentro do `install.sh`). Opcoes (passe depois do `sh -s --`):
 
 Depois da instalacao, numa VPS nova: `cais host harden -user deploy`
 ([Seguranca da VPS](seguranca.md)). Em seguida, o [Setup](setup.md).
+
+## No seu computador (varias VPS)
+
+Linux ou macOS (Intel ou Apple Silicon; no Windows, pelo WSL), sem sudo:
+
+```sh
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
+  sh -s -- --client
+```
+
+Baixa o binario do seu sistema, confere o SHA-256 e poe em `~/.local/bin/cais`
+(ou na pasta de `CAIS_BIN_DIR`); avisa se a pasta nao estiver no PATH. Nada
+roda em segundo plano. O mesmo comando atualiza: deixe o cais do computador
+na mesma versao das VPS, ou mais novo (as ferramentas do MCP de varias VPS
+vem dele). Pra remover, apague o `~/.local/bin/cais` e o
+`~/.config/cais/remotes.yaml`.
+
+Depois, as VPS e o MCP: ver [MCP](mcp.md#varias-vps-num-mcp-so).
 
 ---
 

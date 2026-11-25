@@ -36,6 +36,8 @@ type cli struct {
 	in       io.Reader
 	// dial abre a conexao com o daemon (padrao: o socket, pelo connect)
 	dial func(socket string) (daemonAPI, error)
+	// ssh roda o ssh (cais -r e cais remote add); padrao: runSSH
+	ssh func(args []string, in io.Reader, out, err io.Writer) error
 }
 
 // daemonAPI e o daemon como os comandos usam: a core.API e o Close.
@@ -47,7 +49,7 @@ type daemonAPI interface {
 func main() {
 	e := &cli{out: os.Stdout, err: os.Stderr, in: os.Stdin, dial: func(socket string) (daemonAPI, error) {
 		return connect(socket)
-	}}
+	}, ssh: runSSH}
 	os.Exit(e.run(os.Args[1:]))
 }
 
@@ -72,6 +74,14 @@ func (e *cli) parse(fs *flag.FlagSet, args []string) error {
 
 // run roda o comando de args e devolve o codigo de saida.
 func (e *cli) run(args []string) int {
+	// cais -r NOME [comando...]: na VPS NOME (cais remote add), pelo ssh
+	if len(args) > 0 && (args[0] == "-r" || args[0] == "--remote") {
+		if len(args) < 2 {
+			fmt.Fprintln(e.err, "uso: cais -r NOME [comando...] (as VPS: cais remote list)")
+			return 2
+		}
+		return e.exitCode(e.runOnRemote(args[1], args[2:]))
+	}
 	cmd := "tui"
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		cmd, args = args[0], args[1:]
@@ -107,6 +117,8 @@ func (e *cli) run(args []string) int {
 		err = e.runRun(args)
 	case "host":
 		err = e.runHost(args)
+	case "remote":
+		err = e.runRemote(args)
 	case "update":
 		err = e.runUpdate(args)
 	case "version":
@@ -121,6 +133,11 @@ func (e *cli) run(args []string) int {
 		fmt.Fprintf(e.err, "comando desconhecido: %s\n\n%s", cmd, overview())
 		return 2
 	}
+	return e.exitCode(err)
+}
+
+// exitCode e o codigo de saida do erro (mostrando o erro, quando e o caso).
+func (e *cli) exitCode(err error) int {
 	var usage *usageError
 	var exit *exitError
 	switch {
@@ -131,6 +148,10 @@ func (e *cli) run(args []string) int {
 	case errors.As(err, &exit):
 		fmt.Fprintln(e.err, "cais:", err)
 		return exit.code
+	case errors.As(err, new(quietExit)):
+		var q quietExit
+		errors.As(err, &q)
+		return int(q)
 	default:
 		fmt.Fprintln(e.err, "cais:", err)
 		return 1
@@ -222,8 +243,12 @@ func connect(socket string) (*rpc.Client, error) {
 // O stdout e so do protocolo: avisos e erros vao pro stderr.
 func (e *cli) runMCP(args []string) error {
 	fs, socket := e.newFlags("mcp")
+	many := fs.Bool("remotes", false, "um MCP so pras VPS da lista deste computador (cais remote add), pelo ssh de cada uma")
 	if err := e.parse(fs, args); err != nil {
 		return err
+	}
+	if *many {
+		return e.runMCPRemotes()
 	}
 	c, err := e.connect(*socket)
 	if err != nil {

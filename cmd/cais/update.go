@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/core"
@@ -30,6 +31,12 @@ func (e *cli) runUpdate(args []string) error {
 	}
 	c, err := e.connect(*socket)
 	if err != nil {
+		// sem o socket, nao e uma VPS: o cais do computador (--client)
+		if _, serr := os.Stat(*socket); os.IsNotExist(serr) {
+			return errors.New("aqui nao tem o daemon do cais (e o seu computador?): atualize com\n" +
+				"  curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh | sh -s -- --client\n" +
+				"e as VPS com: cais -r NOME update")
+		}
 		return err
 	}
 	r, err := c.UpdateCais(context.Background(), *version)

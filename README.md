@@ -48,6 +48,14 @@ Instala o cais (e o Docker, se faltar), sobe o servico e cria o usuario `cais`
 do SSH com as suas chaves. Opcoes e detalhes em
 [docs/instalacao.md](docs/instalacao.md).
 
+No seu computador, so se for administrar varias VPS (um MCP pra todas,
+`cais -r NOME`): so o binario, sem sudo nem servico, em Linux ou macOS:
+
+```sh
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
+  sh -s -- --client
+```
+
 VPS nova, so com o root (Hostinger e afins)? Instale e prepare de uma vez,
 como root:
 
@@ -116,7 +124,17 @@ Do seu computador, depois de entrar uma vez com `ssh cais@ip-da-vps`:
 claude mcp add -s user cais -- ssh cais@ip-da-vps cais mcp
 ```
 
-O que a IA pode e nao pode fazer em [docs/mcp.md](docs/mcp.md).
+Varias VPS num MCP so, com o cais no seu computador:
+
+```sh
+cais remote add prod cais@prod.tailnet.ts.net
+cais remote add dev cais@dev.tailnet.ts.net
+claude mcp add -s user cais -- cais mcp --remotes
+```
+
+Toda ferramenta ganha o argumento `vps`, mais o `vps_list` e o
+`security_check` de todas. E `cais -r prod` abre a TUI da prod. O que a IA
+pode e nao pode fazer em [docs/mcp.md](docs/mcp.md).
 
 ## Documentacao
 

@@ -1,6 +1,7 @@
 # Release do cais: a cada tag v* (git tag v0.3.0 && git push origin v0.3.0,
 # ou make release V=v0.3.0) roda os testes, compila os binarios linux
-# amd64/arm64 e publica o release com eles, o SHA256SUMS e o install.sh.
+# amd64/arm64 (a VPS) e darwin amd64/arm64 (o cliente no Mac) e publica o
+# release com eles, o SHA256SUMS e o install.sh.
 # O install.sh pelo curl baixa daqui (o mais novo, ou --version vX.Y.Z).
 name: release
 
@@ -34,11 +35,11 @@ jobs:
           # o release sai com o Go do toolchain do go.mod (o mesmo do PC):
           # outro Go daria outro binario
           want=$(sed -n 's/^toolchain //p' go.mod)
-          go version dist/cais-linux-amd64 dist/cais-linux-arm64
-          for f in dist/cais-linux-amd64 dist/cais-linux-arm64; do
-            go version "$f" | grep -q ": $want\$" || { echo "::error::$f nao foi compilado com $want"; exit 1; }
+          bins="cais-linux-amd64 cais-linux-arm64 cais-darwin-amd64 cais-darwin-arm64"
+          for f in $bins; do
+            go version "dist/$f" | grep -q ": $want\$" || { echo "::error::$f nao foi compilado com $want"; exit 1; }
           done
-          cd dist && sha256sum cais-linux-amd64 cais-linux-arm64 > SHA256SUMS && cat SHA256SUMS
+          cd dist && sha256sum $bins > SHA256SUMS && cat SHA256SUMS
 
       - name: Release
         env:
@@ -49,5 +50,5 @@ jobs:
           pre=
           case "$GITHUB_REF_NAME" in *-*) pre=--prerelease ;; esac
           gh release create "$GITHUB_REF_NAME" \
-            dist/cais-linux-amd64 dist/cais-linux-arm64 dist/SHA256SUMS install.sh \
+            dist/cais-linux-amd64 dist/cais-linux-arm64 dist/cais-darwin-amd64 dist/cais-darwin-arm64 dist/SHA256SUMS install.sh \
             --title "cais $GITHUB_REF_NAME" --generate-notes --verify-tag $pre

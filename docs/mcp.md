@@ -15,7 +15,36 @@ claude mcp add -s user cais -- ssh root@vps cais mcp     # sem o --ssh
 ele, so no projeto atual). O ssh do MCP nao pergunta nada: entre uma vez com
 `ssh cais@vps` antes, pra aceitar a chave do servidor.
 
-Com mais de uma VPS, um nome pra cada:
+## Varias VPS num MCP so
+
+Com mais de uma VPS, o cais do SEU computador junta todas num MCP so. A lista
+fica em `~/.config/cais/remotes.yaml` (so o seu usuario le):
+
+```sh
+cais remote add prod cais@prod.tailnet.ts.net     # confere na hora (ssh ... cais version)
+cais remote add dev  cais@dev.tailnet.ts.net
+cais remote list
+claude mcp add -s user cais -- cais mcp --remotes
+```
+
+- Toda ferramenta ganha o argumento `vps` (obrigatorio): sem ele, ou com uma
+  VPS que nao existe, a chamada e recusada e a resposta lista as VPS. Assim a
+  IA nao faz um deploy na VPS errada sem perceber.
+- `vps_list`: cada VPS com a versao do cais e o resumo da seguranca, as com
+  problema primeiro; uma fora do ar aparece com o motivo do ssh, sem segurar
+  as outras.
+- `security_check` sem `vps` confere todas ao mesmo tempo.
+- Por baixo, cada chamada vai pro `ssh <destino> cais mcp` daquela VPS (aberto
+  na primeira chamada e reaproveitado): nada novo abre na VPS e as regras sao
+  as dela (nada que apaga dados, seguranca so leitura).
+- O ssh do MCP nao pergunta nada: a chave no ssh-agent (ou sem senha) e a
+  chave do host ja aceita. O `cais remote add` avisa quando nao entra assim.
+
+A mesma lista serve no terminal: `cais -r prod` abre a TUI da prod, e
+`cais -r dev update` (ou qualquer comando) roda na dev.
+
+Sem o cais no computador, tambem da um MCP por VPS, com um nome pra cada (as
+ferramentas se repetem por VPS):
 
 ```sh
 claude mcp add -s user cais-prod -- ssh cais@vps-producao cais mcp

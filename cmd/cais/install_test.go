@@ -161,3 +161,56 @@ func pathWithout(t *testing.T, skip ...string) string {
 	}
 	return dir
 }
+
+// install.sh --client: no computador de quem administra, so o binario em
+// CAIS_BIN_DIR, sem root, servico nem Docker; de novo, nada muda
+func TestInstallCliente(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("o teste roda o binario linux do release falso")
+	}
+	for _, tool := range []string{"sh", "curl", "sha256sum"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("sem %s", tool)
+		}
+	}
+	arch := map[string]string{"amd64": "amd64", "arm64": "arm64"}[runtime.GOARCH]
+	bin := []byte("#!/bin/sh\necho 'cais v9.9.9'\n")
+	sum := sha256.Sum256(bin)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest/download/cais-linux-" + arch:
+			w.Write(bin)
+		case "/latest/download/SHA256SUMS":
+			w.Write([]byte(hex.EncodeToString(sum[:]) + "  cais-linux-" + arch + "\n"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	script, _ := filepath.Abs("../../install.sh")
+	dest := filepath.Join(t.TempDir(), "bin")
+	run := func(args ...string) (string, error) {
+		f, _ := os.Open(script)
+		defer f.Close()
+		sh, _ := exec.LookPath("sh")
+		cmd := exec.Command(sh, append([]string{"-s", "--", "--client"}, args...)...)
+		cmd.Stdin, cmd.Dir = f, t.TempDir()
+		cmd.Env = append(os.Environ(), "CAIS_RELEASE_URL="+srv.URL, "CAIS_BIN_DIR="+dest, "PATH=/usr/bin:/bin")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := run()
+	if err != nil || !strings.Contains(out, "Instalando cais v9.9.9 em "+dest+"/cais") || !strings.Contains(out, "nao esta no PATH") ||
+		!strings.Contains(out, "cais mcp --remotes") || strings.Contains(out, "systemd") {
+		t.Fatalf("cliente: %v\n%s", err, out)
+	}
+	if fi, err := os.Stat(filepath.Join(dest, "cais")); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("binario: %v %v", fi, err)
+	}
+	if out, err := run(); err != nil || !strings.Contains(out, "cais v9.9.9 ja esta em") {
+		t.Fatalf("de novo: %v\n%s", err, out)
+	}
+	if out, err := run("--ssh"); err == nil || !strings.Contains(out, "sao da VPS") {
+		t.Fatalf("--client com --ssh: %v\n%s", err, out)
+	}
+}

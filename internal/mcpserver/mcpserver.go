@@ -489,3 +489,28 @@ func newSecurityReport(env core.Environment, h core.Health) securityReport {
 	}
 	return r
 }
+
+// Instructions sao as instrucoes do MCP de uma VPS (o agregador soma as
+// dele).
+func Instructions() string { return instructions }
+
+// Tools sao as ferramentas do MCP de uma VPS, como o cliente ve (o
+// agregador de VPS repete cada uma com o argumento vps). Nenhuma e chamada.
+func Tools(ctx context.Context, version string) ([]*mcp.Tool, error) {
+	st, ct := mcp.NewInMemoryTransports()
+	ss, err := New(nil, version).Connect(ctx, st, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "cais-tools"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer cs.Close()
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return res.Tools, nil
+}

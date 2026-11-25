@@ -45,6 +45,11 @@ Opcoes:
                     admin com sudo e as chaves do root, SSH so com chave e sem
                     root, firewall, fail2ban, atualizacoes). Pergunta no
                     terminal; depois confirme de outro terminal
+  --client          no SEU computador (Linux ou macOS), nao na VPS: so o
+                    binario em ~/.local/bin (ou CAIS_BIN_DIR), sem sudo, sem
+                    servico e sem Docker. E o que o cais remote, o cais -r NOME
+                    e o cais mcp --remotes (um MCP pra varias VPS) precisam.
+                    Rodar de novo atualiza
   --version vX.Y.Z  pelo release: essa versao em vez da mais nova
   --dry-run         mostra o que faria, sem mudar nada (baixa mesmo assim)
   --uninstall       remove o binario, o servico e o usuario cais do ssh;
@@ -76,6 +81,7 @@ UNINSTALL=
 SSH=
 SSH_KEY=
 HARDEN=
+CLIENT=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--group)
@@ -105,6 +111,10 @@ while [ $# -gt 0 ]; do
 		;;
 	--dry-run)
 		DRY_RUN=1
+		shift
+		;;
+	--client)
+		CLIENT=1
 		shift
 		;;
 	--uninstall)
@@ -214,17 +224,27 @@ download() {
 	aarch64 | arm64) arch=arm64 ;;
 	*) die "arquitetura $(uname -m) sem binario do cais (so amd64 e arm64)" ;;
 	esac
+	os=linux
+	[ -n "$CLIENT" ] && [ "$(uname -s)" = Darwin ] && os=darwin
 	command -v curl >/dev/null 2>&1 || die "curl nao encontrado"
-	command -v sha256sum >/dev/null 2>&1 || die "sha256sum nao encontrado"
+	# o macOS tem o shasum no lugar do sha256sum
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha="sha256sum -c -"
+	elif command -v shasum >/dev/null 2>&1; then
+		sha="shasum -a 256 -c -"
+	else
+		die "sha256sum (ou shasum) nao encontrado"
+	fi
 	# os links diretos do release: o mais novo, ou o da tag pedida
 	base=$RELEASES/latest/download
 	[ -n "$WANT" ] && base=$RELEASES/download/$WANT
 	say "Baixando o cais ${WANT:-mais novo} ($arch) do release do GitHub"
-	name=cais-linux-$arch
+	name=cais-$os-$arch
 	curl -fsSL --retry 3 -o "$OUT/SHA256SUMS" "$base/SHA256SUMS" ||
 		die "nao consegui baixar o release ${WANT:-mais novo} de $REPO: confira se ha release publicado${WANT:+ com a tag $WANT}"
 	curl -fsSL --retry 3 -o "$OUT/$name" "$base/$name" || die "falhou o download de $name"
-	(cd "$OUT" && grep " $name\$" SHA256SUMS | sha256sum -c - >/dev/null) ||
+	# shellcheck disable=SC2086 # $sha e o comando com os argumentos
+	(cd "$OUT" && grep " $name\$" SHA256SUMS | $sha >/dev/null) ||
 		die "o SHA-256 de $name nao confere com o SHA256SUMS do release: download corrompido, nada foi instalado"
 	mv "$OUT/$name" "$OUT/cais"
 	chmod 0755 "$OUT/cais"
@@ -336,6 +356,46 @@ undo_ssh() {
 	rm -f "$SSHD_DROPIN"
 	die "--ssh: $1; a config do ssh nao foi mudada"
 }
+
+# --- cliente (--client): o seu computador ------------------------------------
+
+if [ -n "$CLIENT" ]; then
+	[ -z "$GROUP$SSH$HARDEN$UNINSTALL" ] || die "--client e pro seu computador: --group, --ssh, --harden e --uninstall sao da VPS"
+	case $(uname -s) in
+	Linux | Darwin) ;;
+	*) die "--client: so Linux e macOS (no Windows, use o WSL)" ;;
+	esac
+	DEST=${CAIS_BIN_DIR:-$HOME/.local/bin}
+	OUT=$(mktemp -d)
+	trap 'rm -rf "$OUT"' EXIT
+	download
+	"$OUT/cais" version >/dev/null 2>&1 || die "o binario nao roda neste computador"
+	NEW=$("$OUT/cais" version)
+	OLD=
+	[ -x "$DEST/cais" ] && OLD=$("$DEST/cais" version 2>/dev/null || true)
+	if [ -n "$OLD" ] && [ "$OLD" = "$NEW" ]; then
+		say "$NEW ja esta em $DEST/cais"
+	else
+		say "Instalando $NEW em $DEST/cais (so o binario: sem servico)"
+		run mkdir -p "$DEST"
+		# troca atomica: um cais mcp --remotes aberto nunca ve o binario pela metade
+		run cp "$OUT/cais" "$DEST/cais.new"
+		run chmod 0755 "$DEST/cais.new"
+		run mv -f "$DEST/cais.new" "$DEST/cais"
+	fi
+	case ":$PATH:" in
+	*":$DEST:"*) ;;
+	*) echo "    Atencao: $DEST nao esta no PATH; ponha no ~/.bashrc (ou ~/.zshrc): export PATH=\"$DEST:\$PATH\"" ;;
+	esac
+	cat <<EOF
+
+Pronto. As VPS deste computador:
+  cais remote add prod cais@prod.exemplo.com.br        # o mesmo destino do seu ssh
+  cais -r prod                                         # a TUI da prod
+  claude mcp add -s user cais -- cais mcp --remotes    # um MCP pra todas
+EOF
+	exit 0
+fi
 
 # --- checagens ---------------------------------------------------------------
 

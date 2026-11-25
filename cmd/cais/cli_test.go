@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -333,4 +335,74 @@ func TestCLIGitHubConnect(t *testing.T) {
 			"https://github.com/apps/cais-x/installations/new"}})
 	runCase(t, cliCase{name: "sem codigo", args: "setup github-connect", code: 1,
 		calls: []string{"GitHubConnectLink"}, errOut: []string{"sem codigo"}})
+}
+
+// cais remote add/list/remove, a lista deste computador, e o cais -r NOME,
+// que roda a TUI ou o comando na VPS pelo ssh
+func TestCLIRemote(t *testing.T) {
+	t.Setenv("CAIS_REMOTES", filepath.Join(t.TempDir(), "remotes.yaml"))
+	var calls [][]string
+	exit := 0
+	stub := func(args []string, in io.Reader, out, errw io.Writer) error {
+		calls = append(calls, args)
+		if slices.Contains(args, "version") {
+			io.WriteString(out, "cais v0.5.12 (commit abc, go1.27)\n")
+		}
+		if exit != 0 {
+			return quietExit(exit)
+		}
+		return nil
+	}
+	run := func(args ...string) (*testCLI, int) {
+		tc := newTestCLI(nil)
+		tc.ssh = stub
+		return tc, tc.run(args)
+	}
+
+	if tc, code := run("remote", "list"); code != 0 || !strings.Contains(tc.out.String(), "Nenhuma VPS") {
+		t.Fatalf("lista vazia: %d %s", code, tc.out)
+	}
+	tc, code := run("remote", "add", "prod", "cais@prod.tail1234.ts.net")
+	if code != 0 || !strings.Contains(tc.out.String(), "VPS prod adicionada") || !strings.Contains(tc.out.String(), "Respondeu: cais v0.5.12") {
+		t.Fatalf("add: %d %s %s", code, tc.out, tc.errb)
+	}
+	if got := strings.Join(calls[0], " "); !strings.Contains(got, "BatchMode=yes") || !strings.HasSuffix(got, "-- cais@prod.tail1234.ts.net cais version") {
+		t.Errorf("ssh do add: %s", got)
+	}
+	if _, code := run("remote", "add", "x", "-oProxyCommand=touch /tmp/x"); code != 1 {
+		t.Errorf("destino que vira opcao do ssh: %d", code)
+	}
+	exit = 255 // o ssh nao entrou: grava, mas avisa
+	tc, _ = run("remote", "add", "dev", "cais@dev")
+	if !strings.Contains(tc.out.String(), "VPS dev adicionada") || !strings.Contains(tc.out.String(), "nao respondeu sem perguntar nada") {
+		t.Errorf("add sem resposta: %s", tc.out)
+	}
+	exit = 0
+	if tc, _ := run("remote"); !strings.Contains(tc.out.String(), "prod") || !strings.Contains(tc.out.String(), "cais@dev") {
+		t.Errorf("list: %s", tc.out)
+	}
+
+	// cais -r: a TUI (com terminal) e um comando, com o codigo de saida dele
+	calls = nil
+	if _, code := run("-r", "prod"); code != 0 || strings.Join(calls[0][len(calls[0])-3:], " ") != "-- cais@prod.tail1234.ts.net cais" || !slices.Contains(calls[0], "-t") {
+		t.Errorf("-r prod: %d %v", code, calls)
+	}
+	exit = 3
+	if _, code := run("-r", "dev", "update", "-version", "v0.5.12"); code != 3 || !strings.HasSuffix(strings.Join(calls[1], " "), "cais@dev cais update -version v0.5.12") {
+		t.Errorf("-r dev update: %d %v", code, calls[1])
+	}
+	exit = 0
+	if tc, code := run("-r", "homolog"); code != 1 || !strings.Contains(tc.errb.String(), "as VPS sao prod, dev") {
+		t.Errorf("-r de VPS que nao existe: %d %s", code, tc.errb)
+	}
+	if _, code := run("-r"); code != 2 {
+		t.Errorf("-r sem nome: %d", code)
+	}
+
+	if tc, code := run("remote", "remove", "dev"); code != 0 || !strings.Contains(tc.out.String(), "tirada da lista") {
+		t.Errorf("remove: %d %s", code, tc.out)
+	}
+	if _, code := run("remote", "remove", "dev"); code != 1 {
+		t.Errorf("remove de novo: %d", code)
+	}
 }

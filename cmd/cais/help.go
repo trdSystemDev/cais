@@ -54,7 +54,7 @@ journalctl -u cais | grep app=loja`},
 		{name: "state", usage: "state [--socket]", short: "imprime o estado atual em JSON"},
 		{name: "check", usage: "check [--socket]", short: "checa o ambiente e imprime o resultado em JSON", long: `
 Confere Docker e Docker Compose (instalados, versao, daemon no ar).`},
-		{name: "mcp", usage: "mcp [--socket]", short: "servidor MCP pelo stdin/stdout (pra IA, via ssh)", long: `
+		{name: "mcp", usage: "mcp [--socket] [--remotes]", short: "servidor MCP pelo stdin/stdout (pra IA, via ssh)", long: `
 Expoe o cais como ferramentas MCP: ler o estado, logs e a ajuda do compose;
 criar e atualizar app, deploy, restart, stop, variaveis (so os nomes voltam,
 nunca os valores), criar e ligar banco e bucket. Nada que apaga dados nem o
@@ -66,7 +66,13 @@ chama pelo ssh (a autenticacao e a sua chave SSH, sem porta nova).
 
 Exemplo (Claude Code, no seu computador):
   claude mcp add cais -- ssh cais@vps cais mcp   # instalado com --ssh
-  claude mcp add cais -- ssh root@vps cais mcp`},
+  claude mcp add cais -- ssh root@vps cais mcp
+
+Varias VPS num MCP so: com --remotes, roda no SEU computador e fala com as
+VPS da lista (cais remote add) pelo ssh de cada uma. Toda ferramenta ganha o
+argumento vps; mais o vps_list (versao e seguranca de cada uma) e o
+security_check sem vps (todas):
+  claude mcp add -s user cais -- cais mcp --remotes`},
 		{name: "run", usage: "run [-env arquivo] -- <comando> [args...]", short: "no container do app: injeta as variaveis e roda", long: `
 Roda dentro do container do app, como entrypoint: le as variaveis que o
 deploy gravou (montadas em /run/cais/env), junta ao ambiente e vira o comando
@@ -100,6 +106,20 @@ O log da atualizacao: sudo journalctl -u cais-update`},
 Exemplos:
   cais help app            comandos de app
   cais help app deploy     o mesmo que: cais app deploy -h`},
+	}},
+	{title: "Varias VPS (no seu computador; cada uma pelo ssh):", group: "remote", cmds: []command{
+		{name: "remote add", usage: "remote add NOME DESTINO", short: "poe a VPS na lista deste computador (cais -r e o MCP)", long: `
+A lista fica em ~/.config/cais/remotes.yaml (ou CAIS_REMOTES), so pro seu
+usuario. O mesmo nome troca o destino. Confere na hora: ssh DESTINO cais
+version, sem perguntar nada, como o MCP vai entrar (a chave no ssh-agent e a
+chave do host ja aceita).
+
+Depois:
+  cais -r NOME                 a TUI da VPS
+  cais -r NOME update          um comando nela (qualquer um do cais)
+  cais mcp --remotes           o MCP de todas (claude mcp add ...)`},
+		{name: "remote list", usage: "remote [list]", short: "as VPS da lista"},
+		{name: "remote remove", usage: "remote remove NOME", short: "tira a VPS da lista (nada muda nela)"},
 	}},
 	{title: "Seguranca da VPS (na propria VPS, com sudo; nao usa o daemon):", group: "host", cmds: []command{
 		{name: "host check", usage: "host [check]", short: "confere a seguranca da VPS e diz como corrigir", long: `
