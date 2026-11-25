@@ -395,7 +395,7 @@ func TestCheck(t *testing.T) {
 		"tcp   LISTEN 0 4096 0.0.0.0:22        0.0.0.0:*",
 		"tcp   LISTEN 0 4096 [::]:22           [::]:*",
 		"tcp   LISTEN 0 4096 127.0.0.1:5432    0.0.0.0:*",
-		"tcp   LISTEN 0 4096 0.0.0.0:3306      0.0.0.0:*",
+		`tcp   LISTEN 0 4096 0.0.0.0:3306      0.0.0.0:* users:(("mysqld",pid=812,fd=21))`,
 		"tcp   LISTEN 0 4096 0.0.0.0:5000      0.0.0.0:*",
 		"udp   UNCONN 0 0    127.0.0.53%lo:53  0.0.0.0:*",
 		"udp   UNCONN 0 0    0.0.0.0:68        0.0.0.0:*",
@@ -410,7 +410,7 @@ func TestCheck(t *testing.T) {
 	if !got["os"].OK {
 		t.Errorf("os: %+v", got["os"])
 	}
-	if d := got["ports"].Detail; !strings.Contains(d, "3306/tcp") || !strings.Contains(d, "5000/tcp (container loja-web-1)") ||
+	if d := got["ports"].Detail; !strings.Contains(d, "3306/tcp (mysqld)") || !strings.Contains(d, "5000/tcp (container loja-web-1)") ||
 		strings.Contains(d, "5432") || strings.Contains(d, "22/") || strings.Contains(d, ":53") || strings.Contains(d, "68/") {
 		t.Errorf("portas: %s", d)
 	}
@@ -432,6 +432,9 @@ func TestCheck(t *testing.T) {
 		"udp UNCONN 0 0 [::]:41641 [::]:*",
 		"tcp LISTEN 0 4096 100.90.100.127:60123 0.0.0.0:*",
 		"tcp LISTEN 0 4096 [fd7a:115c:a1e0::1]:60123 [::]:*",
+		// como o ss -tlnp mostra numa VPS de verdade: a interface depois do colchete
+		`tcp LISTEN 0 4096 [fd7a:115c:a1e0::dc28:f44c]%tailscale0:59208 [::]:* users:(("tailscaled",pid=126376,fd=26))`,
+		`tcp LISTEN 0 4096 100.118.244.75%tailscale0:41234 0.0.0.0:* users:(("tailscaled",pid=126376,fd=27))`,
 	}, "\n")
 	f.ps = "proxy-traefik-1\t0.0.0.0:443->443/tcp, 0.0.0.0:443->443/udp"
 	// depois do harden falta so o Tailscale; com ele conectado e o SSH so

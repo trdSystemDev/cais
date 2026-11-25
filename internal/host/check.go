@@ -302,20 +302,24 @@ func checkUpdates(ctx context.Context, sys System) Item {
 }
 
 // listener e uma porta aberta pra fora.
-type listener struct{ port, proto, who string }
+// listener e uma porta aberta: who e o container que a publicou; proc, o
+// processo que escuta nela (do ss -p).
+type listener struct{ port, proto, who, proc string }
 
 func (l listener) key() string { return l.port + "/" + l.proto }
 
 // public diz se o endereco aceita conexao de fora (nao e loopback nem
 // link-local).
 func public(addr string) bool {
-	addr = strings.Trim(addr, "[]")
+	// a interface vem depois do colchete no IPv6
+	// ([fd7a:115c:a1e0::1]%tailscale0): sai antes dos colchetes
 	if i := strings.IndexByte(addr, '%'); i >= 0 {
 		if addr[i+1:] == "lo" {
 			return false
 		}
 		addr = addr[:i]
 	}
+	addr = strings.Trim(addr, "[]")
 	if strings.HasPrefix(addr, "127.") || addr == "::1" || strings.HasPrefix(addr, "fe80:") || addr == "localhost" {
 		return false
 	}
@@ -345,7 +349,8 @@ func splitHostPort(s string) (string, string, bool) {
 // pelos containers (docker ps): o Docker passa por cima do ufw, entao uma
 // porta publicada fica exposta mesmo com o firewall ligado.
 func readListeners(ctx context.Context, sys System) ([]listener, error) {
-	out, err := sys.Run(ctx, "ss", "-H", "-tuln")
+	// -p: o processo de cada porta (o daemon roda como root, ve todos)
+	out, err := sys.Run(ctx, "ss", "-H", "-tulnp")
 	if err != nil {
 		return nil, err
 	}
@@ -355,6 +360,9 @@ func readListeners(ctx context.Context, sys System) ([]listener, error) {
 		if i, ok := seen[l.key()]; ok {
 			if l.who != "" {
 				ls[i].who = l.who
+			}
+			if ls[i].proc == "" {
+				ls[i].proc = l.proc
 			}
 			return
 		}
@@ -370,7 +378,7 @@ func readListeners(ctx context.Context, sys System) ([]listener, error) {
 		if !ok || !public(host) {
 			continue
 		}
-		add(listener{port: port, proto: f[0]})
+		add(listener{port: port, proto: f[0], proc: ssProcess(line)})
 	}
 	// sem docker, so o ss
 	if ps, err := sys.Run(ctx, "docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"); err == nil {
@@ -407,9 +415,12 @@ func checkPorts(ctx context.Context, sys System) Item {
 			continue
 		}
 		s := l.key()
-		if l.who != "" {
+		switch {
+		case l.who != "":
 			s += " (" + l.who + ")"
 			docker = true
+		case l.proc != "":
+			s += " (" + l.proc + ")"
 		}
 		extra = append(extra, s)
 	}
@@ -480,4 +491,14 @@ func Failed(items []Item) []Item {
 		}
 	}
 	return bad
+}
+
+// ssProcess e o processo da linha do ss -p: users:(("tailscaled",pid=1,fd=26)).
+func ssProcess(line string) string {
+	_, rest, ok := strings.Cut(line, `users:(("`)
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, `"`)
+	return name
 }
