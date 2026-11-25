@@ -447,7 +447,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			return m.updateCais()
 		}
 		if (k == "enter" || k == "r") && !m.state.Environment.Checking {
-			return tea.Batch(m.checkCmd(), m.dashRefresh(true))
+			return m.verifyCmd()
 		}
 	case tabApps:
 		return m.appsKey(msg)

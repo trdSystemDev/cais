@@ -411,7 +411,7 @@ func (m *model) overviewDeploys(right *strings.Builder, now time.Time, nameW, co
 // dashClick: avisos e apps levam aonde resolve.
 func (m *model) dashClick(msg tea.MouseMsg) tea.Cmd {
 	if m.zones.Get("check").InBounds(msg) && !m.state.Environment.Checking {
-		return tea.Batch(m.checkCmd(), m.dashRefresh(true))
+		return m.verifyCmd()
 	}
 	if m.zones.Get("dash-update").InBounds(msg) {
 		return m.updateCais()
@@ -461,6 +461,16 @@ func (m *model) dashRefresh(all bool) tea.Cmd {
 		cmds = append(cmds, m.healthCmd())
 	}
 	return tea.Batch(cmds...)
+}
+
+// verifyCmd e o Verificar do dashboard (botao, enter ou r): confere tudo
+// de novo e pergunta agora ao GitHub se ha versao nova do cais, sem esperar
+// as 6 horas entre as consultas.
+func (m *model) verifyCmd() tea.Cmd {
+	return tea.Batch(m.checkCmd(), m.dashRefresh(false), func() tea.Msg {
+		m.api.CheckUpdate(context.Background())
+		return nil
+	})
 }
 
 func (m *model) healthCmd() tea.Cmd {

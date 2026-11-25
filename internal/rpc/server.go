@@ -234,6 +234,7 @@ var handlers = map[string]handler{
 	MethodContainerStats:   get(core.API.ContainerStats),
 	MethodTrafficStats:     get(core.API.TrafficStats),
 	MethodHealthCheck:      get(core.API.CheckHealth),
+	MethodHealthUpdate:     get(core.API.CheckUpdate),
 	MethodInfraCheck:       get(core.API.CheckStacks),
 	MethodContainerLogs: func(s *server, c *conn, m message) (any, *Error) {
 		var p logsParams

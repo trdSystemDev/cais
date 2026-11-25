@@ -20,6 +20,7 @@ const (
 	MethodEnvironmentCheck = "environment.check"
 	MethodSystemStats      = "system.stats"
 	MethodHealthCheck      = "health.check"
+	MethodHealthUpdate     = "health.update"
 	MethodContainerStats   = "containers.stats"
 	MethodTrafficStats     = "traffic.stats"
 	MethodContainerLogs    = "infra.logs"

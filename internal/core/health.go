@@ -98,6 +98,16 @@ func (c *Core) CheckHealth(ctx context.Context) (Health, error) {
 	return s.Health, nil
 }
 
+// CheckUpdate e o CheckHealth sem esperar o intervalo do release: pergunta
+// agora ao GitHub qual e o mais novo (o Verificar do dashboard). Abrir a TUI
+// continua respeitando o intervalo.
+func (c *Core) CheckUpdate(ctx context.Context) (Health, error) {
+	c.health.mu.Lock()
+	c.health.releaseAt = time.Time{}
+	c.health.mu.Unlock()
+	return c.CheckHealth(ctx)
+}
+
 // readCerts le o acme.json do Traefik (dentro do container) quando o proxy
 // esta ligado com o Let's Encrypt; sem isso nao ha certificado pra vigiar.
 func (c *Core) readCerts(ctx context.Context) ([]Cert, error) {

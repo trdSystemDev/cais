@@ -2,8 +2,10 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,4 +185,42 @@ func TestDashboardAtualiza(t *testing.T) {
 	if s := screen(m); !strings.Contains(s, "Abra o cais de novo em alguns segundos") || strings.Contains(s, "caiu") {
 		t.Fatalf("depois do reinicio:\n%s", s)
 	}
+}
+
+// abrir a TUI respeita as 6 horas entre as consultas do release; o
+// Verificar (enter, r ou o botao) pergunta ao GitHub na hora
+func TestDashboardVerificarPerguntaOReleaseNaHora(t *testing.T) {
+	var mu sync.Mutex
+	asks, latest := 0, "v0.2.0"
+	root := t.TempDir()
+	c := core.New(core.Deps{TraefikMetrics: noTraffic, CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
+		SecretsDir: filepath.Join(root, "secrets"), Version: "v0.2.0",
+		LatestRelease: func(context.Context) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			asks++
+			return latest, nil
+		},
+		SelfUpdate: func(context.Context, string) error { return errors.New("sem atualizar nos testes") },
+		ComposePS:  func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
+	count := func() int { mu.Lock(); defer mu.Unlock(); return asks }
+	m := open(t, c)
+	waitFor(t, m, "Pronto.")
+	// a consulta de saude da abertura pergunta; a seguinte (outra abertura,
+	// dentro das 6h) nao
+	c.CheckHealth(context.Background())
+	c.CheckHealth(context.Background())
+	if count() != 1 {
+		t.Fatalf("dentro das 6h: %d consultas", count())
+	}
+
+	mu.Lock()
+	latest = "v0.3.0"
+	mu.Unlock()
+	press(t, m, "r")
+	waitFor(t, m, "Versao nova do cais: v0.3.0 (rodando v0.2.0)")
+	if count() != 2 {
+		t.Fatalf("Verificar: %d consultas", count())
+	}
+	waitFor(t, m, "Atualizar")
 }

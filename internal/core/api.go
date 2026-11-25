@@ -41,6 +41,9 @@ type API interface {
 	// versao nova do cais (com intervalo minimo entre consultas) e publica
 	// em State.Health.
 	CheckHealth(ctx context.Context) (Health, error)
+	// CheckUpdate e o CheckHealth perguntando agora o release mais novo,
+	// sem esperar o intervalo (o Verificar do dashboard).
+	CheckUpdate(ctx context.Context) (Health, error)
 	// CheckStacks pergunta ao docker o estado das stacks base.
 	CheckStacks(ctx context.Context) (Infra, error)
 

@@ -91,6 +91,10 @@ func (c *Client) CheckHealth(ctx context.Context) (core.Health, error) {
 	return result[core.Health](c, ctx, MethodHealthCheck, nil)
 }
 
+func (c *Client) CheckUpdate(ctx context.Context) (core.Health, error) {
+	return result[core.Health](c, ctx, MethodHealthUpdate, nil)
+}
+
 func (c *Client) TrafficStats(ctx context.Context) (core.Traffic, error) {
 	return result[core.Traffic](c, ctx, MethodTrafficStats, nil)
 }

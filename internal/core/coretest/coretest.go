@@ -113,6 +113,9 @@ func (f *Recorder) ContainerStats(context.Context) (core.ContainerUsage, error) 
 func (f *Recorder) CheckHealth(context.Context) (core.Health, error) {
 	return ret[core.Health](f, "CheckHealth")
 }
+func (f *Recorder) CheckUpdate(context.Context) (core.Health, error) {
+	return ret[core.Health](f, "CheckUpdate")
+}
 func (f *Recorder) CheckStacks(context.Context) (core.Infra, error) {
 	return ret[core.Infra](f, "CheckStacks")
 }
