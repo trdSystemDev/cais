@@ -30,10 +30,12 @@ const (
 	MethodSecretSet        = "secret.set"  // params: secretParams
 	MethodSetupPlan        = "setup.plan"
 	MethodNotifyTest       = "notify.test"
-	MethodHostHarden       = "host.harden"     // params: core.HardenRequest
-	MethodHostFix          = "host.fix"        // params: hostFixParams
-	MethodUpdate           = "cais.update"     // params: updateParams
-	MethodHostConfirm      = "host.confirm"    // params: hostConfirmParams
+	MethodHostHarden       = "host.harden"  // params: core.HardenRequest
+	MethodHostFix          = "host.fix"     // params: hostFixParams
+	MethodUpdate           = "cais.update"  // params: updateParams
+	MethodHostConfirm      = "host.confirm" // params: hostConfirmParams
+	MethodTailscaleConnect = "tailscale.connect"
+	MethodSSHClose         = "host.ssh-close"
 	MethodGitHubTest       = "github.test"     // params: githubTestParams
 	MethodGitHubLink       = "github.link"     // params: githubLinkParams
 	MethodGitHubConnect    = "github.connect"  // params: githubConnectParams

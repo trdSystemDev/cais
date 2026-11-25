@@ -55,6 +55,7 @@ func Check(ctx context.Context, sys System) []Item {
 
 	items := []Item{checkOS(sys)}
 	items = append(items, checkSSH(ctx, sys)...)
+	items = append(items, checkTailscale(ctx, sys)...)
 	if it, ok := checkCaisKeys(ctx, sys); ok {
 		items = append(items, it)
 	}
@@ -180,7 +181,9 @@ func readUFW(ctx context.Context, sys System) ufwStatus {
 func (s ufwStatus) extraRules() []string {
 	var extra []string
 	for _, to := range s.Allowed {
-		if to == "OpenSSH" {
+		// OpenSSH e o 22; as regras so da interface do Tailscale valem so
+		// pra tailnet
+		if to == "OpenSSH" || strings.HasSuffix(to, " on "+tailscaleIface) {
 			continue
 		}
 		ports, proto, hasProto := strings.Cut(to, "/")
@@ -212,11 +215,47 @@ func checkFirewall(ctx context.Context, sys System) Item {
 	case len(s.extraRules()) > 0:
 		it.Detail = "libera alem do SSH e do proxy: " + strings.Join(s.extraRules(), ", ")
 		it.Fix = "se nao precisa: sudo ufw delete allow <regra> (ex: sudo ufw delete allow " + s.extraRules()[0] + ")"
+	case tailnetSSH(s) && len(publicSSHRules(s)) == 0:
+		it.OK, it.Detail = true, "ligado; da internet so 80 e 443 (o SSH so pela tailnet)"
 	default:
 		it.OK, it.Detail = true, "ligado; so 22, 80 e 443 entram"
 	}
 	return it
 }
+
+// checkTailscale: a VPS na tailnet e, com ela, o SSH so por la (da
+// internet, so os sites). O segundo item so aparece com o Tailscale
+// conectado.
+func checkTailscale(ctx context.Context, sys System) []Item {
+	t := TailscaleStatus(ctx, sys)
+	ts := Item{ID: "tailscale", Title: "Tailscale (VPN pra administrar a VPS)", Fix: TailscaleFix}
+	switch {
+	case t.Connected():
+		ts.OK, ts.Detail = true, "conectado: "+cmpOr(t.Name, t.IP4())+" ("+t.IP4()+")"
+	case !t.Installed:
+		ts.Detail = "nao instalado: o SSH so pode ficar aberto pra internet"
+	case t.Error != "":
+		ts.Detail = "instalado, mas sem resposta: " + t.Error
+	default:
+		ts.Detail = "instalado, fora da tailnet (" + cmpOr(t.State, "sem login") + ")"
+	}
+	if !t.Connected() {
+		return []Item{ts}
+	}
+	ssh := Item{ID: "ssh-tailnet", Title: "SSH so pela tailnet", Fix: CloseSSHFix}
+	if SSHTailnetOnly(ctx, sys) {
+		ssh.OK, ssh.Detail = true, "da internet so 80 e 443; o SSH entra por "+cmpOr(t.Name, t.IP4())
+	} else {
+		ssh.Detail = "o 22 esta aberto pra internet (com chave e fail2ban, mas visivel pra quem varre portas)"
+	}
+	return []Item{ts, ssh}
+}
+
+// Consertos do Tailscale: pela TUI (a autorizacao e no navegador).
+const (
+	TailscaleFix = "Setup > Seguranca > Tailscale: Conectar (instala e mostra o link pra autorizar no navegador)"
+	CloseSSHFix  = "Setup > Seguranca > Tailscale: Fechar o SSH publico (volta sozinho em 5 min sem o Confirmar pela tailnet)"
+)
 
 func checkFail2ban(ctx context.Context, sys System) Item {
 	it := Item{ID: "fail2ban", Title: "fail2ban (bloqueia forca bruta no SSH)", Fix: HardenFix}

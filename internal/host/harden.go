@@ -445,9 +445,12 @@ func (h *hardener) firewall(ctx context.Context) (string, bool, error) {
 	if s.Unavailable != "" {
 		return "", false, errors.New("ufw: " + s.Unavailable)
 	}
+	// com o SSH so pela tailnet (Fechar o SSH publico), o 22 nao abre de
+	// novo pra internet
+	tailnet := tailnetSSH(s) && len(publicSSHRules(s)) == 0
 	missing := false
 	for _, p := range firewallPorts {
-		ok := slices.Contains(s.Allowed, p) || (p == "22/tcp" && (slices.Contains(s.Allowed, "OpenSSH") || slices.Contains(s.Allowed, "22")))
+		ok := slices.Contains(s.Allowed, p) || (p == "22/tcp" && (tailnet || slices.Contains(s.Allowed, "OpenSSH") || slices.Contains(s.Allowed, "22")))
 		missing = missing || !ok
 	}
 	if s.Active && s.DenyIn && !missing {
@@ -456,6 +459,9 @@ func (h *hardener) firewall(ctx context.Context) (string, bool, error) {
 	// o 22 entra antes de ligar: ligar sem ele derrubaria este ssh
 	cmds := [][]string{{"default", "deny", "incoming"}, {"default", "allow", "outgoing"}}
 	for _, p := range firewallPorts {
+		if p == "22/tcp" && tailnet {
+			continue
+		}
 		cmds = append(cmds, []string{"allow", p})
 	}
 	cmds = append(cmds, []string{"--force", "enable"})

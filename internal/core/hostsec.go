@@ -33,6 +33,20 @@ type Hardening struct {
 	RolledBack bool `json:"rolled_back,omitempty"`
 	// Fixing e o item da checagem sendo corrigido sozinho.
 	Fixing string `json:"fixing,omitempty"`
+	// Kind e o que mudou no SSH e espera a confirmacao: vazio e o Preparar
+	// VPS; KindSSHTailnet e o Fechar o SSH publico (so pela tailnet).
+	Kind string `json:"kind,omitempty"`
+}
+
+// KindSSHTailnet e o Fechar o SSH publico.
+const KindSSHTailnet = "ssh-tailnet"
+
+// kept diz se a mudanca no SSH ficou (nao voltou sozinha).
+func (c *Core) kept(kind string) bool {
+	if kind == KindSSHTailnet {
+		return c.deps.SSHTailnetOnly()
+	}
+	return c.deps.SSHHardened()
 }
 
 // Pending diz se o SSH espera a confirmacao de um login novo.
@@ -96,7 +110,8 @@ func (c *Core) HardenHost(ctx context.Context, req HardenRequest) error {
 // confirmou, talvez pelo CLI) ou voltou ao que era.
 func (c *Core) watchRollback(at time.Time, wait time.Duration) {
 	time.Sleep(wait)
-	hardened := c.deps.SSHHardened()
+	st, _ := c.Snapshot(context.Background())
+	hardened := c.kept(st.Hardening.Kind)
 	changed := false
 	c.update(func(s *State) {
 		h := &s.Hardening
@@ -133,16 +148,65 @@ func (c *Core) ConfirmHost(ctx context.Context, since time.Time) error {
 	if err != nil {
 		return err
 	}
-	hardened := ok || c.deps.SSHHardened()
+	hardened := ok || c.kept(h.Kind)
 	c.update(func(s *State) {
 		s.Hardening.RollbackAt = time.Time{}
 		s.Hardening.Confirmed = hardened
 		s.Hardening.RolledBack = !hardened
 	})
 	if !hardened {
+		if h.Kind == KindSSHTailnet {
+			return errors.New("tarde demais: o SSH ja abriu de novo pra internet; feche de novo pela tailnet")
+		}
 		return errors.New("tarde demais: o SSH ja voltou ao que era; rode o Preparar VPS de novo")
 	}
 	return nil
+}
+
+// ConnectTailscale poe a VPS na tailnet: instala o Tailscale se faltar e
+// devolve o link de login (AuthURL) pra autorizar no navegador; ja
+// conectada, devolve o status. Fora do MCP.
+func (c *Core) ConnectTailscale(ctx context.Context) (host.Tailscale, error) {
+	if !c.infra.TryLock() {
+		return host.Tailscale{}, ErrBusy
+	}
+	defer c.infra.Unlock()
+	ctx = context.WithoutCancel(ctx)
+	c.update(func(s *State) { s.Hardening.Fixing = "tailscale" })
+	ts, err := c.deps.ConnectTailscale(ctx)
+	c.update(func(s *State) { s.Hardening.Fixing = "" })
+	c.CheckEnvironment(ctx)
+	if err != nil {
+		c.deps.Logger.Warn("tailscale: conectar falhou", "erro", err)
+	} else {
+		c.deps.Logger.Info("tailscale", "estado", ts.State, "nome", ts.Name)
+	}
+	return ts, err
+}
+
+// CloseSSHPublic fecha o SSH pra internet (so pela tailnet; de fora, so 80
+// e 443). Como o Preparar VPS: volta sozinho em RollbackDelay sem a
+// confirmacao de uma sessao aberta depois (que so pode ter vindo pela
+// tailnet). Fora do MCP.
+func (c *Core) CloseSSHPublic(ctx context.Context) error {
+	if !c.infra.TryLock() {
+		return ErrBusy
+	}
+	defer c.infra.Unlock()
+	ctx = context.WithoutCancel(ctx)
+	res, err := c.deps.CloseSSH(ctx)
+	now := c.deps.Now()
+	if err == nil && res.PendingConfirm {
+		s := c.update(func(s *State) {
+			s.Hardening = Hardening{Kind: KindSSHTailnet, StartedAt: now, FinishedAt: now,
+				ReloadedAt: now, RollbackAt: now.Add(c.deps.RollbackDelay)}
+		})
+		at := s.Hardening.RollbackAt
+		go c.watchRollback(at, at.Sub(now)+rollbackGrace)
+		c.deps.Logger.Info("ssh fechado pra internet, esperando a confirmacao pela tailnet")
+	}
+	c.CheckEnvironment(ctx)
+	return err
 }
 
 // FixHostItem corrige um item da checagem de seguranca sozinho (firewall,

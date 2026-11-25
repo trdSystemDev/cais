@@ -24,6 +24,7 @@ func (c *Core) CheckEnvironment(ctx context.Context) (Environment, error) {
 	status := c.deps.CheckDocker(ctx)
 	host := currentHost()
 	security := c.deps.CheckHost(ctx)
+	ts := c.deps.TailscaleStatus(ctx)
 
 	s := c.update(func(s *State) {
 		c.checks--
@@ -32,6 +33,7 @@ func (c *Core) CheckEnvironment(ctx context.Context) (Environment, error) {
 		s.Environment.Host = host
 		s.Environment.Docker = dockerFromStatus(status)
 		s.Environment.Security = security
+		s.Environment.Tailscale = ts
 	})
 	return s.Environment, nil
 }

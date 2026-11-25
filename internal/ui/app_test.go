@@ -57,12 +57,38 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 		CheckHost: func(context.Context) []host.Item {
 			mu.Lock()
 			defer mu.Unlock()
-			return []host.Item{
+			items := []host.Item{
 				{ID: "ssh-root", Title: "Login do root pelo SSH", OK: vps.ssh, Detail: map[bool]string{true: "bloqueado", false: "permitido"}[vps.ssh]},
 				{ID: "firewall", Title: "Firewall (ufw)", OK: vps.firewall, Detail: "desligado", Fixable: !vps.firewall, Fix: host.HardenFix},
 				{ID: "ports", Title: "Portas abertas pra internet", Detail: "3306/tcp", Fix: "pare o servico ou escute so no 127.0.0.1"},
 				{ID: "reboot", Title: "Reinicio pendente", OK: vps.rebooted, Detail: "kernel novo", Fixable: !vps.rebooted},
 			}
+			if vps.tsConnected {
+				items = append(items, host.Item{ID: "ssh-tailnet", Title: "SSH so pela tailnet", OK: vps.sshTailnet, Detail: "o 22 esta aberto"})
+			}
+			return items
+		},
+		TailscaleStatus: func(context.Context) host.Tailscale {
+			mu.Lock()
+			defer mu.Unlock()
+			return vps.tailscale()
+		},
+		ConnectTailscale: func(context.Context) (host.Tailscale, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.tsInstalled, vps.tsAuth = true, "https://login.tailscale.com/a/abc123"
+			return vps.tailscale(), nil
+		},
+		CloseSSH: func(context.Context) (host.Result, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.sshTailnet = true
+			return host.Result{PendingConfirm: true}, nil
+		},
+		SSHTailnetOnly: func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return vps.sshTailnet
 		},
 		FixHost: func(_ context.Context, id string) (string, error) {
 			mu.Lock()
@@ -750,8 +776,11 @@ func TestInfraImportarBanco(t *testing.T) {
 type fakeVPS struct {
 	ssh, firewall bool
 	rebooted      bool
-	user, pass    string
-	terminal      []string // o ultimo console aberto: container e comando
+	// Tailscale: instalado, o link de login, conectado e o SSH so pela tailnet
+	tsInstalled, tsConnected, sshTailnet bool
+	tsAuth                               string
+	user, pass                           string
+	terminal                             []string // o ultimo console aberto: container e comando
 }
 
 var testVPS = &fakeVPS{}
@@ -760,4 +789,16 @@ var testVPS = &fakeVPS{}
 // o docker de verdade da maquina).
 func noTraffic(context.Context) (string, error) {
 	return "# HELP traefik_config_reloads_total x\ntraefik_config_reloads_total 1\n", nil
+}
+
+// tailscale e o status que a aba Seguranca ve.
+func (v *fakeVPS) tailscale() host.Tailscale {
+	t := host.Tailscale{Installed: v.tsInstalled, State: "NeedsLogin", AuthURL: v.tsAuth}
+	if !v.tsInstalled {
+		t.State = ""
+	}
+	if v.tsConnected {
+		t = host.Tailscale{Installed: true, State: "Running", Name: "srv.tail1234.ts.net", IPs: []string{"100.90.100.127"}, Tailnet: "patrick"}
+	}
+	return t
 }

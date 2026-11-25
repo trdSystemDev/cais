@@ -433,7 +433,12 @@ func TestSetupSeguranca(t *testing.T) {
 	waitFor(t, m, "Reiniciando: a VPS reinicia em 5 segundos")
 	waitFor(t, m, "2 de 4 itens pra corrigir")
 
-	// Preparar VPS: senhas diferentes nao vao
+	// Preparar VPS: fica embaixo (a pagina passa da tela): a roda do mouse
+	// desce ate ele. Senhas diferentes nao vao
+	for range 5 {
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	}
+	waitFor(t, m, "↑ mais acima")
 	click(t, m, "harden-open")
 	if !m.setup.typing() || m.setup.items[m.setup.focus].id != "hUser" {
 		t.Fatal("o formulario nao abriu no Admin")
@@ -512,4 +517,46 @@ func TestSetupConectaAoGitHub(t *testing.T) {
 	}
 	click(t, m, "ghTest")
 	waitFor(t, m, "instalado em: trdSystemDev.")
+}
+
+// o Tailscale na Seguranca: Instalar e conectar mostra o link de login; o
+// Ja autorizei confere; conectado, Fechar o SSH publico (dois apertos)
+// espera o Confirmar de uma sessao nova, como o Preparar VPS
+func TestSetupTailscale(t *testing.T) {
+	m, _ := openSetup(t)
+	click(t, m, "setup-sec:Seguranca")
+	waitFor(t, m, "Instalar e conectar")
+	click(t, m, "tsConnect")
+	waitFor(t, m, "https://login.tailscale.com/a/abc123")
+	click(t, m, "tsCheck")
+	waitFor(t, m, "Ainda nao: autorize no link")
+
+	testVPS.tsConnected = true
+	click(t, m, "tsCheck")
+	waitFor(t, m, "Conectado na tailnet: srv.tail1234.ts.net.")
+	waitFor(t, m, "✓ conectado")
+	if m.setup.index("tsCopy") >= 0 {
+		t.Fatal("o link continua depois de conectar")
+	}
+
+	click(t, m, "sshClose")
+	waitFor(t, m, "Aperte de novo pra fechar")
+	if testVPS.sshTailnet {
+		t.Fatal("fechou no primeiro aperto")
+	}
+	click(t, m, "sshClose")
+	waitFor(t, m, "O SSH fechou pra internet: confirme em")
+	waitFor(t, m, "cais@srv.tail1234.ts.net")
+	if !testVPS.sshTailnet || m.setup.index("hostConfirm") >= 0 {
+		t.Fatalf("fechar: tailnet=%v, a sessao antiga confirma=%v", testVPS.sshTailnet, m.setup.index("hostConfirm") >= 0)
+	}
+	if !strings.Contains(screen(m), "Esperando a confirmacao do SSH pela tailnet") {
+		t.Errorf("o Preparar VPS nao aponta pro Tailscale:\n%s", screen(m))
+	}
+
+	// a sessao nova (pela tailnet) confirma
+	m.setup.started = time.Now()
+	m.setup.setState(m.state)
+	click(t, m, "hostConfirm")
+	waitFor(t, m, "SSH confirmado: so pela tailnet")
 }

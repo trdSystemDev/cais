@@ -264,6 +264,8 @@ var handlers = map[string]handler{
 	MethodUpdate: call(func(a core.API, ctx context.Context, p updateParams) (core.UpdateResult, error) {
 		return a.UpdateCais(ctx, p.Version)
 	}),
+	MethodTailscaleConnect: get(core.API.ConnectTailscale),
+	MethodSSHClose:         run(core.API.CloseSSHPublic),
 	MethodHostConfirm: do(func(a core.API, ctx context.Context, p hostConfirmParams) error {
 		return a.ConfirmHost(ctx, p.Since)
 	}),

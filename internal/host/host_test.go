@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeSys e uma VPS simulada: arquivos em memoria e os comandos que o host
@@ -26,6 +27,10 @@ type fakeSys struct {
 	docker   bool
 	ss       string
 	ps       string
+	// tsState e o BackendState do Tailscale ("" = nao instalado); tsAuth, o
+	// link de login enquanto espera
+	tsState string
+	tsAuth  string
 	// fail devolve erro pro comando com esse prefixo
 	fail   map[string]string
 	calls  []string
@@ -67,6 +72,34 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 		last = args[len(args)-1]
 	}
 	switch {
+	case cmd == "tailscale version":
+		if f.tsState == "" {
+			return "", errors.New("exec: \"tailscale\": executable file not found in $PATH")
+		}
+		return "1.90.1", nil
+	case cmd == "tailscale status --json":
+		st := map[string]any{"BackendState": f.tsState, "AuthURL": f.tsAuth}
+		if f.tsState == "Running" {
+			st["Self"] = map[string]any{"DNSName": "srv1902144.tail1234.ts.net.", "TailscaleIPs": []string{"100.90.100.127", "fd7a:115c:a1e0::1"}}
+			st["CurrentTailnet"] = map[string]any{"Name": "patrick@exemplo.com"}
+		}
+		b, _ := json.Marshal(st)
+		if f.tsState != "Running" {
+			return string(b), errors.New("exit status 1")
+		}
+		return string(b), nil
+	case name == "curl" && strings.HasSuffix(last, ".tailscale-keyring.list"):
+		return "# Tailscale packages for ubuntu noble\ndeb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main", nil
+	case name == "env" && last == "tailscale" && slices.Contains(args, "install"):
+		f.tsState = "NeedsLogin"
+	case name == "systemd-run" && slices.Contains(args, "--unit="+TailscaleUpUnit):
+		f.tsAuth = "https://login.tailscale.com/a/abc123"
+	case strings.HasPrefix(cmd, "ufw allow in on tailscale0 to any port 22"):
+		if !slices.Contains(f.ufwRules, "22/tcp on tailscale0") {
+			f.ufwRules = append(f.ufwRules, "22/tcp on tailscale0")
+		}
+	case name == "ufw" && args[0] == "delete":
+		f.ufwRules = slices.DeleteFunc(f.ufwRules, func(r string) bool { return r == last })
 	case cmd == "getent group sudo":
 		var members []string
 		for u, gs := range f.groups {
@@ -391,9 +424,18 @@ func TestCheck(t *testing.T) {
 		"tcp LISTEN 0 4096 [fd7a:115c:a1e0::1]:60123 [::]:*",
 	}, "\n")
 	f.ps = "proxy-traefik-1\t0.0.0.0:443->443/tcp, 0.0.0.0:443->443/udp"
+	// depois do harden falta so o Tailscale; com ele conectado e o SSH so
+	// pela tailnet, tudo certo
 	items := Check(context.Background(), f)
-	if bad := Failed(items); len(bad) > 0 {
+	if bad := Failed(items); len(bad) != 1 || bad[0].ID != "tailscale" {
 		t.Errorf("depois do harden: %+v", bad)
+	}
+	f.tsState = "Running"
+	if _, err := CloseSSH(context.Background(), f); err != nil {
+		t.Fatal(err)
+	}
+	if bad := Failed(Check(context.Background(), f)); len(bad) > 0 {
+		t.Errorf("com o Tailscale: %+v", bad)
 	}
 
 	f.euid = 1000
@@ -517,5 +559,83 @@ func TestChavesDoCais(t *testing.T) {
 	f.files["/home/deploy/.ssh/authorized_keys"] = ""
 	if _, err := Fix(context.Background(), f, "ssh-cais"); err == nil || !strings.Contains(err.Error(), "ssh-copy-id") {
 		t.Errorf("sem chave nenhuma: %v", err)
+	}
+}
+
+// o Tailscale: instala, mostra o link de login, e com ele conectado o SSH
+// fecha pra internet (com a volta agendada antes) e o harden nao reabre
+func TestTailscale(t *testing.T) {
+	loginWait, loginPoll = time.Second, time.Millisecond
+	t.Cleanup(func() { loginWait, loginPoll = 30*time.Second, 500*time.Millisecond })
+	ctx := context.Background()
+	f := newFake()
+	f.ufwOn, f.ufwDeny, f.ufwRules = true, true, slices.Clone(firewallPorts)
+
+	if runtime.GOOS == "linux" {
+		got := checkByID(Check(ctx, f))
+		if it := got["tailscale"]; it.OK || !strings.Contains(it.Detail, "nao instalado") || it.Fixable {
+			t.Errorf("sem tailscale: %+v", it)
+		}
+		if _, ok := got["ssh-tailnet"]; ok {
+			t.Error("ssh-tailnet sem o tailscale conectado")
+		}
+	}
+	if _, err := CloseSSH(ctx, f); err == nil || !strings.Contains(err.Error(), "conecte o Tailscale") {
+		t.Fatalf("fechar sem tailscale: %v", err)
+	}
+
+	ts, err := ConnectTailscale(ctx, f)
+	if err != nil || ts.AuthURL != "https://login.tailscale.com/a/abc123" || ts.Connected() {
+		t.Fatalf("conectar: %+v %v", ts, err)
+	}
+	if !strings.Contains(f.files["/etc/apt/sources.list.d/tailscale.list"], "https://pkgs.tailscale.com/stable/ubuntu noble main") {
+		t.Errorf("repositorio: %q", f.files["/etc/apt/sources.list.d/tailscale.list"])
+	}
+	up := f.index(t, "systemd-run --unit="+TailscaleUpUnit)
+	if !strings.HasSuffix(f.calls[up], "tailscale up --accept-dns=false") {
+		t.Errorf("tailscale up: %s", f.calls[up])
+	}
+
+	// autorizado no navegador
+	f.tsState, f.tsAuth = "Running", ""
+	if ts, err := ConnectTailscale(ctx, f); err != nil || !ts.Connected() || ts.IP4() != "100.90.100.127" || ts.Name != "srv1902144.tail1234.ts.net" {
+		t.Fatalf("conectado: %+v %v", ts, err)
+	}
+	if runtime.GOOS == "linux" {
+		got := checkByID(Check(ctx, f))
+		if !got["tailscale"].OK || got["ssh-tailnet"].OK {
+			t.Errorf("conectado, 22 aberto: %+v %+v", got["tailscale"], got["ssh-tailnet"])
+		}
+	}
+
+	f.calls = nil
+	res, err := CloseSSH(ctx, f)
+	if err != nil || !res.PendingConfirm {
+		t.Fatalf("fechar o SSH: %+v %v", res, err)
+	}
+	allow, rollback, del := f.index(t, "ufw allow in on tailscale0"), f.index(t, "systemd-run --unit="+RollbackUnit), f.index(t, "ufw delete allow 22/tcp")
+	if !(allow < rollback && rollback < del) || !strings.HasSuffix(f.calls[rollback], "/usr/sbin/ufw allow 22/tcp") {
+		t.Errorf("ordem (liberar na tailnet, agendar a volta, fechar):\n%s", strings.Join(f.calls, "\n"))
+	}
+	if !SSHTailnetOnly(ctx, f) || slices.Contains(f.ufwRules, "22/tcp") {
+		t.Fatalf("regras: %v", f.ufwRules)
+	}
+	if res, err := CloseSSH(ctx, f); err != nil || res.PendingConfirm {
+		t.Errorf("fechar de novo: %+v %v", res, err)
+	}
+	if runtime.GOOS == "linux" {
+		got := checkByID(Check(ctx, f))
+		if !got["ssh-tailnet"].OK || !got["firewall"].OK || !strings.Contains(got["firewall"].Detail, "so 80 e 443") {
+			t.Errorf("fechado: %+v %+v", got["ssh-tailnet"], got["firewall"])
+		}
+	}
+
+	// o firewall do harden nao abre o 22 de novo
+	f.calls = nil
+	if _, err := Fix(ctx, f, "firewall"); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.ufwRules, "22/tcp") || slices.ContainsFunc(f.calls, func(c string) bool { return c == "ufw allow 22/tcp" }) {
+		t.Errorf("o firewall reabriu o 22: %v", f.ufwRules)
 	}
 }

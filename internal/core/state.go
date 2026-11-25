@@ -117,6 +117,8 @@ type Environment struct {
 	// Security e a checagem de seguranca da VPS (cais host check): SSH,
 	// firewall, fail2ban, atualizacoes, portas abertas.
 	Security []host.Item `json:"security,omitempty"`
+	// Tailscale e a VPN da VPS (o link de login enquanto espera).
+	Tailscale host.Tailscale `json:"tailscale"`
 }
 
 // Checked diz se ja houve ao menos uma checagem concluida.

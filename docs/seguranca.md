@@ -110,6 +110,36 @@ Cada passo confere antes e so muda o que falta: rodar de novo e seguro.
 A porta do SSH continua a 22. Com chave e fail2ban, trocar a porta so diminui
 o barulho no log.
 
+## Tailscale: SSH so pela VPN
+
+Com o Tailscale, o SSH (a TUI, o MCP e o admin) entra so pela sua tailnet, e
+da internet ficam abertas so a 80 e a 443 (os sites). Em **Setup >
+Seguranca > Tailscale**:
+
+1. **Instalar e conectar** instala o Tailscale pelo repositorio oficial
+   (Ubuntu e Debian) e mostra um link, como o Conectar do GitHub: abra no
+   navegador (ctrl+clique ou **Copiar link**), entre na sua conta e autorize
+   a VPS. Depois, **Ja autorizei**. A VPS entra na tailnet com um IP `100.x`
+   e um nome no MagicDNS (`srv.tailXXXX.ts.net`). O DNS da VPS e dos
+   containers nao muda (`--accept-dns=false`).
+2. Teste do seu computador, com o Tailscale ligado nele:
+   `ssh cais@<nome-ou-ip-da-tailnet>`.
+3. **Fechar o SSH publico** (dois cliques) libera o 22 so na interface do
+   Tailscale (`ufw allow in on tailscale0 to any port 22`), agenda a volta e
+   so entao tira a regra publica do 22. Como no harden: sem o **Confirmar** de
+   uma sessao aberta depois (que so pode ter vindo pela tailnet) em 5
+   minutos, o 22 abre de novo sozinho. Pelo CLI, a confirmacao e o mesmo
+   `sudo cais host confirm`.
+
+A checagem ganha dois itens: **Tailscale** (conectado) e, com ele, **SSH so
+pela tailnet**. O WireGuard do Tailscale (41641/udp) e o que escuta so nos IPs
+da tailnet (100.64.0.0/10) nao contam como porta aberta, e rodar o harden de
+novo nao reabre o 22.
+
+Apps so pra quem esta na tailnet (ex: `*.dev.exemplo.com.br` apontando pro
+IP `100.x` da VPS) tiram certificado pelo DNS da Cloudflare: ver
+[setup](setup.md#certificados-pelo-dns-cloudflare-e-tailscale).
+
 ## Portas e o Docker
 
 O Docker publica portas por fora do ufw: um `ports: "5432:5432"` fica aberto
@@ -133,6 +163,9 @@ E opcional e soma com o ufw: se usar, libere as mesmas portas (22, 80 e
 ## Trancado fora
 
 - **Antes do confirm**: espere 5 minutos, o SSH volta sozinho.
+- **SSH fechado pra internet e o Tailscale fora do ar**: pelo console do
+  painel da Hostinger, como root, `ufw allow 22/tcp` (abre o 22 de novo) e
+  conserte o Tailscale (`tailscale up`).
 - **Depois**: entre pelo console do painel da Hostinger (VPS > Terminal do
   navegador), como root, e:
   - apague `/etc/ssh/sshd_config.d/00-cais-harden.conf`;

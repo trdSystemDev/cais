@@ -35,6 +35,12 @@ type Deps struct {
 	FixHost     func(ctx context.Context, id string) (string, error)
 	ConfirmSSH  func(context.Context) (bool, error)
 	SSHHardened func() bool
+	// Tailscale: o status, conectar (instala e devolve o link de login),
+	// fechar o SSH pra internet e se ele ja so entra pela tailnet
+	TailscaleStatus  func(context.Context) host.Tailscale
+	ConnectTailscale func(context.Context) (host.Tailscale, error)
+	CloseSSH         func(context.Context) (host.Result, error)
+	SSHTailnetOnly   func() bool
 	// RollbackDelay e em quanto o SSH volta sozinho sem a confirmacao
 	// (padrao host.RollbackDelay, o mesmo do timer do systemd).
 	RollbackDelay time.Duration
@@ -206,6 +212,18 @@ func New(d Deps) *Core {
 	}
 	if d.SSHHardened == nil {
 		d.SSHHardened = func() bool { return host.SSHHardened(host.Local()) }
+	}
+	if d.TailscaleStatus == nil {
+		d.TailscaleStatus = func(ctx context.Context) host.Tailscale { return host.TailscaleStatus(ctx, host.Local()) }
+	}
+	if d.ConnectTailscale == nil {
+		d.ConnectTailscale = func(ctx context.Context) (host.Tailscale, error) { return host.ConnectTailscale(ctx, host.Local()) }
+	}
+	if d.CloseSSH == nil {
+		d.CloseSSH = func(ctx context.Context) (host.Result, error) { return host.CloseSSH(ctx, host.Local()) }
+	}
+	if d.SSHTailnetOnly == nil {
+		d.SSHTailnetOnly = func() bool { return host.SSHTailnetOnly(context.Background(), host.Local()) }
 	}
 	if d.RollbackDelay == 0 {
 		d.RollbackDelay = host.RollbackDelay

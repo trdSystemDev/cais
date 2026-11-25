@@ -237,6 +237,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.apps.wheel(msg.Button == tea.MouseWheelUp)
 			return m, nil
 		}
+		if m.tab == tabSetup && !m.disconnected && m.setup.sec != secBackups {
+			// o desenho limita ao fim; tira o foco do teclado pra roda mandar
+			if msg.Button == tea.MouseWheelUp {
+				m.setup.scroll = max(0, m.setup.scroll-3)
+			} else {
+				m.setup.scroll += 3
+			}
+			m.setup.inForm = false
+			return m, nil
+		}
 		if m.tab == tabDashboard && !m.disconnected {
 			if msg.Button == tea.MouseWheelUp {
 				m.dashScroll = max(0, m.dashScroll-3)

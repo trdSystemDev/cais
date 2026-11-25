@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
@@ -19,8 +20,33 @@ import (
 // Preparar VPS (o cais host harden pela TUI). Fica fora do MCP: a IA nao
 // mexe no SSH nem no firewall.
 
-// sshItems vao pelo Preparar VPS (o admin com chave vem antes).
-var sshItems = map[string]bool{"ssh-root": true, "ssh-password": true}
+// itemHints sao os itens que se corrigem numa secao abaixo, e onde.
+var itemHints = map[string]string{
+	"ssh-root": "corrige no Preparar VPS, abaixo", "ssh-password": "corrige no Preparar VPS, abaixo",
+	"tailscale": "conecta no Tailscale, abaixo", "ssh-tailnet": "fecha no Tailscale, abaixo",
+}
+
+// tsLinkShown e o link de login do Tailscale a mostrar: o da ultima
+// conexao pedida ou o que o tailscaled espera (vazio ja conectado).
+func (p *setupPage) tsLinkShown() string {
+	if p.env.Tailscale.Connected() {
+		return ""
+	}
+	if p.env.Tailscale.AuthURL != "" {
+		return p.env.Tailscale.AuthURL
+	}
+	return p.tsLink
+}
+
+// sshPublic diz se o SSH ainda abre pra internet com o Tailscale conectado.
+func (p *setupPage) sshPublic() bool {
+	for _, it := range p.env.Security {
+		if it.ID == "ssh-tailnet" {
+			return !it.OK
+		}
+	}
+	return false
+}
 
 // canConfirm diz se esta sessao pode confirmar o SSH: so uma aberta depois
 // da mudanca prova que o login por chave funciona.
@@ -38,6 +64,20 @@ func (p *setupPage) securityItems() []*item {
 		if it.Fixable && p.hard.Fixing != it.ID && !p.hard.Running {
 			add("fix:"+it.ID, "Corrigir", kindButton, nil)
 		}
+	}
+	// o Tailscale: conectar (e o link), depois fechar o SSH publico
+	ts := p.env.Tailscale
+	busy := p.hard.Running || p.hard.Fixing != "" || p.hard.Pending()
+	switch {
+	case busy:
+	case !ts.Connected():
+		add("tsConnect", "Conectar ao Tailscale", kindButton, nil)
+		if p.tsLinkShown() != "" {
+			add("tsCopy", "Copiar link", kindButton, nil)
+			add("tsCheck", "Ja autorizei", kindButton, nil)
+		}
+	case p.sshPublic():
+		add("sshClose", "Fechar o SSH publico", kindButton, nil)
 	}
 	switch {
 	case p.hard.Running:
@@ -83,6 +123,7 @@ func (p *setupPage) securitySig() string {
 		}
 	}
 	fmt.Fprintf(&b, "|%v|%v|%v|%v|%s", p.hard.Running, p.hard.Pending(), p.canConfirm(), p.hardenForm, p.hard.Fixing)
+	fmt.Fprintf(&b, "|%v|%v|%v", p.env.Tailscale.Connected(), p.tsLinkShown() != "", p.sshPublic())
 	return b.String()
 }
 
@@ -135,7 +176,7 @@ func (p *setupPage) viewSecurity(w int) string {
 		focusID = p.items[p.focus].id
 	}
 	button := func(id, label string, k btnKind) string {
-		return p.zones.Mark(id, t.button(label, k, focusID == id))
+		return focusMarked(focusID == id, p.zones.Mark(id, t.button(label, k, focusID == id)))
 	}
 	var rows []string
 
@@ -165,22 +206,25 @@ func (p *setupPage) viewSecurity(w int) string {
 			case p.hard.Fixing == it.ID:
 				line += "  " + t.fg(t.warn).Render("corrigindo...")
 			case it.Fixable && !p.hard.Running:
-				line += "  " + p.zones.Mark("fix:"+it.ID, t.chip("Corrigir", btnNormal, focusID == "fix:"+it.ID))
+				line += "  " + focusMarked(focusID == "fix:"+it.ID, p.zones.Mark("fix:"+it.ID, t.chip("Corrigir", btnNormal, focusID == "fix:"+it.ID)))
 			}
 			rows = append(rows, line)
 			switch {
 			case it.OK:
-			case sshItems[it.ID]:
-				rows = append(rows, wrap.PaddingLeft(2).Foreground(t.warn).Render("corrige no Preparar VPS, abaixo"))
+			case itemHints[it.ID] != "":
+				rows = append(rows, wrap.PaddingLeft(2).Foreground(t.warn).Render(itemHints[it.ID]))
 			case !it.Fixable && it.Fix != "":
 				rows = append(rows, wrap.PaddingLeft(2).Foreground(t.warn).Render(it.Fix))
 			}
 		}
 	}
 
+	rows = append(rows, p.viewTailscale(w, button)...)
+
 	// o Preparar VPS
 	rows = append(rows, "", t.rule(w), t.bold().Render("Preparar VPS"))
 	h := p.hard
+	tailnetPending := h.Pending() && h.Kind == core.KindSSHTailnet
 	if len(h.Steps) > 0 && (h.Running || h.Pending() || h.Error != "") {
 		for _, st := range h.Steps {
 			line := fmt.Sprintf("[%s] %s", stepMarks[st.Status], st.Desc)
@@ -201,6 +245,8 @@ func (p *setupPage) viewSecurity(w int) string {
 	switch {
 	case h.Running:
 		rows = append(rows, t.fg(t.warn).Render("Aplicando... pode fechar a TUI: o daemon termina sozinho."))
+	case tailnetPending:
+		rows = append(rows, muted.Width(w).Render("Esperando a confirmacao do SSH pela tailnet (Tailscale, acima)."))
 	case h.Pending():
 		left := max(0, time.Until(h.RollbackAt).Round(time.Second))
 		rows = append(rows,
@@ -238,7 +284,7 @@ func (p *setupPage) viewSecurity(w int) string {
 					marker = t.fg(t.accent).Bold(true).Render("› ")
 					label = t.fg(t.accent).Bold(true).Width(16).Render(f.label)
 				}
-				rows = append(rows, p.zones.Mark(f.id, marker+label+t.input(f.in, 30)))
+				rows = append(rows, focusMarked(focusID == f.id, p.zones.Mark(f.id, marker+label+t.input(f.in, 30))))
 			}
 			rows = append(rows, muted.Width(w).Render(
 				"A senha e so pro sudo do admin (o SSH continua so por chave); deixe vazia se o admin ja existe com senha."),
@@ -249,4 +295,101 @@ func (p *setupPage) viewSecurity(w int) string {
 	}
 	rows = append(rows, "", "  "+button("hostCheck", "Checar de novo", btnInfo))
 	return "\n" + strings.Join(rows, "\n")
+}
+
+// viewTailscale e a secao do Tailscale: conectar pelo link (como o GitHub)
+// e, conectado, fechar o SSH pra internet, com a contagem e o Confirmar.
+func (p *setupPage) viewTailscale(w int, button func(id, label string, k btnKind) string) []string {
+	t, ts, h := p.th, p.env.Tailscale, p.hard
+	muted := t.fg(t.muted)
+	wrap := lipgloss.NewStyle().Width(w)
+	rows := []string{"", t.rule(w), t.bold().Render("Tailscale") + muted.Render("  VPN pra administrar a VPS: o SSH so pela tailnet, da internet so 80 e 443")}
+	msg := func() {
+		if p.tsMsg != "" {
+			c := map[string]color.Color{"ok": t.ok, "warn": t.warn, "danger": t.danger}[p.tsMsgC]
+			rows = append(rows, wrap.Foreground(c).Render(p.tsMsg))
+		}
+	}
+	switch {
+	case p.hard.Fixing == "tailscale":
+		rows = append(rows, t.fg(t.warn).Render("Instalando e conectando o Tailscale (a instalacao pode levar um minuto)..."))
+		return rows
+	case !ts.Connected():
+		rows = append(rows, wrap.Render("Conectar instala o Tailscale (repositorio oficial) e mostra um link: abra no navegador, "+
+			"entre na sua conta e autorize a VPS. Ela entra na sua tailnet com um IP 100.x."), "")
+		if link := p.tsLinkShown(); link != "" {
+			rows = append(rows, "Abra no navegador (ctrl+clique) e autorize:",
+				t.fg(t.accent).Underline(true).Hyperlink(link).Render(link), "",
+				"  "+button("tsCopy", "Copiar link", btnNormal)+" "+button("tsCheck", "Ja autorizei", btnInfo))
+		} else {
+			label := "Conectar ao Tailscale"
+			if !ts.Installed {
+				label = "Instalar e conectar"
+			}
+			rows = append(rows, "  "+button("tsConnect", label, btnNormal))
+		}
+		msg()
+		return rows
+	}
+	rows = append(rows, t.fg(t.ok).Render("✓ conectado")+muted.Render(fmt.Sprintf("  %s  %s  tailnet %s", cmpOrUI(ts.Name, "-"), ts.IP4(), cmpOrUI(ts.Tailnet, "-"))))
+	switch {
+	case h.Pending() && h.Kind == core.KindSSHTailnet:
+		left := max(0, time.Until(h.RollbackAt).Round(time.Second))
+		rows = append(rows, "",
+			t.fg(t.warn).Bold(true).Render(fmt.Sprintf("O SSH fechou pra internet: confirme em %d:%02d.", int(left.Minutes()), int(left.Seconds())%60)),
+			wrap.Render("Sem fechar esta janela, abra OUTRA no seu computador (ligado no Tailscale) e entre pela tailnet: ssh cais@"+
+				cmpOrUI(ts.Name, ts.IP4())+". Se entrar, confirme por ela. Sem a confirmacao, o 22 abre de novo pra internet sozinho, "+
+				"e voce nao fica trancado fora."))
+		if p.canConfirm() {
+			rows = append(rows, "", "  "+button("hostConfirm", "Confirmar", btnNormal))
+		} else {
+			rows = append(rows, muted.Width(w).Render("Esta janela foi aberta antes de fechar: o Confirmar aparece na janela nova, aberta pela tailnet."))
+		}
+	case p.sshPublic():
+		text := "O SSH (22) ainda abre pra internet. Fechar deixa ele so pela tailnet: daqui pra frente, ssh cais@" +
+			cmpOrUI(ts.Name, ts.IP4()) + " (com o Tailscale ligado no seu computador). Se ninguem confirmar pela tailnet em 5 minutos, " +
+			"o 22 abre de novo sozinho. O console da Hostinger continua de emergencia."
+		rows = append(rows, "", wrap.Render(text))
+		label := "Fechar o SSH publico"
+		if p.sshCloseArm {
+			label = "Confirmar: fechar o 22"
+		}
+		rows = append(rows, "", "  "+button("sshClose", label, btnWarn))
+	case h.Confirmed && h.Kind == core.KindSSHTailnet:
+		rows = append(rows, t.fg(t.ok).Render("SSH confirmado: so pela tailnet; da internet so 80 e 443."))
+	case h.RolledBack && h.Kind == core.KindSSHTailnet:
+		rows = append(rows, wrap.Foreground(t.danger).Render("Ninguem confirmou pela tailnet e o 22 abriu de novo pra internet."))
+	default:
+		rows = append(rows, muted.Render("O SSH so entra pela tailnet; da internet so 80 e 443."))
+	}
+	msg()
+	return rows
+}
+
+// tsConnect pede ao daemon pra instalar (se faltar) e conectar o Tailscale.
+func (p *setupPage) tsConnect() tea.Cmd {
+	p.tsMsgC, p.tsMsg = "warn", "Conectando..."
+	return func() tea.Msg {
+		ts, err := p.api.ConnectTailscale(context.Background())
+		return tsConnectMsg{ts, err}
+	}
+}
+
+// sshClose fecha o SSH publico: o primeiro aperto so pergunta.
+func (p *setupPage) sshClose() tea.Cmd {
+	if !p.sshCloseArm {
+		p.sshCloseArm = true
+		p.tsMsgC, p.tsMsg = "warn", "Tem certeza? Confira antes que o ssh pela tailnet funciona no seu computador. Aperte de novo pra fechar."
+		return nil
+	}
+	p.sshCloseArm = false
+	p.tsMsgC, p.tsMsg = "warn", "Fechando o SSH pra internet..."
+	return func() tea.Msg { return sshCloseMsg{p.api.CloseSSHPublic(context.Background())} }
+}
+
+func cmpOrUI(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 // API e o contrato que toda interface usa pra falar com o nucleo. *Core
@@ -67,6 +68,12 @@ type API interface {
 	UpdateCais(ctx context.Context, version string) (UpdateResult, error)
 	// FixHostItem corrige so um item da checagem de seguranca (os Fixable).
 	FixHostItem(ctx context.Context, id string) (string, error)
+	// ConnectTailscale instala o Tailscale se faltar e devolve o link de
+	// login (ou o status, ja conectado).
+	ConnectTailscale(ctx context.Context) (host.Tailscale, error)
+	// CloseSSHPublic fecha o SSH pra internet (so pela tailnet); volta
+	// sozinho sem o ConfirmHost de uma sessao nova.
+	CloseSSHPublic(ctx context.Context) error
 	// ConfirmHost mantem o SSH do Preparar VPS; since e o inicio da sessao
 	// que confirma (tem que ser depois da mudanca).
 	ConfirmHost(ctx context.Context, since time.Time) error

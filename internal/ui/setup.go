@@ -20,6 +20,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 // item e cada coisa focavel do formulario, na ordem do Tab.
@@ -97,7 +98,16 @@ type setupPage struct {
 	ticking      bool
 	// rebootArm: o primeiro Corrigir do Reinicio pendente so pergunta
 	rebootArm bool
-	secSig    string // o que muda os itens da Seguranca
+	// scroll e a rolagem do painel (roda do mouse); o foco do teclado manda
+	// mais: a pagina rola ate ele
+	scroll int
+	// Tailscale: o link de login da ultima conexao, o Fechar o SSH publico
+	// armado (falta o segundo aperto) e a mensagem da secao
+	tsLink      string
+	sshCloseArm bool
+	tsMsg       string
+	tsMsgC      string
+	secSig      string // o que muda os itens da Seguranca
 }
 
 // Respostas das chamadas ao core (feitas fora do Update).
@@ -125,7 +135,16 @@ type (
 	hardenMsg      struct{ err error }
 	hostConfirmMsg struct{ err error }
 	hostTick       struct{}
-	githubTestMsg  struct {
+	tsConnectMsg   struct {
+		ts  host.Tailscale
+		err error
+	}
+	sshCloseMsg struct{ err error }
+	tsCheckMsg  struct {
+		env core.Environment
+		err error
+	}
+	githubTestMsg struct {
 		res github.Check
 		err error
 	}
@@ -332,6 +351,42 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 				"instale na pagina do app (Install App) e libere os repositorios."
 		default:
 			p.ghMsgC, p.ghMsg = "ok", "Conectou no app \""+msg.res.Name+"\", instalado em: "+strings.Join(msg.res.Installations, ", ")+"."
+		}
+	case tsCheckMsg:
+		// o Ja autorizei: o resultado da propria checagem (o estado pode
+		// chegar depois)
+		switch {
+		case msg.err != nil:
+			p.tsMsgC, p.tsMsg = "danger", "A checagem falhou: "+firstLine(msg.err.Error())
+		case msg.env.Tailscale.Connected():
+			ts := msg.env.Tailscale
+			p.env = msg.env
+			p.tsLink, p.tsMsgC, p.tsMsg = "", "ok", "Conectado na tailnet: "+cmpOrUI(ts.Name, ts.IP4())+"."
+			p.rebuild()
+			if i := p.index("sshClose"); i >= 0 {
+				return p.focusAt(i)
+			}
+		default:
+			p.tsMsgC, p.tsMsg = "warn", "Ainda nao: autorize no link e confira de novo."
+		}
+	case tsConnectMsg:
+		switch {
+		case msg.err != nil:
+			p.tsMsgC, p.tsMsg = "danger", "Nao conectou: "+firstLine(msg.err.Error())
+		case msg.ts.Connected():
+			p.tsLink, p.tsMsgC, p.tsMsg = "", "ok", "Conectado na tailnet: "+cmpOrUI(msg.ts.Name, msg.ts.IP4())+"."
+		default:
+			p.tsLink, p.tsMsgC, p.tsMsg = msg.ts.AuthURL, "", ""
+		}
+		p.rebuild()
+		if i := p.index("tsCopy"); i >= 0 {
+			return p.focusAt(i)
+		}
+	case sshCloseMsg:
+		if msg.err != nil {
+			p.tsMsgC, p.tsMsg = "danger", "Nao fechou: "+firstLine(msg.err.Error())
+		} else {
+			p.tsMsg = ""
 		}
 	case ghLinkMsg:
 		if msg.err != nil {
@@ -589,7 +644,24 @@ func (p *setupPage) move(d int) tea.Cmd {
 func (p *setupPage) activate(it *item) tea.Cmd {
 	armed := p.rebootArm
 	p.rebootArm = false
+	if it.id != "sshClose" && p.sshCloseArm {
+		p.sshCloseArm = false
+		p.tsMsg = ""
+	}
 	switch {
+	case it.id == "tsConnect":
+		return p.tsConnect()
+	case it.id == "tsCopy":
+		p.tsMsgC, p.tsMsg = "ok", "Link copiado (se o terminal nao deixar, selecione o link com o mouse; shift ou alt + arrastar)."
+		return tea.SetClipboard(p.tsLinkShown())
+	case it.id == "tsCheck":
+		p.tsMsgC, p.tsMsg = "warn", "Conferindo..."
+		return func() tea.Msg {
+			env, err := p.api.CheckEnvironment(context.Background())
+			return tsCheckMsg{env, err}
+		}
+	case it.id == "sshClose":
+		return p.sshClose()
 	case it.id == "fix:reboot" && !armed:
 		p.rebootArm = true
 		p.setStatus("warn", "Reiniciar a VPS? Os apps ficam fora 1 a 2 minutos e esta sessao cai (entre de novo depois). Aperte Corrigir de novo pra reiniciar.")
@@ -685,7 +757,7 @@ func (p *setupPage) click(msg tea.MouseMsg) (tea.Cmd, bool) {
 func (m *model) setSetupSec(i int) tea.Cmd {
 	m.setup.blur()
 	m.bk.deactivate()
-	m.setup.sec = i
+	m.setup.sec, m.setup.scroll = i, 0
 	if i == secBackups {
 		m.bk.fill(m.state.Backup)
 		return m.backupRefreshCmd()
@@ -813,9 +885,11 @@ func (p *setupPage) view(w, h int, pills string) string {
 	} else {
 		b.WriteString("\n" + p.viewForm(inner))
 	}
+	// o status fica no rodape do painel, fora da rolagem: sempre a vista
+	status := ""
 	if p.status != "" {
 		c := map[string]color.Color{"ok": t.ok, "warn": t.warn, "danger": t.danger}[p.statusC]
-		b.WriteString("\n\n" + wrap.Bold(true).Foreground(c).Render(p.status))
+		status = wrap.Bold(true).Foreground(c).Render(p.status)
 	}
 	if p.saveErr != "" {
 		b.WriteString("\n")
@@ -826,7 +900,11 @@ func (p *setupPage) view(w, h int, pills string) string {
 	if p.sec == secGeral {
 		b.WriteString("\n" + p.viewPlan(inner))
 	}
-	return t.panel(p.inForm, w, h).MaxHeight(h + 2).Render(b.String())
+	if status == "" {
+		return t.panel(p.inForm, w, h).MaxHeight(h + 2).Render(p.scrolled(b.String(), h))
+	}
+	room := h - 1 - lipgloss.Height(status)
+	return t.panel(p.inForm, w, h).MaxHeight(h + 2).Render(p.scrolled(b.String(), room) + "\n\n" + status)
 }
 
 // viewForm desenha os campos da sub-aba (no Geral, o GitHub App com o
@@ -1019,4 +1097,56 @@ func (p *setupPage) paste(msg tea.PasteMsg) tea.Cmd {
 	ti, cmd := it.input.Update(msg)
 	*it.input = ti
 	return cmd
+}
+
+// focusMark marca (sem aparecer) a linha do item com o foco, pro painel
+// rolar ate ele: um espaco de largura zero, tirado antes de desenhar.
+const focusMark = "\u200b"
+
+func focusMarked(focused bool, s string) string {
+	if focused {
+		return focusMark + s
+	}
+	return s
+}
+
+// scrolled corta o conteudo na altura h do painel: a primeira linha (as
+// sub-abas) fica, e o resto rola ate a linha com o foco (focusMark), ou
+// ate onde a roda do mouse levou (p.scroll), com "mais acima/abaixo" onde
+// cortou.
+func (p *setupPage) scrolled(content string, h int) string {
+	muted := p.th.fg(p.th.muted)
+	lines := strings.Split(content, "\n")
+	focus := -1
+	for i, l := range lines {
+		if strings.Contains(l, focusMark) {
+			lines[i] = strings.ReplaceAll(l, focusMark, "")
+			if focus < 0 {
+				focus = i
+			}
+		}
+	}
+	if h < 4 || len(lines) <= h {
+		p.scroll = 0
+		return strings.Join(lines, "\n")
+	}
+	head, body := lines[0], lines[1:]
+	room := h - 1
+	// o foco no meio, pra aparecer o que vem logo depois dele (o Aplicar
+	// embaixo dos campos)
+	off := min(max(p.scroll, 0), len(body)-room)
+	// recentra quando o foco chega perto da borda (4 linhas): o que vem
+	// logo depois dele (o Aplicar embaixo dos campos) tambem aparece
+	if focus > 0 && (focus-1 < off+1 || focus-1 > off+room-5) {
+		off = max(0, min(focus-1-room/2, len(body)-room))
+	}
+	p.scroll = off
+	visible := slices.Clone(body[off : off+room])
+	if off > 0 {
+		visible[0] = muted.Render("  ↑ mais acima")
+	}
+	if off+room < len(body) {
+		visible[len(visible)-1] = muted.Render("  ↓ mais abaixo")
+	}
+	return head + "\n" + strings.Join(visible, "\n")
 }

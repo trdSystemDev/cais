@@ -17,6 +17,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 // Call e uma chamada que o core falso recebeu (sem o ctx).
@@ -147,6 +148,10 @@ func (f *Recorder) UpdateCais(_ context.Context, version string) (core.UpdateRes
 func (f *Recorder) FixHostItem(_ context.Context, id string) (string, error) {
 	return ret[string](f, "FixHostItem", id)
 }
+func (f *Recorder) ConnectTailscale(context.Context) (host.Tailscale, error) {
+	return ret[host.Tailscale](f, "ConnectTailscale")
+}
+func (f *Recorder) CloseSSHPublic(context.Context) error { return only(f, "CloseSSHPublic") }
 func (f *Recorder) ConfirmHost(_ context.Context, since time.Time) error {
 	return only(f, "ConfirmHost", since)
 }

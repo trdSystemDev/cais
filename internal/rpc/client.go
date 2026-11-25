@@ -18,6 +18,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 // Client fala com o daemon pelo socket e implementa core.API: quem usa
@@ -140,6 +141,14 @@ func (c *Client) ConnectGitHub(ctx context.Context, code string) (core.GitHubCon
 
 func (c *Client) UpdateCais(ctx context.Context, version string) (core.UpdateResult, error) {
 	return result[core.UpdateResult](c, ctx, MethodUpdate, updateParams{Version: version})
+}
+
+func (c *Client) ConnectTailscale(ctx context.Context) (host.Tailscale, error) {
+	return result[host.Tailscale](c, ctx, MethodTailscaleConnect, nil)
+}
+
+func (c *Client) CloseSSHPublic(ctx context.Context) error {
+	return c.call(ctx, MethodSSHClose, nil, nil)
 }
 
 func (c *Client) ConfirmHost(ctx context.Context, since time.Time) error {
