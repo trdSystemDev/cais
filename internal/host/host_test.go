@@ -381,7 +381,15 @@ func TestCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.active["fail2ban"] = true
-	f.ss = "tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*\ntcp LISTEN 0 4096 *:443 *:*"
+	// com o Tailscale: o WireGuard dele e o que escuta so no IP da tailnet
+	f.ss = strings.Join([]string{
+		"tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*",
+		"tcp LISTEN 0 4096 *:443 *:*",
+		"udp UNCONN 0 0 0.0.0.0:41641 0.0.0.0:*",
+		"udp UNCONN 0 0 [::]:41641 [::]:*",
+		"tcp LISTEN 0 4096 100.90.100.127:60123 0.0.0.0:*",
+		"tcp LISTEN 0 4096 [fd7a:115c:a1e0::1]:60123 [::]:*",
+	}, "\n")
 	f.ps = "proxy-traefik-1\t0.0.0.0:443->443/tcp, 0.0.0.0:443->443/udp"
 	items := Check(context.Background(), f)
 	if bad := Failed(items); len(bad) > 0 {

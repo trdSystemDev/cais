@@ -127,6 +127,8 @@ func (m *model) onSvcConfigSaved(msg svcConfigSavedMsg) tea.Cmd {
 		m.setInfraPos(0)
 	}
 	m.svc.blur()
+	// o token foi pro secret: nao fica na tela
+	m.svc.token.SetValue("")
 	m.infraMsgStack = msg.name
 	switch {
 	case !m.serviceOn(msg.name):

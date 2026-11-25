@@ -178,6 +178,8 @@ func (e *cli) setupConfig(args []string) error {
 	tls := fs.String("tls", "", "letsencrypt (padrao) ou selfsigned (teste local)")
 	httpPort := fs.Int("http-port", 0, "porta http do proxy no host")
 	httpsPort := fs.Int("https-port", 0, "porta https do proxy no host")
+	dns := fs.String("dns", "", "prova do Let's Encrypt: cloudflare (pelo DNS; token em cais setup secret cloudflare_dns_token) ou none (porta 80)")
+	wild := fs.String("wildcards", "", "dominios com certificado curinga, separados por virgula (dev.exemplo.com.br cobre *.dev...); precisa do --dns")
 	behind := fs.Bool("behind-proxy", false, "proxy atras de outro desta VPS (nginx), so no 127.0.0.1; =false desliga")
 	ghAppID := fs.Int64("github-app-id", 0, "App ID do GitHub App do cais (baixa o codigo dos repositorios privados)")
 	hostS3 := fs.String("host-s3", "", "endpoint S3 do Garage (obrigatorio com o Garage ligado)")
@@ -212,6 +214,16 @@ func (e *cli) setupConfig(args []string) error {
 			cfg.Proxy.HTTPPort = *httpPort
 		case "https-port":
 			cfg.Proxy.HTTPSPort = *httpsPort
+		case "dns":
+			cfg.Proxy.DNS = *dns
+			if *dns == "none" {
+				cfg.Proxy.DNS, cfg.Proxy.Wildcards = "", nil
+			}
+		case "wildcards":
+			cfg.Proxy.Wildcards = nil
+			for _, w := range splitList(*wild) {
+				cfg.Proxy.Wildcards = append(cfg.Proxy.Wildcards, strings.ToLower(strings.TrimPrefix(w, "*.")))
+			}
 		case "behind-proxy":
 			cfg.Proxy.BehindProxy = *behind
 		case "github-app-id":

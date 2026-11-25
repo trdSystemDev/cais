@@ -67,6 +67,8 @@ stacks: [postgres, mysql, garage] # opcionais: so os que usar
 proxy:
   http_port: 80                 # outra porta so numa migracao
   https_port: 443
+  dns: cloudflare               # opcional: o Let's Encrypt prova pelo DNS
+  wildcards: [dev.exemplo.com.br] # opcional (com dns): curinga *.dev.exemplo.com.br
 hosts:
   s3: s3.exemplo.com.br         # endereco publico do S3; obrigatorio com o Garage
 github:
@@ -107,6 +109,39 @@ containers dela (`docker compose down`, sem `-v`) e o compose vira
 `docker-compose.yml.desativada`, como registro. Os volumes, com os dados, ficam;
 religar a stack traz tudo de volta. Stacks de versoes antigas do cais sao
 tratadas do mesmo jeito.
+
+## Certificados pelo DNS (Cloudflare) e Tailscale
+
+Por padrao o Let's Encrypt confere cada dominio acessando o site pela porta
+80. Isso nao funciona pra dominio que a internet nao alcanca, como apps de
+dev so na VPN: um `*.dev.exemplo.com.br` apontando pro IP do Tailscale da
+VPS (`100.x.y.z`). Pra esses, o proxy prova pelo **DNS da Cloudflare**: o
+Traefik cria um registro TXT com um token da API e o Let's Encrypt confere
+o TXT, sem acessar a VPS.
+
+1. Na Cloudflare, **My Profile > API Tokens**: um token com
+   **Zone > DNS > Edit** na zona do dominio (o modelo "Edit zone DNS").
+2. Na aba **Infra > proxy**, **Emissor: Let's Encrypt (DNS Cloudflare)**,
+   cole o **Token** (vai pro secret `cloudflare_dns_token`, so leitura no
+   container pelo `CF_DNS_API_TOKEN_FILE`; nunca no compose nem no `docker
+   inspect`) e, se quiser, os **Curingas**. **Salvar e aplicar**.
+   Pelo CLI: `cais setup secret cloudflare_dns_token` e
+   `cais setup config --dns cloudflare --wildcards dev.exemplo.com.br`.
+
+Com `dev.exemplo.com.br` nos curingas, o Traefik tira um certificado so pra
+`dev.exemplo.com.br` e `*.dev.exemplo.com.br` assim que sobe, e os apps
+debaixo dele ja nascem com HTTPS, sem pedir outro (e sem o nome de cada um
+aparecer nos registros publicos de certificados). Pelo DNS, **todo** dominio
+dos apps precisa estar na Cloudflare, na conta do token: dominio de cliente
+fora dela fica sem certificado. As portas do proxy tambem deixam de importar
+pro Let's Encrypt.
+
+O Tailscale em si e instalado na VPS (`curl -fsSL
+https://tailscale.com/install.sh | sh` e `sudo tailscale up`); a checagem
+de seguranca conta como esperados o WireGuard dele (41641/udp) e o que
+escuta so nos IPs da tailnet (100.64.0.0/10). O registro DNS aponta pro IP
+do Tailscale da VPS; ao reinstalar a VPS, o IP volta pelo painel do
+Tailscale (Edit machine IP) ou troque o registro.
 
 ## Portas do proxy
 

@@ -64,7 +64,28 @@ type Proxy struct {
 	// 127.0.0.1 (nada aberto na internet) e o Traefik confia no
 	// X-Forwarded-For dele, pros apps verem o IP de quem acessa.
 	BehindProxy bool `yaml:"behind_proxy,omitempty" json:"behind_proxy,omitempty"`
+	// DNS troca a prova do Let's Encrypt: vazio e pela porta 80 (o Let's
+	// Encrypt acessa o site); DNSCloudflare e por um registro TXT criado
+	// com o token da API da Cloudflare (secret cloudflare_dns_token). Pelo
+	// DNS sai certificado pra dominio que a internet nao alcanca (IP do
+	// Tailscale) e pra curinga; todo dominio dos apps precisa estar na
+	// Cloudflare.
+	DNS string `yaml:"dns,omitempty" json:"dns,omitempty"`
+	// Wildcards sao os dominios com certificado curinga (dev.exemplo.com.br
+	// cobre *.dev.exemplo.com.br): um certificado so pra todos os apps
+	// debaixo dele, que ja nascem com HTTPS. Precisa do DNS.
+	Wildcards []string `yaml:"wildcards,omitempty" json:"wildcards,omitempty"`
 }
+
+// DNSCloudflare e a prova do Let's Encrypt pelo DNS da Cloudflare.
+const DNSCloudflare = "cloudflare"
+
+// CloudflareTokenSecret e o secret com o token da API da Cloudflare
+// (permissao Zone > DNS > Edit).
+const CloudflareTokenSecret = "cloudflare_dns_token"
+
+// DNSChallenge diz se os certificados saem pela prova no DNS.
+func (c Config) DNSChallenge() bool { return c.LetsEncrypt() && c.Proxy.DNS != "" }
 
 // BehindProxyTrustedIPs sao as origens de quem o Traefik aceita o
 // X-Forwarded-For com BehindProxy: o loopback e as redes privadas, porque o
@@ -88,7 +109,8 @@ func (p Proxy) StandardPorts() bool {
 // PortsWarning e o aviso sobre portas fora do padrao com Let's Encrypt;
 // vazio quando nao ha o que avisar.
 func (c Config) PortsWarning() string {
-	if c.Proxy.StandardPorts() || !c.LetsEncrypt() {
+	// pelo DNS o Let's Encrypt nao acessa a VPS: porta nenhuma importa
+	if c.Proxy.StandardPorts() || !c.LetsEncrypt() || c.DNSChallenge() {
 		return ""
 	}
 	if c.Proxy.BehindProxy {
@@ -253,6 +275,20 @@ func (c Config) Validate() error {
 	if c.Proxy.BehindProxy && (c.Proxy.HTTPPort == DefaultHTTPPort || c.Proxy.HTTPSPort == DefaultHTTPSPort) {
 		errs = append(errs, errors.New("proxy: atras de outro proxy, use portas fora de 80/443 (o outro proxy esta nelas); "+
 			"terminada a migracao, desligue o behind_proxy e volte pra 80/443"))
+	}
+	if d := c.Proxy.DNS; d != "" && d != DNSCloudflare {
+		errs = append(errs, fmt.Errorf("proxy.dns: %q invalido (vazio, pela porta 80, ou %s)", d, DNSCloudflare))
+	}
+	if c.Proxy.DNS != "" && !c.LetsEncrypt() {
+		errs = append(errs, errors.New("proxy.dns: a prova pelo DNS e do Let's Encrypt; com a CA local (teste) nao vale"))
+	}
+	for _, w := range c.Proxy.Wildcards {
+		if err := validHost(w); err != nil || !strings.Contains(w, ".") {
+			errs = append(errs, fmt.Errorf("proxy.wildcards: %q invalido: o dominio sem o *. (ex: dev.exemplo.com.br cobre *.dev.exemplo.com.br)", w))
+		}
+	}
+	if len(c.Proxy.Wildcards) > 0 && !c.DNSChallenge() {
+		errs = append(errs, errors.New("proxy.wildcards: certificado curinga so sai pela prova no DNS (proxy.dns: cloudflare)"))
 	}
 	if b := c.Backup; b.Time != "" {
 		if _, _, ok := parseHHMM(b.Time); !ok {

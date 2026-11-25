@@ -48,7 +48,21 @@ services:
       - --entrypoints.websecure.http.tls.certresolver=le
       - --certificatesresolvers.le.acme.email={{.Email}}
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+{{- if .DNS}}
+      # prova pelo DNS: o Traefik cria um registro TXT com o token da API da
+      # Cloudflare (CF_DNS_API_TOKEN_FILE, abaixo). O Let's Encrypt nao acessa a
+      # VPS, entao serve pra dominio que a internet nao alcanca (Tailscale)
+      - --certificatesresolvers.le.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.le.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53
+{{- range $i, $d := .Wildcards}}
+      # curinga: um certificado pra {{$d}} e *.{{$d}}; os apps debaixo dele
+      # usam este e nao pedem outro
+      - --entrypoints.websecure.http.tls.domains[{{$i}}].main={{$d}}
+      - --entrypoints.websecure.http.tls.domains[{{$i}}].sans=*.{{$d}}
+{{- end}}
+{{- else}}
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+{{- end}}
 {{- else}}
       # tls: selfsigned -- certificado da CA local do cais como padrao
       - --providers.file.directory=/etc/traefik/dynamic
@@ -90,6 +104,13 @@ services:
 {{- if .LetsEncrypt}}
     volumes:
       - traefik_acme:/letsencrypt
+{{- if .DNS}}
+    # o token chega por arquivo (o lego le o _FILE): nao fica no docker inspect
+    environment:
+      CF_DNS_API_TOKEN_FILE: /run/secrets/cloudflare_dns_token
+    secrets:
+      - cloudflare_dns_token
+{{- end}}
 {{- else}}
     configs:
       - source: traefik_tls
@@ -151,6 +172,12 @@ networks:
 volumes:
   traefik_acme:
     name: traefik_acme
+{{- if .DNS}}
+
+secrets:
+  cloudflare_dns_token:
+    file: "{{secret "cloudflare_dns_token"}}"
+{{- end}}
 {{- else}}
 
 configs:

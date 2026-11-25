@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestSaveLoadIdaEVolta(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Email != want.Email || got.Hosts != want.Hosts ||
-		got.Proxy != want.Proxy || got.GitHub != want.GitHub ||
+		!reflect.DeepEqual(got.Proxy, want.Proxy) || got.GitHub != want.GitHub ||
 		strings.Join(got.Stacks, ",") != strings.Join(want.Stacks, ",") {
 		t.Fatalf("lido diferente do gravado:\n got %+v\nwant %+v", got, want)
 	}
@@ -276,5 +277,29 @@ func TestEmailSoComOProxy(t *testing.T) {
 	c.TLS, c.TestDomain = TLSSelfSigned, "trd.localhost"
 	if err := c.Validate(); err != nil {
 		t.Fatalf("CA local sem e-mail: %v", err)
+	}
+}
+
+// a prova pelo DNS e so do Let's Encrypt, e curinga so com ela
+func TestValidaDNSECuringas(t *testing.T) {
+	ok := Default()
+	ok.Proxy.DNS, ok.Proxy.Wildcards = DNSCloudflare, []string{"dev.trdsystem.cloud"}
+	ok.Proxy.HTTPPort, ok.Proxy.HTTPSPort = 8080, 8443
+	if err := ok.Validate(); err != nil || ok.PortsWarning() != "" {
+		t.Fatalf("dns com curinga: %v; aviso de porta: %q", err, ok.PortsWarning())
+	}
+	cases := map[string]func(*Config){
+		"provedor desconhecido": func(c *Config) { c.Proxy.DNS = "route53" },
+		"dns com a CA local":    func(c *Config) { c.Proxy.DNS, c.TLS, c.TestDomain = DNSCloudflare, TLSSelfSigned, "trd.localhost" },
+		"curinga sem dns":       func(c *Config) { c.Proxy.Wildcards = []string{"dev.trdsystem.cloud"} },
+		"curinga com *.":        func(c *Config) { c.Proxy.DNS, c.Proxy.Wildcards = DNSCloudflare, []string{"*.dev.trdsystem.cloud"} },
+		"curinga sem ponto":     func(c *Config) { c.Proxy.DNS, c.Proxy.Wildcards = DNSCloudflare, []string{"dev"} },
+	}
+	for name, mod := range cases {
+		c := Default()
+		mod(&c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: aceitou %+v", name, c.Proxy)
+		}
 	}
 }

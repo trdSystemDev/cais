@@ -32,7 +32,10 @@ type svcConfig struct {
 	active bool
 	s3     *textinput.Model // garage: endereco publico do S3
 	email  *textinput.Model
-	local  bool // CA local (teste) em vez do Let's Encrypt
+	local  bool             // CA local (teste) em vez do Let's Encrypt
+	dns    bool             // Let's Encrypt pela prova no DNS da Cloudflare
+	token  *textinput.Model // token da API da Cloudflare (vazio mantem o gravado)
+	wild   *textinput.Model // dominios curinga, separados por virgula
 	domain *textinput.Model
 	http   *textinput.Model
 	https  *textinput.Model
@@ -59,6 +62,9 @@ func newSvcConfig(api core.API, zones *zone.Manager, th theme) *svcConfig {
 		return &ti
 	}
 	p.email = mk("avisos do Let's Encrypt", 254, 28)
+	p.token = mk("vazio mantem o gravado", 200, 28)
+	p.token.EchoMode = textinput.EchoPassword
+	p.wild = mk("ex: dev.exemplo.com.br", 1000, 28)
 	p.domain = mk("ex: trd.localhost", 253, 28)
 	p.s3 = mk("ex: s3.exemplo.com.br", 253, 28)
 	p.http, p.https = mk(strconv.Itoa(config.DefaultHTTPPort), 5, 8), mk(strconv.Itoa(config.DefaultHTTPSPort), 5, 8)
@@ -74,7 +80,7 @@ func (p *svcConfig) setTheme(th theme) {
 }
 
 func (p *svcConfig) inputs() []*textinput.Model {
-	return []*textinput.Model{p.email, p.domain, p.http, p.https, p.s3}
+	return []*textinput.Model{p.email, p.token, p.wild, p.domain, p.http, p.https, p.s3}
 }
 
 // hasConfig diz se o servico tem o painel de config.
@@ -87,9 +93,12 @@ func (p *svcConfig) ids() []string {
 		return []string{"s3-host", "cfg-save"}
 	}
 	ids := []string{"cert-tls"}
-	if p.local {
+	switch {
+	case p.local:
 		ids = append(ids, "cert-domain")
-	} else {
+	case p.dns:
+		ids = append(ids, "cert-email", "cert-token", "cert-wild")
+	default:
 		ids = append(ids, "cert-email")
 	}
 	return append(ids, "ports-http", "ports-https", "ports-behind", "cfg-save")
@@ -101,6 +110,10 @@ func (p *svcConfig) input(id string) *textinput.Model {
 		return p.email
 	case "cert-domain":
 		return p.domain
+	case "cert-token":
+		return p.token
+	case "cert-wild":
+		return p.wild
 	case "ports-http":
 		return p.http
 	case "ports-https":
@@ -156,6 +169,9 @@ func (p *svcConfig) fill(c config.Config) {
 	}
 	p.email.SetValue(c.Email)
 	p.local = !c.LetsEncrypt()
+	p.dns = c.DNSChallenge()
+	p.token.SetValue("")
+	p.wild.SetValue(strings.Join(c.Proxy.Wildcards, ", "))
 	p.domain.SetValue(c.TestDomain)
 	p.http.SetValue("")
 	p.https.SetValue("")
@@ -189,6 +205,7 @@ func (p *svcConfig) save() tea.Cmd {
 	}
 	httpPort, httpsPort := port(p.http, config.DefaultHTTPPort), port(p.https, config.DefaultHTTPSPort)
 	email, local, domain, behind := strings.TrimSpace(p.email.Value()), p.local, strings.TrimSpace(p.domain.Value()), p.behind
+	dns, token, wild := p.dns && !p.local, strings.TrimSpace(p.token.Value()), wildcards(p.wild.Value())
 	name, s3 := p.name, strings.TrimSpace(p.s3.Value())
 	p.busy, p.err = true, ""
 	return func() tea.Msg {
@@ -207,7 +224,17 @@ func (p *svcConfig) save() tea.Cmd {
 		if local {
 			c.TLS, c.TestDomain = config.TLSSelfSigned, domain
 		}
+		c.Proxy.DNS, c.Proxy.Wildcards = "", nil
+		if dns {
+			c.Proxy.DNS, c.Proxy.Wildcards = config.DNSCloudflare, wild
+		}
 		c.Proxy.HTTPPort, c.Proxy.HTTPSPort, c.Proxy.BehindProxy = httpPort, httpsPort, behind
+		// o token antes da config: aplicar o proxy pelo DNS precisa dele
+		if dns && token != "" {
+			if err := p.api.SetSecret(ctx, config.CloudflareTokenSecret, token); err != nil {
+				return svcConfigSavedMsg{name, err}
+			}
+		}
 		return svcConfigSavedMsg{name, p.api.SaveConfig(ctx, c)}
 	}
 }
@@ -216,8 +243,15 @@ func (p *svcConfig) save() tea.Cmd {
 func (p *svcConfig) toggle(id string) tea.Cmd {
 	switch id {
 	case "cert-tls":
-		p.local = !p.local
-		// o e-mail vira o dominio do teste (ou o contrario) no mesmo lugar
+		// Let's Encrypt (porta 80) -> Let's Encrypt (DNS) -> CA local -> ...
+		switch {
+		case p.local:
+			p.local, p.dns = false, false
+		case p.dns:
+			p.local, p.dns = true, false
+		default:
+			p.dns = true
+		}
 		return p.setFocus(slices.Index(p.ids(), "cert-tls"))
 	case "ports-behind":
 		p.behind = !p.behind
@@ -332,17 +366,28 @@ func (p *svcConfig) view(c config.Config, on bool, w int) string {
 	}
 	b.WriteString(t.bold().Render("Certificados") + "  " + muted.Render("HTTPS dos apps") + "\n\n")
 	mode := "Let's Encrypt"
-	if p.local {
+	switch {
+	case p.local:
 		mode = "CA local (teste)"
+	case p.dns:
+		mode = "Let's Encrypt (DNS Cloudflare)"
 	}
-	sel := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(30).Render("‹ " + mode + " ›")
+	sel := lipgloss.NewStyle().Background(t.fieldBg).Foreground(t.fieldFg).Width(36).Render("‹ " + mode + " ›")
 	b.WriteString(p.zones.Mark("cert-tls", label("cert-tls", "Emissor")+sel) + "\n")
 	if p.local {
 		b.WriteString(field("cert-domain", "Dominio", 30) + "\n")
 		b.WriteString(note("So pra teste: a CA local do cais assina os nomes desse dominio (apps em <app>.<dominio>)."))
 	} else {
 		b.WriteString(field("cert-email", "E-mail", 30) + "\n")
-		b.WriteString(note("Cada app pede o proprio certificado; o Let's Encrypt avisa nesse e-mail se algum for vencer."))
+		if !p.dns {
+			b.WriteString(note("Cada app pede o proprio certificado; o Let's Encrypt avisa nesse e-mail se algum for vencer."))
+		}
+	}
+	if p.dns && !p.local {
+		b.WriteString(field("cert-token", "Token", 30) + "\n")
+		b.WriteString(note("Da Cloudflare, com Zone > DNS > Edit. Serve ate pra IP do Tailscale; os dominios precisam estar na Cloudflare."))
+		b.WriteString(field("cert-wild", "Curingas", 30) + "\n")
+		b.WriteString(note("Opcional: dev.exemplo.com.br cobre *.dev.exemplo.com.br com um certificado so."))
 	}
 
 	b.WriteString("\n" + t.rule(w) + "\n")
@@ -383,4 +428,17 @@ func (p *svcConfig) viewErr(b *strings.Builder, w int) {
 	for _, l := range strings.Split(p.err, "\n") {
 		b.WriteString(lipgloss.NewStyle().Width(w).Foreground(t.danger).Render("  "+l) + "\n")
 	}
+}
+
+// wildcards le a lista de curingas: separados por virgula ou espaco, sem o
+// "*." (a pessoa pode colar *.dev.exemplo.com.br).
+func wildcards(s string) []string {
+	var out []string
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
+		f = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(f), "*."))
+		if f != "" && !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }

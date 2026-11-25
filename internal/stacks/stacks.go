@@ -110,6 +110,10 @@ type vars struct {
 	BehindProxy bool
 	TrustedIPs  string
 	S3Host      string
+	// DNS: o Let's Encrypt prova pelo DNS da Cloudflare; Wildcards sao os
+	// dominios com certificado curinga
+	DNS       bool
+	Wildcards []string
 }
 
 var secretName = regexp.MustCompile(`^[a-z0-9_]+$`)
@@ -157,6 +161,8 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 		BehindProxy: c.Proxy.BehindProxy,
 		TrustedIPs:  config.BehindProxyTrustedIPs,
 		S3Host:      c.S3Host(),
+		DNS:         c.DNSChallenge(),
+		Wildcards:   c.Proxy.Wildcards,
 	})
 	if err != nil {
 		return Rendered{}, fmt.Errorf("stack %s: %w", name, err)

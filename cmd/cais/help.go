@@ -143,7 +143,7 @@ que prova que a chave funciona. Da sessao do root, recusa.`},
 Nao muda nada. Mostra a configuracao, o que falta informar e, dos servicos
 ligados, quais tem config salva ainda nao aplicada (aplique com
 "cais service <nome> on").`},
-		{name: "setup config", usage: "setup config [opcoes]", short: "grava o /etc/cais/config.yaml (so o que for passado)\n    --email --tls letsencrypt|selfsigned --test-domain --http-port --https-port\n    --behind-proxy --github-app-id --host-s3 --notify-from --notify-to", long: `
+		{name: "setup config", usage: "setup config [opcoes]", short: "grava o /etc/cais/config.yaml (so o que for passado)\n    --email --tls letsencrypt|selfsigned --test-domain --http-port --https-port\n    --dns cloudflare|none --wildcards --behind-proxy --github-app-id --host-s3\n    --notify-from --notify-to", long: `
 So o que for passado muda; o resto fica como esta no arquivo. Gravar nao
 sobe nada: vale ao ligar um servico, ou ao aplicar num que ja esta ligado
 ("cais service proxy on" de novo). Nao ha dominio da VPS: cada app traz o
@@ -154,9 +154,20 @@ Flags:
   --tls modo              letsencrypt (padrao) ou selfsigned (teste local)
   --test-domain dominio   so no modo de teste: os nomes que a CA local assina
                           (ex: trd.localhost; apps em <app>.trd.localhost)
+  --dns cloudflare|none   como o Let's Encrypt confere o dominio: none (padrao)
+                          acessa o site pela porta 80; cloudflare cria um
+                          registro TXT com o token da API (cais setup secret
+                          cloudflare_dns_token, permissao Zone > DNS > Edit).
+                          Pelo DNS sai certificado ate pra dominio que a
+                          internet nao alcanca (IP do Tailscale); todo
+                          dominio dos apps precisa estar na Cloudflare
+  --wildcards dominios    certificado curinga, separados por virgula:
+                          dev.exemplo.com.br cobre *.dev.exemplo.com.br (os
+                          apps debaixo dele ja nascem com HTTPS); com --dns
   --http-port porta       porta http do proxy no host (padrao 80)
   --https-port porta      porta https do proxy no host (padrao 443); fora de
-                          80/443 o Let's Encrypt nao emite: so pra teste
+                          80/443 o Let's Encrypt nao emite (a nao ser pelo
+                          --dns): so pra teste
   --behind-proxy          migracao com outro proxy da VPS (nginx) nas 80/443:
                           as portas escutam so no 127.0.0.1 e o Traefik aceita
                           o X-Forwarded-For dele (=false desliga, pra voltar
@@ -173,6 +184,8 @@ Os avisos sao e-mails pela Brevo quando um deploy automatico falha de vez
 Exemplos:
   cais setup config --email voce@exemplo.com.br --github-app-id 123456
   cais setup config --tls selfsigned --test-domain trd.localhost   # teste no PC
+  cais setup secret cloudflare_dns_token        # cola o token (sem eco)
+  cais setup config --dns cloudflare --wildcards dev.exemplo.com.br && cais service proxy on
   cais setup config --http-port 8080 --https-port 8443 && cais service proxy on
   cais setup config --http-port 8080 --https-port 8443 --behind-proxy   # atras do nginx`},
 		{name: "setup secret", usage: "setup secret <nome>", short: "grava um secret informado (le do stdin), ex: github_app_key", long: `

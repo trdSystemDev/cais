@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os/exec"
 	"runtime"
 	"slices"
@@ -29,10 +30,12 @@ type Item struct {
 const HardenFix = "sudo cais host harden -user NOME (cria o admin, so chave no SSH, firewall, fail2ban, atualizacoes)"
 
 // Portas que a VPS do cais abre pra fora: SSH e o proxy (HTTP, HTTPS e
-// HTTP/3). 68 e 546 sao o cliente DHCP da propria VPS.
+// HTTP/3). 68 e 546 sao o cliente DHCP da propria VPS; 41641/udp e o
+// WireGuard do Tailscale (conexao direta entre as maquinas da tailnet,
+// cifrada e so com as chaves dela).
 var publicPorts = map[string]bool{
 	"22/tcp": true, "80/tcp": true, "443/tcp": true, "443/udp": true,
-	"68/udp": true, "546/udp": true,
+	"68/udp": true, "546/udp": true, "41641/udp": true,
 }
 
 // firewallPorts sao as regras que o harden libera no ufw.
@@ -262,8 +265,21 @@ func public(addr string) bool {
 		}
 		addr = addr[:i]
 	}
-	return !(strings.HasPrefix(addr, "127.") || addr == "::1" || strings.HasPrefix(addr, "fe80:") || addr == "localhost")
+	if strings.HasPrefix(addr, "127.") || addr == "::1" || strings.HasPrefix(addr, "fe80:") || addr == "localhost" {
+		return false
+	}
+	// enderecos do Tailscale (100.64.0.0/10 e fd7a:115c:a1e0::/48): so as
+	// maquinas da tailnet chegam neles
+	if ip, err := netip.ParseAddr(addr); err == nil && (tailnet4.Contains(ip) || tailnet6.Contains(ip)) {
+		return false
+	}
+	return true
 }
+
+var (
+	tailnet4 = netip.MustParsePrefix("100.64.0.0/10")
+	tailnet6 = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
+)
 
 // splitHostPort separa "0.0.0.0:22", "[::]:22", "*:80", "127.0.0.53%lo:53".
 func splitHostPort(s string) (string, string, bool) {
