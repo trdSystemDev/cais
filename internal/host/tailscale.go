@@ -22,7 +22,10 @@ type Tailscale struct {
 	Name    string   `json:"name,omitempty"`
 	IPs     []string `json:"ips,omitempty"`
 	Tailnet string   `json:"tailnet,omitempty"`
-	Error   string   `json:"error,omitempty"`
+	// KeyExpiry e quando a chave da VPS na tailnet vence (zero: a expiracao
+	// esta desligada no painel, o certo pra servidor).
+	KeyExpiry time.Time `json:"key_expiry,omitzero"`
+	Error     string    `json:"error,omitempty"`
 }
 
 // Connected diz se a VPS esta na tailnet.
@@ -61,6 +64,7 @@ func TailscaleStatus(ctx context.Context, sys System) Tailscale {
 		Self         *struct {
 			DNSName      string
 			TailscaleIPs []string
+			KeyExpiry    *time.Time
 		}
 		CurrentTailnet *struct{ Name string }
 	}
@@ -75,6 +79,9 @@ func TailscaleStatus(ctx context.Context, sys System) Tailscale {
 	t.State, t.AuthURL = st.BackendState, st.AuthURL
 	if st.Self != nil && t.Connected() {
 		t.Name, t.IPs = strings.TrimSuffix(st.Self.DNSName, "."), st.Self.TailscaleIPs
+		if st.Self.KeyExpiry != nil {
+			t.KeyExpiry = *st.Self.KeyExpiry
+		}
 	}
 	if st.CurrentTailnet != nil {
 		t.Tailnet = st.CurrentTailnet.Name

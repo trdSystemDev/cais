@@ -110,6 +110,22 @@ Cada passo confere antes e so muda o que falta: rodar de novo e seguro.
 A porta do SSH continua a 22. Com chave e fail2ban, trocar a porta so diminui
 o barulho no log.
 
+## Pacotes do sistema: uma vez por mes
+
+As atualizacoes de seguranca chegam sozinhas, todo dia (unattended-upgrades).
+O resto (pacotes comuns e o Docker) fica pra voce, uma vez por mes. O item
+**Pacotes do sistema** da checagem conta o que o `full-upgrade` atualizaria
+agora (pela simulacao, `apt-get -s`: os phased updates do Ubuntu, liberados
+aos poucos, nao contam) e le no historico do apt (`/var/log/apt/history.log`,
+e o do mes anterior) a ultima atualizacao feita a mao; as do
+unattended-upgrades nao contam. Com pacote esperando e a ultima ha mais de 30
+dias, o item pede a atualizacao.
+
+O **Corrigir** (dois cliques) roda `apt-get update` e `full-upgrade`. Se o
+Docker atualizar, os containers reiniciam por alguns segundos; se o kernel
+atualizar, aparece o **Reinicio pendente**. A mao:
+`sudo apt update && sudo apt full-upgrade`.
+
 ## Tailscale: SSH so pela VPN
 
 Com o Tailscale, o SSH (a TUI, o MCP e o admin) entra so pela sua tailnet, e

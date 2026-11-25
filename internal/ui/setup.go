@@ -96,8 +96,9 @@ type setupPage struct {
 	hPass2       *textinput.Model
 	started      time.Time
 	ticking      bool
-	// rebootArm: o primeiro Corrigir do Reinicio pendente so pergunta
-	rebootArm bool
+	// fixArm: o Corrigir que pergunta antes (reiniciar, atualizar os
+	// pacotes) e foi apertado uma vez; o segundo aperto corrige
+	fixArm string
 	// scroll e a rolagem do painel (roda do mouse); o foco do teclado manda
 	// mais: a pagina rola ate ele
 	scroll int
@@ -419,6 +420,8 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 			p.setStatus("danger", "Nao deu pra corrigir: "+firstLine(msg.err.Error()))
 		} else if msg.id == "reboot" {
 			p.setStatus("warn", "Reiniciando: "+msg.detail)
+		} else if msg.id == "upgrades" {
+			p.setStatus("ok", "Pacotes atualizados: "+msg.detail)
 		} else {
 			p.setStatus("ok", "Corrigido. "+msg.detail)
 		}
@@ -642,8 +645,8 @@ func (p *setupPage) move(d int) tea.Cmd {
 
 // activate e o Enter, espaco ou clique num item que nao e campo de texto.
 func (p *setupPage) activate(it *item) tea.Cmd {
-	armed := p.rebootArm
-	p.rebootArm = false
+	armed := p.fixArm == it.id
+	p.fixArm = ""
 	if it.id != "sshClose" && p.sshCloseArm {
 		p.sshCloseArm = false
 		p.tsMsg = ""
@@ -662,9 +665,9 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		}
 	case it.id == "sshClose":
 		return p.sshClose()
-	case it.id == "fix:reboot" && !armed:
-		p.rebootArm = true
-		p.setStatus("warn", "Reiniciar a VPS? Os apps ficam fora 1 a 2 minutos e esta sessao cai (entre de novo depois). Aperte Corrigir de novo pra reiniciar.")
+	case confirmFix[it.id] != "" && !armed:
+		p.fixArm = it.id
+		p.setStatus("warn", confirmFix[it.id])
 		return nil
 	case it.id == "save":
 		return p.save()
@@ -672,7 +675,7 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		return p.notifyTest()
 	case strings.HasPrefix(it.id, "fix:"):
 		id := strings.TrimPrefix(it.id, "fix:")
-		p.setStatus("warn", "Corrigindo...")
+		p.setStatus("warn", map[bool]string{true: "Atualizando os pacotes (pode levar alguns minutos)...", false: "Corrigindo..."}[id == "upgrades"])
 		return func() tea.Msg {
 			detail, err := p.api.FixHostItem(context.Background(), id)
 			return hostFixMsg{id, detail, err}
@@ -1149,4 +1152,12 @@ func (p *setupPage) scrolled(content string, h int) string {
 		visible[len(visible)-1] = muted.Render("  ↓ mais abaixo")
 	}
 	return head + "\n" + strings.Join(visible, "\n")
+}
+
+// confirmFix sao os Corrigir que perguntam antes (o que o segundo aperto
+// faz pode derrubar algo).
+var confirmFix = map[string]string{
+	"fix:reboot": "Reiniciar a VPS? Os apps ficam fora 1 a 2 minutos e esta sessao cai (entre de novo depois). Aperte Corrigir de novo pra reiniciar.",
+	"fix:upgrades": "Atualizar os pacotes do sistema? Leva alguns minutos; se o Docker atualizar, os apps reiniciam por alguns segundos. " +
+		"Aperte Corrigir de novo pra atualizar.",
 }

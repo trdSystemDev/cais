@@ -535,6 +535,7 @@ func TestSetupTailscale(t *testing.T) {
 	click(t, m, "tsCheck")
 	waitFor(t, m, "Conectado na tailnet: srv.tail1234.ts.net.")
 	waitFor(t, m, "✓ conectado")
+	waitFor(t, m, "A chave da VPS vence em 24/05/2027")
 	if m.setup.index("tsCopy") >= 0 {
 		t.Fatal("o link continua depois de conectar")
 	}

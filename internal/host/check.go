@@ -63,6 +63,7 @@ func Check(ctx context.Context, sys System) []Item {
 		checkFirewall(ctx, sys),
 		checkFail2ban(ctx, sys),
 		checkUpdates(ctx, sys),
+		checkUpgrades(ctx, sys),
 		checkPorts(ctx, sys),
 		checkDockerLogs(ctx, sys),
 		checkReboot(sys),
@@ -242,19 +243,30 @@ func checkTailscale(ctx context.Context, sys System) []Item {
 	if !t.Connected() {
 		return []Item{ts}
 	}
+	// a chave da VPS vence (180 dias, por padrao): com o SSH so pela
+	// tailnet, vencida, so o console do provedor entra
+	key := Item{ID: "tailscale-key", Title: "Chave do Tailscale sem vencimento", Fix: TailscaleKeyFix}
+	if t.KeyExpiry.IsZero() {
+		key.OK, key.Detail = true, "nao vence (expiracao desligada no painel)"
+	} else {
+		days := int(time.Until(t.KeyExpiry).Hours() / 24)
+		key.Detail = fmt.Sprintf("vence em %s (%d dias): vencida, a VPS sai da tailnet e o SSH por ela para", t.KeyExpiry.Local().Format("02/01/2006"), max(days, 0))
+	}
 	ssh := Item{ID: "ssh-tailnet", Title: "SSH so pela tailnet", Fix: CloseSSHFix}
 	if SSHTailnetOnly(ctx, sys) {
 		ssh.OK, ssh.Detail = true, "da internet so 80 e 443; o SSH entra por "+cmpOr(t.Name, t.IP4())
 	} else {
 		ssh.Detail = "o 22 esta aberto pra internet (com chave e fail2ban, mas visivel pra quem varre portas)"
 	}
-	return []Item{ts, ssh}
+	return []Item{ts, key, ssh}
 }
 
 // Consertos do Tailscale: pela TUI (a autorizacao e no navegador).
 const (
 	TailscaleFix = "Setup > Seguranca > Tailscale: Conectar (instala e mostra o link pra autorizar no navegador)"
 	CloseSSHFix  = "Setup > Seguranca > Tailscale: Fechar o SSH publico (volta sozinho em 5 min sem o Confirmar pela tailnet)"
+	// so o painel do Tailscale desliga a expiracao (nao ha comando na VPS)
+	TailscaleKeyFix = "no painel do Tailscale (login.tailscale.com/admin/machines), no menu ... da VPS: Disable key expiry"
 )
 
 func checkFail2ban(ctx context.Context, sys System) Item {

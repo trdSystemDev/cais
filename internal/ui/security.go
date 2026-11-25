@@ -332,6 +332,10 @@ func (p *setupPage) viewTailscale(w int, button func(id, label string, k btnKind
 		return rows
 	}
 	rows = append(rows, t.fg(t.ok).Render("✓ conectado")+muted.Render(fmt.Sprintf("  %s  %s  tailnet %s", cmpOrUI(ts.Name, "-"), ts.IP4(), cmpOrUI(ts.Tailnet, "-"))))
+	if !ts.KeyExpiry.IsZero() {
+		rows = append(rows, wrap.Foreground(t.warn).Render("A chave da VPS vence em "+ts.KeyExpiry.Local().Format("02/01/2006")+
+			": vencida, ela sai da tailnet. No painel do Tailscale (login.tailscale.com/admin/machines), menu ... da VPS: Disable key expiry."))
+	}
 	switch {
 	case h.Pending() && h.Kind == core.KindSSHTailnet:
 		left := max(0, time.Until(h.RollbackAt).Round(time.Second))

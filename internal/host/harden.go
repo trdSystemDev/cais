@@ -606,6 +606,7 @@ var fixers = map[string]struct {
 	"docker-logs": {nil, func(h *hardener) stepFunc { return h.dockerLogs }},
 	"ssh-cais":    {nil, func(h *hardener) stepFunc { return h.caisKeys }},
 	"reboot":      {nil, func(h *hardener) stepFunc { return h.reboot }},
+	"upgrades":    {nil, func(h *hardener) stepFunc { return h.upgrade }},
 }
 
 // Fix corrige um item da checagem (firewall, fail2ban, updates,

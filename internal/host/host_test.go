@@ -1,6 +1,8 @@
 package host
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,8 +31,10 @@ type fakeSys struct {
 	ps       string
 	// tsState e o BackendState do Tailscale ("" = nao instalado); tsAuth, o
 	// link de login enquanto espera
-	tsState string
-	tsAuth  string
+	tsState  string
+	tsAuth   string
+	tsExpiry string // KeyExpiry da VPS (vazio: nao vence)
+	aptSim   string // a saida do apt-get -s full-upgrade
 	// fail devolve erro pro comando com esse prefixo
 	fail   map[string]string
 	calls  []string
@@ -72,6 +76,8 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 		last = args[len(args)-1]
 	}
 	switch {
+	case strings.HasPrefix(cmd, "apt-get -s"):
+		return f.aptSim, nil
 	case cmd == "tailscale version":
 		if f.tsState == "" {
 			return "", errors.New("exec: \"tailscale\": executable file not found in $PATH")
@@ -80,7 +86,11 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 	case cmd == "tailscale status --json":
 		st := map[string]any{"BackendState": f.tsState, "AuthURL": f.tsAuth}
 		if f.tsState == "Running" {
-			st["Self"] = map[string]any{"DNSName": "srv1902144.tail1234.ts.net.", "TailscaleIPs": []string{"100.90.100.127", "fd7a:115c:a1e0::1"}}
+			self := map[string]any{"DNSName": "srv1902144.tail1234.ts.net.", "TailscaleIPs": []string{"100.90.100.127", "fd7a:115c:a1e0::1"}}
+			if f.tsExpiry != "" {
+				self["KeyExpiry"] = f.tsExpiry
+			}
+			st["Self"] = self
 			st["CurrentTailnet"] = map[string]any{"Name": "patrick@exemplo.com"}
 		}
 		b, _ := json.Marshal(st)
@@ -596,14 +606,23 @@ func TestTailscale(t *testing.T) {
 		t.Errorf("tailscale up: %s", f.calls[up])
 	}
 
-	// autorizado no navegador
+	// autorizado no navegador; a chave vence em 180 dias (o padrao)
 	f.tsState, f.tsAuth = "Running", ""
+	f.tsExpiry = time.Now().Add(180 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if runtime.GOOS == "linux" {
+		got := checkByID(Check(ctx, f))
+		if it := got["tailscale-key"]; it.OK || !strings.Contains(it.Detail, "vence em") || !strings.Contains(it.Detail, "(179 dias)") ||
+			!strings.Contains(it.Fix, "Disable key expiry") {
+			t.Errorf("chave vencendo: %+v", it)
+		}
+	}
+	f.tsExpiry = "" // Disable key expiry no painel
 	if ts, err := ConnectTailscale(ctx, f); err != nil || !ts.Connected() || ts.IP4() != "100.90.100.127" || ts.Name != "srv1902144.tail1234.ts.net" {
 		t.Fatalf("conectado: %+v %v", ts, err)
 	}
 	if runtime.GOOS == "linux" {
 		got := checkByID(Check(ctx, f))
-		if !got["tailscale"].OK || got["ssh-tailnet"].OK {
+		if !got["tailscale"].OK || !got["tailscale-key"].OK || got["ssh-tailnet"].OK {
 			t.Errorf("conectado, 22 aberto: %+v %+v", got["tailscale"], got["ssh-tailnet"])
 		}
 	}
@@ -637,5 +656,93 @@ func TestTailscale(t *testing.T) {
 	}
 	if slices.Contains(f.ufwRules, "22/tcp") || slices.ContainsFunc(f.calls, func(c string) bool { return c == "ufw allow 22/tcp" }) {
 		t.Errorf("o firewall reabriu o 22: %v", f.ufwRules)
+	}
+}
+
+// o history.log e o apt-get -s como no Ubuntu 26.04 (capturados num
+// container): so conta a atualizacao feita a mao; a do unattended-upgrades
+// e as instalacoes nao
+const aptHistoryLog = `
+Start-Date: 2026-10-16  17:16:32
+Commandline: apt-get --yes -oDebug::pkgDepCache::AutoInstall=yes --no-install-recommends --force-yes upgrade
+Upgrade: libc-bin:amd64 (2.43-2ubuntu2.1, 2.43-2ubuntu2.4)
+End-Date: 2026-10-16  17:16:40
+
+Start-Date: 2026-11-20  20:17:21
+Commandline: /usr/bin/unattended-upgrade -v
+Upgrade: libc-bin:amd64 (2.43-2ubuntu2.4, 2.43-2ubuntu2.7)
+End-Date: 2026-11-20  20:17:28
+
+Start-Date: 2026-11-21  09:00:00
+Commandline: apt-get install -y -qq --allow-downgrades diffutils=1:3.12-1
+Downgrade: diffutils:amd64 (1:3.12-1ubuntu0.1, 1:3.12-1)
+End-Date: 2026-11-21  09:00:02
+`
+
+const aptSimulation = `Reading package lists...
+Building dependency tree...
+Calculating upgrade...
+The following packages will be upgraded:
+  base-files diffutils distro-info-data
+3 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+Inst base-files [14ubuntu6] (14ubuntu6.3 Ubuntu:26.04/resolute-updates [amd64])
+Inst diffutils [1:3.12-1] (1:3.12-1ubuntu0.1 Ubuntu:26.04/resolute-updates [amd64])
+Inst distro-info-data [0.68build1] (2026.10.12-0ubuntu0.26.04.1 Ubuntu:26.04/resolute-updates [all])
+Conf base-files (14ubuntu6.3 Ubuntu:26.04/resolute-updates [amd64])
+Conf diffutils (1:3.12-1ubuntu0.1 Ubuntu:26.04/resolute-updates [amd64])
+Conf distro-info-data (2026.10.12-0ubuntu0.26.04.1 Ubuntu:26.04/resolute-updates [all])
+`
+
+func TestPacotesDoSistema(t *testing.T) {
+	want := time.Date(2026, 10, 16, 17, 16, 32, 0, time.Local)
+	if got := lastUpgradeIn(aptHistoryLog); !got.Equal(want) {
+		t.Fatalf("ultima a mao: %v", got)
+	}
+	ctx := context.Background()
+	f := newFake()
+	f.aptSim = aptSimulation
+	if n, _ := pendingUpgrades(ctx, f); n != 3 {
+		t.Fatalf("esperando: %d", n)
+	}
+
+	// o do mes vazio, o anterior comprimido (o logrotate)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write([]byte(aptHistoryLog))
+	zw.Close()
+	f.files["/var/log/apt/history.log"] = ""
+	f.files["/var/log/apt/history.log.1.gz"] = gz.String()
+	if it := checkUpgrades(ctx, f); it.OK || !strings.Contains(it.Detail, "3 pacotes esperando") || !strings.Contains(it.Detail, "hora de atualizar") {
+		t.Errorf("40 dias: %+v", it)
+	}
+
+	// atualizado a mao ha pouco: esperando, mas dentro do mes
+	recent := time.Now().Add(-5 * 24 * time.Hour).Format("2006-01-02  15:04:05")
+	f.files["/var/log/apt/history.log"] = "Start-Date: " + recent + "\nCommandline: apt-get -q -y full-upgrade\nEnd-Date: " + recent + "\n"
+	if it := checkUpgrades(ctx, f); !it.OK || !strings.Contains(it.Detail, "3 esperando; ultima atualizacao ha 5 dias; a proxima ate") {
+		t.Errorf("5 dias: %+v", it)
+	}
+
+	// nada esperando: em dia
+	f.aptSim = "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"
+	if it := checkUpgrades(ctx, f); !it.OK || !strings.HasPrefix(it.Detail, "em dia") {
+		t.Errorf("em dia: %+v", it)
+	}
+
+	// o Corrigir: update e full-upgrade, e o item tem correcao avulsa
+	f.aptSim, f.calls = aptSimulation, nil
+	if d, err := Fix(ctx, f, "upgrades"); err != nil || d != "3 pacotes atualizados" {
+		t.Fatalf("corrigir: %q %v", d, err)
+	}
+	upd, full := f.index(t, "env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold update"),
+		f.index(t, "env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade")
+	if upd > full {
+		t.Error("full-upgrade antes do update")
+	}
+	if runtime.GOOS == "linux" {
+		f.files["/var/log/apt/history.log"] = ""
+		if it := checkByID(Check(ctx, f))["upgrades"]; it.OK || !it.Fixable {
+			t.Errorf("na checagem: %+v", it)
+		}
 	}
 }

@@ -14,11 +14,13 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 const instructions = `cais administra uma VPS com Docker: proxy (Traefik), bancos Postgres/MySQL
@@ -50,6 +52,12 @@ auto_deploy faz o deploy sozinho a cada commit novo na branch do app.
 Variaveis valem no proximo deploy. O cais run as injeta no processo do app:
 nada vai pra config do container (docker inspect). Valores nunca sao
 devolvidos aqui, so os nomes.
+
+Seguranca da VPS: security_check roda a checagem agora (SSH, firewall,
+Tailscale, atualizacoes, pacotes, portas abertas, reinicio pendente) e
+devolve os itens com problema primeiro, cada um com o conserto. Ela so le:
+corrigir, preparar a VPS, fechar o SSH, reiniciar e atualizar ficam com o
+usuario, na TUI (Setup > Seguranca). Diga o que falta e onde corrigir.
 
 Excluir app, banco ou bucket, o Setup da VPS e ligar ou desligar
 servicos (Postgres, MySQL, Garage) nao estao disponiveis aqui, de proposito:
@@ -174,7 +182,21 @@ func (t tools) registerRead(s *mcp.Server) {
 		Description: "Estado geral da VPS: ambiente (Docker e a checagem de seguranca: SSH, firewall, fail2ban, atualizacoes, portas abertas, cada item com o conserto), Setup, stacks da infra e apps com os containers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, core.State, error) {
 			st, err := t.api.Snapshot(ctx)
+			// o link de login do Tailscale poe a VPS na tailnet de quem
+			// abrir: nao sai daqui
+			st.Environment.Tailscale.AuthURL = ""
 			return nil, st, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "security_check", Annotations: readOnly(),
+		Description: "Roda agora a checagem de seguranca da VPS e devolve so ela: o resumo, os itens com problema (cada um com o conserto) e os que estao certos; " +
+			"o Tailscale (conectado, nome, IP, vencimento da chave); a versao do cais e se ha atualizacao. So le: os consertos o usuario faz na TUI, em Setup > Seguranca."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, securityReport, error) {
+			env, err := t.api.CheckEnvironment(ctx)
+			if err != nil {
+				return nil, securityReport{}, err
+			}
+			h, _ := t.api.CheckHealth(ctx)
+			return nil, newSecurityReport(env, h), nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "infra_status", Annotations: readOnly(),
 		Description: "Pergunta ao Docker o estado das stacks da infra (proxy, postgres, mysql, garage) e dos containers delas."},
@@ -424,4 +446,46 @@ func cmpOr(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// securityReport e a resposta do security_check: so a seguranca, os
+// problemas primeiro.
+type securityReport struct {
+	CheckedAt time.Time   `json:"checked_at"`
+	Summary   string      `json:"summary"`
+	Failed    []host.Item `json:"failed"`
+	OK        []host.Item `json:"ok"`
+	// Tailscale sem o link de login
+	Tailscale       host.Tailscale `json:"tailscale"`
+	Version         string         `json:"version,omitempty"`
+	Latest          string         `json:"latest,omitempty"`
+	UpdateAvailable bool           `json:"update_available"`
+	// Where e onde o usuario corrige
+	Where string `json:"where"`
+}
+
+func newSecurityReport(env core.Environment, h core.Health) securityReport {
+	r := securityReport{CheckedAt: env.CheckedAt, Failed: []host.Item{}, OK: []host.Item{}, Tailscale: env.Tailscale,
+		Version: h.Version, Latest: h.Latest, UpdateAvailable: h.UpdateAvailable(),
+		Where: "TUI do cais (ssh cais@<vps>): Setup > Seguranca, com o Corrigir de cada item, o Preparar VPS e o Tailscale; a atualizacao do cais no Dashboard (ou cais update)"}
+	r.Tailscale.AuthURL = ""
+	for _, it := range env.Security {
+		if it.OK {
+			r.OK = append(r.OK, it)
+		} else {
+			r.Failed = append(r.Failed, it)
+		}
+	}
+	switch {
+	case len(env.Security) == 0:
+		r.Summary = "sem checagem (fora do Linux, ou o daemon sem root)"
+	case len(r.Failed) == 0:
+		r.Summary = fmt.Sprintf("tudo certo: %d itens conferidos", len(env.Security))
+	default:
+		r.Summary = fmt.Sprintf("%d de %d itens pra corrigir", len(r.Failed), len(env.Security))
+	}
+	if r.UpdateAvailable {
+		r.Summary += "; ha versao nova do cais (" + h.Latest + ")"
+	}
+	return r
 }

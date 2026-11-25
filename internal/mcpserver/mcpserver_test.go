@@ -15,6 +15,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github/githubtest"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 // fakeDocker finge o docker compose dos apps: o up deixa um container
@@ -64,7 +65,19 @@ func connect(t *testing.T) *mcp.ClientSession {
 		"trdSystemDev/loja": {"docker-compose.yml": "services: {web: {build: .}}\n", "Dockerfile": "FROM nginx\n"},
 	})
 	c := core.New(core.Deps{
-		CheckDocker:   func(context.Context) docker.Status { return docker.Status{} },
+		CheckDocker: func(context.Context) docker.Status { return docker.Status{} },
+		// a VPS da checagem de seguranca: o Tailscale esperando o login
+		CheckHost: func(context.Context) []host.Item {
+			return []host.Item{
+				{ID: "ssh-root", Title: "Login do root pelo SSH", OK: true, Detail: "bloqueado"},
+				{ID: "tailscale", Title: "Tailscale (VPN pra administrar a VPS)", Detail: "instalado, fora da tailnet (NeedsLogin)", Fix: host.TailscaleFix},
+			}
+		},
+		TailscaleStatus: func(context.Context) host.Tailscale {
+			return host.Tailscale{Installed: true, State: "NeedsLogin", AuthURL: "https://login.tailscale.com/a/segredo123"}
+		},
+		Version:       "v0.5.0",
+		LatestRelease: func(context.Context) (string, error) { return "v0.6.0", nil },
 		ConfigPath:    filepath.Join(root, "config.yaml"),
 		SecretsDir:    filepath.Join(root, "secrets"),
 		StackDir:      func(n string) string { return filepath.Join(root, "stacks", n) },
@@ -147,7 +160,7 @@ func TestFerramentasSemExclusao(t *testing.T) {
 		"app_create", "app_deploy", "app_env_get", "app_env_set", "app_guide", "app_link_bucket", "app_link_database",
 		"app_logs", "app_promote", "app_promote_check", "app_restart", "app_rollback", "app_stop", "app_unlink_bucket",
 		"app_unlink_database", "app_update", "apps_list", "bucket_create", "buckets_list", "database_create",
-		"databases_list", "infra_logs", "infra_status", "status",
+		"databases_list", "infra_logs", "infra_status", "security_check", "status",
 	}
 	if !slices.Equal(names, want) {
 		t.Errorf("ferramentas\n got %v\nwant %v", names, want)
@@ -223,4 +236,28 @@ func TestErroVoltaComMotivo(t *testing.T) {
 	}
 	// argumento obrigatorio faltando: recusado pelo schema
 	call(t, cs, "app_logs", map[string]any{"app": "loja"}, true)
+}
+
+// "esta tudo certo com a VPS?": o security_check roda a checagem e devolve
+// so a seguranca, os problemas primeiro; o link de login do Tailscale nunca
+// sai pelo MCP
+func TestSecurityCheck(t *testing.T) {
+	cs := connect(t)
+	out := call(t, cs, "security_check", nil, false)
+	var r securityReport
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if r.Summary != "1 de 2 itens pra corrigir; ha versao nova do cais (v0.6.0)" || len(r.Failed) != 1 || r.Failed[0].ID != "tailscale" ||
+		r.Failed[0].Fix == "" || len(r.OK) != 1 || !strings.Contains(r.Where, "Setup > Seguranca") || r.CheckedAt.IsZero() {
+		t.Errorf("relatorio: %+v", r)
+	}
+	if !r.Tailscale.Installed || r.Tailscale.State != "NeedsLogin" {
+		t.Errorf("tailscale: %+v", r.Tailscale)
+	}
+	for _, tool := range []string{"security_check", "status"} {
+		if out := call(t, cs, tool, nil, false); strings.Contains(out, "segredo123") {
+			t.Errorf("%s devolveu o link de login do Tailscale: %s", tool, out)
+		}
+	}
 }

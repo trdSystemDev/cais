@@ -798,7 +798,8 @@ func (v *fakeVPS) tailscale() host.Tailscale {
 		t.State = ""
 	}
 	if v.tsConnected {
-		t = host.Tailscale{Installed: true, State: "Running", Name: "srv.tail1234.ts.net", IPs: []string{"100.90.100.127"}, Tailnet: "patrick"}
+		t = host.Tailscale{Installed: true, State: "Running", Name: "srv.tail1234.ts.net", IPs: []string{"100.90.100.127"}, Tailnet: "patrick",
+			KeyExpiry: time.Date(2027, 5, 24, 12, 0, 0, 0, time.Local)}
 	}
 	return t
 }
