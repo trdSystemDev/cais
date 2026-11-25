@@ -265,8 +265,10 @@ setup_ssh() {
 		else
 			mkdir -p "$home/.ssh"
 			touch "$home/.ssh/authorized_keys"
-			# so as que ainda nao estao la
-			while IFS= read -r k; do
+			# so as que ainda nao estao la. O "|| [ -n ]" pega a ultima linha
+			# sem \n no fim (a Hostinger grava assim): sem ele, o read pula
+			# a ultima chave e, com uma chave so, nao copia nada
+			while IFS= read -r k || [ -n "$k" ]; do
 				case "$k" in "" | "#"*) continue ;; esac
 				grep -qxF "$k" "$home/.ssh/authorized_keys" || echo "$k" >>"$home/.ssh/authorized_keys"
 			done <"$keys"
@@ -274,7 +276,11 @@ setup_ssh() {
 			chmod 700 "$home/.ssh"
 			chmod 600 "$home/.ssh/authorized_keys"
 		fi
-		echo "    chaves de $keys liberadas pro $SSH_USER"
+		if [ -z "$DRY_RUN" ] && ! grep -qv '^[[:space:]]*\(#\|$\)' "$home/.ssh/authorized_keys"; then
+			echo "    AVISO: nenhuma chave em $keys: ponha a chave publica em $home/.ssh/authorized_keys"
+		else
+			echo "    chaves de $keys liberadas pro $SSH_USER"
+		fi
 	else
 		echo "    AVISO: $keys nao existe: ponha a chave publica em $home/.ssh/authorized_keys"
 	fi
