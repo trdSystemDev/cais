@@ -14,6 +14,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
+	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/github/githubtest"
 )
 
@@ -438,4 +439,49 @@ func TestSetupSeguranca(t *testing.T) {
 	click(t, m, "hostConfirm")
 	waitFor(t, m, "SSH confirmado: so chave, sem o root.")
 	waitFor(t, m, "SSH confirmado: entra so com chave")
+}
+
+// o Conectar ao GitHub: o link cria o app pelo manifest (na pagina do
+// cais), o codigo da volta vira App ID e chave gravados, e o link seguinte
+// instala o app nos repositorios
+func TestSetupConectaAoGitHub(t *testing.T) {
+	m, gh := openSetupGitHub(t)
+	m.setup.get("ghAppID").input.SetValue("")
+	if m.setup.visible(m.setup.get("ghCode")) {
+		t.Fatal("o Codigo aparece antes do Conectar")
+	}
+	m.setup.get("ghOrg").input.SetValue("trd empresa")
+	click(t, m, "ghConnect")
+	waitFor(t, m, "organizacao invalida")
+
+	m.setup.get("ghOrg").input.SetValue("trdSystemDev")
+	click(t, m, "ghConnect")
+	waitFor(t, m, "clique em Create GitHub App")
+	if !strings.HasPrefix(m.setup.ghLink, github.ConnectPage+"?name=cais-") || !strings.Contains(m.setup.ghLink, "&org=trdSystemDev") {
+		t.Fatalf("link: %s", m.setup.ghLink)
+	}
+
+	click(t, m, "ghDone")
+	waitFor(t, m, "Cole o codigo que a pagina mostrou")
+	m.setup.get("ghCode").input.SetValue("codigo-errado")
+	click(t, m, "ghDone")
+	waitFor(t, m, "o GitHub nao aceitou o codigo")
+
+	m.setup.get("ghCode").input.SetValue(" " + gh.ManifestCode + " ")
+	click(t, m, "ghDone")
+	waitFor(t, m, `Conectado: app "cais-teste" (App ID 5512022) em trdSystemDev`)
+	waitFor(t, m, "Instale o app nos repositorios")
+	if m.setup.ghLink != "https://github.com/apps/cais-teste/installations/new" || m.setup.visible(m.setup.get("ghCode")) {
+		t.Fatalf("link de instalacao: %s", m.setup.ghLink)
+	}
+	if v := m.setup.get("ghAppID").input.Value(); v != "5512022" {
+		t.Fatalf("App ID no formulario: %q", v)
+	}
+	// gravou: o Testar (com o formulario vazio de chave) usa o salvo
+	info, _ := m.api.LoadConfig(context.Background())
+	if info.Config.GitHub.AppID != 5512022 {
+		t.Fatalf("App ID na config: %d", info.Config.GitHub.AppID)
+	}
+	click(t, m, "ghTest")
+	waitFor(t, m, "instalado em: trdSystemDev.")
 }

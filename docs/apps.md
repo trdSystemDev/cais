@@ -235,9 +235,26 @@ RUN --mount=type=secret,id=npm_token \
     NPM_TOKEN=$(cat /run/secrets/npm_token) npm ci
 ```
 
-O GitHub App do cais e configurado uma vez na aba **Setup** (App ID e a chave:
-cole o .pem ou o caminho do arquivo) ou com `cais setup config --github-app-id`
-e `cais setup secret github_app_key < chave.pem`. O app precisa da permissao
+O GitHub App do cais e configurado uma vez na aba **Setup > Geral**. O
+caminho facil e o **Conectar ao GitHub** (ou `cais setup github-connect
+[-org ORG]`):
+
+1. **Conectar ao GitHub** mostra um link (ctrl+clique, ou **Copiar link**). Ele
+   abre a pagina do cais no GitHub Pages (`docs/github/index.html`), que manda
+   pro GitHub o app ja preenchido: privado, so *Contents: read*, sem webhook,
+   na sua conta ou na **Organizacao** do campo. Confira o nome e clique em
+   **Create GitHub App**.
+2. Na volta, a pagina mostra um codigo. Cole em **Codigo** e **Concluir**: o
+   cais troca o codigo (vale 1 hora, uma vez so) pelo App ID e a chave
+   privada, direto com o GitHub, e grava os dois. Voce nunca baixa o `.pem`.
+3. O link seguinte instala o app: escolha os repositorios que o cais vai ler.
+
+O cais nao abre porta, entao a volta do GitHub nao chega na VPS: por isso a
+pagina estatica e o codigo colado.
+
+Com um app que ja existe: App ID e a chave (cole o .pem ou o caminho do
+arquivo) nos campos de baixo, ou `cais setup config --github-app-id` e
+`cais setup secret github_app_key < chave.pem`. O app precisa da permissao
 *Contents: read* e estar instalado nos repositorios. O **Testar** da secao
 GitHub App (ou `cais setup github-test`) confere se o GitHub aceita o App ID
 com a chave e diz em que contas o app esta instalado; na TUI ele testa o que

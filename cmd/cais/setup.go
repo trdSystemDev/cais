@@ -39,6 +39,8 @@ func (e *cli) runSetup(args []string) error {
 		return e.setupNotifyTest(args)
 	case "github-test":
 		return e.setupGitHubTest(args)
+	case "github-connect":
+		return e.setupGitHubConnect(args)
 	default:
 		return groupError("setup", sub)
 	}
@@ -322,6 +324,40 @@ func (e *cli) setupGitHubTest(args []string) error {
 		return err
 	}
 	fmt.Fprintln(e.out, githubCheckText(r))
+	return nil
+}
+
+// setupGitHubConnect cria o GitHub App pelo manifest: mostra o link, le o
+// codigo que a pagina mostra na volta e grava o App ID e a chave.
+func (e *cli) setupGitHubConnect(args []string) error {
+	fs, socket := e.newFlags("setup github-connect")
+	org := fs.String("org", "", "organizacao dona do app (padrao: a conta de quem abre o link)")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	c, err := e.connect(*socket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	ctx := context.Background()
+	link, err := c.GitHubConnectLink(ctx, *org)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.out, "1. Abra no navegador e clique em Create GitHub App:\n\n   %s\n\n2. Cole aqui o codigo que a pagina mostrar: ", link)
+	var code string
+	fmt.Fscanln(e.in, &code)
+	if strings.TrimSpace(code) == "" {
+		return errors.New("sem codigo: rode de novo quando tiver o codigo (ele vale 1 hora)")
+	}
+	r, err := c.ConnectGitHub(ctx, code)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.out, "\nConectado: app %q (App ID %d) em %s; App ID e chave gravados.\n\n"+
+		"3. Instale o app nos repositorios que o cais vai ler:\n\n   %s\n\nDepois confira com: cais setup github-test\n",
+		r.Name, r.AppID, r.Owner, r.InstallURL)
 	return nil
 }
 

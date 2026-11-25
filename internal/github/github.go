@@ -221,7 +221,9 @@ func (a App) send(ctx context.Context, rq request) (response, error) {
 		accept = "application/vnd.github+json"
 	}
 	req.Header.Set("Accept", accept)
-	req.Header.Set("Authorization", rq.auth)
+	if rq.auth != "" {
+		req.Header.Set("Authorization", rq.auth)
+	}
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "cais")
 	if rq.body != nil {

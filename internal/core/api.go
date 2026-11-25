@@ -75,6 +75,12 @@ type API interface {
 	// chave) e diz em que contas ele esta instalado. appID 0 e key vazia
 	// usam o que esta salvo.
 	TestGitHub(ctx context.Context, appID int64, key string) (github.Check, error)
+	// GitHubConnectLink e o link que cria o GitHub App do cais pelo
+	// manifest (org vazia: na conta de quem abre).
+	GitHubConnectLink(ctx context.Context, org string) (string, error)
+	// ConnectGitHub troca o codigo da volta do GitHub pelo App ID e a chave
+	// e grava os dois.
+	ConnectGitHub(ctx context.Context, code string) (GitHubConnected, error)
 
 	// PlanSetup diz como a config salva fica nos servicos ligados (o que
 	// mudaria ao aplicar), sem mudar nada.

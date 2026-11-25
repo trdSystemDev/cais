@@ -35,6 +35,9 @@ type Server struct {
 	URL   string
 	Key   []byte // chave privada do app (PEM), pra gravar no secret
 	AppID int64
+	// ManifestCode e o codigo que a troca do manifest aceita (uma vez so):
+	// o app criado e este, com a Key.
+	ManifestCode string
 
 	mu      sync.Mutex
 	pub     *rsa.PublicKey
@@ -56,7 +59,7 @@ func New(t *testing.T, appID int64, repos map[string]map[string]string) *Server 
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{AppID: appID, pub: &k.PublicKey, repos: repos, history: map[string][]string{}, snaps: map[string]map[string]string{},
+	s := &Server{AppID: appID, ManifestCode: "codigo-do-github", pub: &k.PublicKey, repos: repos, history: map[string][]string{}, snaps: map[string]map[string]string{},
 		calls: map[string]int{}, revoked: map[string]bool{},
 		Key: pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})}
 	for repo := range repos {
@@ -111,6 +114,22 @@ func (s *Server) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(s.quota.limit))
 		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(s.quota.remaining))
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+	}
+
+	// /app-manifests/<codigo>/conversions: o app criado pelo Conectar, sem
+	// autenticacao; o codigo vale uma vez
+	if r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "app-manifests" && parts[2] == "conversions" {
+		if parts[1] != s.ManifestCode || r.Header.Get("Authorization") != "" {
+			w.WriteHeader(404)
+			io.WriteString(w, `{"message":"Not Found"}`)
+			return
+		}
+		s.ManifestCode = ""
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]any{"id": s.AppID, "slug": "cais-teste", "name": "cais-teste",
+			"owner": map[string]string{"login": "trdSystemDev"}, "pem": string(s.Key),
+			"html_url": "https://github.com/apps/cais-teste"})
+		return
 	}
 
 	// /app e /app/installations: o teste do GitHub App (JWT valido e do

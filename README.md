@@ -71,8 +71,10 @@ passo em [docs/seguranca.md](docs/seguranca.md).
    ssh cais@ip-da-vps
    ```
 
-2. Na aba **Setup**, preencha o GitHub App e clique em **Salvar**. O Setup
-   so guarda a configuracao: nada sobe.
+2. Na aba **Setup**, clique em **Conectar ao GitHub**: o link cria o GitHub
+   App do cais no navegador e a pagina mostra um codigo pra colar de volta;
+   depois, instale o app nos repositorios. O Setup so guarda a configuracao:
+   nada sobe.
 3. Na aba **Infra**, no **proxy**, ponha o e-mail do Let's Encrypt e ligue ele
    (publica os apps com HTTPS); ligue tambem o que mais for usar: Postgres,
    MySQL, Garage (S3).

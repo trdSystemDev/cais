@@ -132,6 +132,12 @@ func (f *Recorder) TestNotify(context.Context) error { return only(f, "TestNotif
 func (f *Recorder) HardenHost(_ context.Context, req core.HardenRequest) error {
 	return only(f, "HardenHost", req)
 }
+func (f *Recorder) GitHubConnectLink(_ context.Context, org string) (string, error) {
+	return ret[string](f, "GitHubConnectLink", org)
+}
+func (f *Recorder) ConnectGitHub(_ context.Context, code string) (core.GitHubConnected, error) {
+	return ret[core.GitHubConnected](f, "ConnectGitHub", code)
+}
 func (f *Recorder) UpdateCais(_ context.Context, version string) (core.UpdateResult, error) {
 	return ret[core.UpdateResult](f, "UpdateCais", version)
 }

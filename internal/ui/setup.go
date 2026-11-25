@@ -78,8 +78,14 @@ type setupPage struct {
 	saveErr string // por que o ultimo Salvar falhou (varias linhas)
 	ghMsg   string // resultado do Testar do GitHub App
 	ghMsgC  string
-	env     core.Environment // a checagem de seguranca, do estado
-	hard    core.Hardening   // o Preparar VPS, do estado
+	// Conectar ao GitHub: o link aberto (o que cria o app ou, depois de
+	// conectar, o que instala nos repositorios) e o resultado
+	ghLink     string
+	ghInstall  bool // ghLink e o da instalacao (o codigo ja foi)
+	ghConnMsg  string
+	ghConnMsgC string
+	env        core.Environment // a checagem de seguranca, do estado
+	hard       core.Hardening   // o Preparar VPS, do estado
 
 	// Preparar VPS: o formulario (admin e a senha do sudo duas vezes), a
 	// hora em que esta sessao abriu (so uma sessao aberta depois da mudanca
@@ -123,6 +129,14 @@ type (
 		res github.Check
 		err error
 	}
+	ghLinkMsg struct {
+		link string
+		err  error
+	}
+	ghConnectedMsg struct {
+		res core.GitHubConnected
+		err error
+	}
 )
 
 func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
@@ -136,6 +150,14 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 		p.items = append(p.items, &item{id: id, label: label, kind: kindInput, input: &ti, section: section})
 	}
 
+	input("ghOrg", "Organizacao", "vazio: a sua conta")
+	button := func(id, label string) {
+		p.items = append(p.items, &item{id: id, label: label, kind: kindButton, section: section})
+	}
+	button("ghConnect", "Conectar ao GitHub")
+	button("ghCopy", "Copiar link")
+	input("ghCode", "Codigo", "o que a pagina mostrou")
+	button("ghDone", "Concluir")
 	input("ghAppID", "App ID", "numero na pagina do app")
 	input("ghKey", "Chave privada", "cole o .pem ou o caminho")
 	p.get("ghKey").input.EchoMode = textinput.EchoPassword
@@ -311,6 +333,30 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		default:
 			p.ghMsgC, p.ghMsg = "ok", "Conectou no app \""+msg.res.Name+"\", instalado em: "+strings.Join(msg.res.Installations, ", ")+"."
 		}
+	case ghLinkMsg:
+		if msg.err != nil {
+			p.ghConnMsgC, p.ghConnMsg = "danger", firstLine(msg.err.Error())
+			return nil
+		}
+		p.ghLink, p.ghInstall = msg.link, false
+		p.ghConnMsgC, p.ghConnMsg = "", ""
+		p.rebuild()
+		return p.focusAt(p.index("ghCopy"))
+	case ghConnectedMsg:
+		if msg.err != nil {
+			p.ghConnMsgC, p.ghConnMsg = "danger", firstLine(msg.err.Error())
+			return nil
+		}
+		r := msg.res
+		p.get("ghCode").input.SetValue("")
+		p.get("ghAppID").input.SetValue(strconv.FormatInt(r.AppID, 10))
+		p.get("ghKey").input.SetValue("")
+		p.cfg.GitHub.AppID = r.AppID
+		p.ghLink, p.ghInstall = r.InstallURL, true
+		p.ghConnMsgC, p.ghConnMsg = "ok", fmt.Sprintf("Conectado: app %q (App ID %d) em %s, App ID e chave gravados. "+
+			"Agora instale nos repositorios pelo link acima e confira no Testar.", r.Name, r.AppID, r.Owner)
+		p.rebuild()
+		return p.focusAt(p.index("ghCopy"))
 	case hostFixMsg:
 		if msg.err != nil {
 			p.setStatus("danger", "Nao deu pra corrigir: "+firstLine(msg.err.Error()))
@@ -473,6 +519,16 @@ func (p *setupPage) setStatus(kind, msg string) { p.statusC, p.status = kind, ms
 // visible diz se o item esta na sub-aba aberta (o Salvar em todo
 // formulario).
 func (p *setupPage) visible(it *item) bool {
+	switch it.id {
+	case "ghCopy":
+		if p.ghLink == "" {
+			return false
+		}
+	case "ghCode", "ghDone":
+		if p.ghLink == "" || p.ghInstall {
+			return false
+		}
+	}
 	return it.section == p.sec || (it.section < 0 && p.sec < secBackups)
 }
 
@@ -570,6 +626,27 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		}
 	case it.id == "ghTest":
 		return p.githubTest()
+	case it.id == "ghConnect":
+		org := strings.TrimSpace(p.get("ghOrg").input.Value())
+		p.ghConnMsgC, p.ghConnMsg = "warn", "Montando o link..."
+		return func() tea.Msg {
+			link, err := p.api.GitHubConnectLink(context.Background(), org)
+			return ghLinkMsg{link, err}
+		}
+	case it.id == "ghCopy":
+		p.ghConnMsgC, p.ghConnMsg = "ok", "Link copiado (se o terminal nao deixar, selecione o link acima com o mouse; shift ou alt + arrastar)."
+		return tea.SetClipboard(p.ghLink)
+	case it.id == "ghDone":
+		code := strings.TrimSpace(p.get("ghCode").input.Value())
+		if code == "" {
+			p.ghConnMsgC, p.ghConnMsg = "danger", "Cole o codigo que a pagina mostrou depois do Create GitHub App."
+			return p.focusAt(p.index("ghCode"))
+		}
+		p.ghConnMsgC, p.ghConnMsg = "warn", "Trocando o codigo pelo App ID e a chave..."
+		return func() tea.Msg {
+			res, err := p.api.ConnectGitHub(context.Background(), code)
+			return ghConnectedMsg{res, err}
+		}
 	case it.id == "to-add":
 		p.to = append(p.to, p.newTo(""))
 		p.rebuild()
@@ -764,6 +841,28 @@ func (p *setupPage) viewForm(w int) string {
 			rows = append(rows, p.viewTo(it, i, w)...)
 			continue
 		}
+		if it.id == "ghConnect" || it.id == "ghCopy" || it.id == "ghDone" {
+			kind := btnNormal
+			if it.id == "ghConnect" {
+				kind = btnInfo
+			}
+			if it.id == "ghCopy" {
+				label := "Abra no navegador (ctrl+clique) e clique em Create GitHub App:"
+				if p.ghInstall {
+					label = "Instale o app nos repositorios que o cais vai ler:"
+				}
+				rows = append(rows, "", lipgloss.NewStyle().Width(w).Render("  "+label),
+					"  "+t.fg(t.accent).Underline(true).Hyperlink(p.ghLink).Render(p.ghLink))
+			}
+			rows = append(rows, "  "+p.zones.Mark(it.id, t.button(it.label, kind, focused)))
+			if it.id == "ghDone" || (it.id == "ghCopy" && p.ghInstall) || (it.id == "ghConnect" && p.ghLink == "") {
+				if p.ghConnMsg != "" {
+					c := map[string]color.Color{"ok": t.ok, "warn": t.warn, "danger": t.danger}[p.ghConnMsgC]
+					rows = append(rows, lipgloss.NewStyle().Width(w).Foreground(c).Render("  "+p.ghConnMsg))
+				}
+			}
+			continue
+		}
 		if it.id == "ghTest" {
 			// o Testar fica na secao do GitHub App, com o resultado embaixo
 			rows = append(rows, "  "+p.zones.Mark(it.id, t.button(it.label, btnInfo, focused)))
@@ -780,9 +879,13 @@ func (p *setupPage) viewForm(w int) string {
 			buttons = append(buttons, p.zones.Mark(it.id, t.button(it.label, btnNormal, focused)))
 			continue
 		}
-		if it.id == "ghAppID" {
+		switch it.id {
+		case "ghOrg":
 			rows = append(rows, t.bold().Render("GitHub App"),
-				t.fg(t.muted).Width(w).Render("baixa o codigo dos repositorios privados no deploy"))
+				t.fg(t.muted).Width(w).Render("baixa o codigo dos repositorios privados no deploy. O Conectar cria o app no GitHub "+
+					"(na sua conta ou na organizacao) e grava o App ID e a chave sozinho."))
+		case "ghAppID":
+			rows = append(rows, "", t.fg(t.muted).Width(w).Render("Ou, com um app que ja existe, o App ID e a chave:"))
 		}
 		marker, label := "  ", t.fg(t.text).Width(16).Render(it.label)
 		if focused {
@@ -836,7 +939,7 @@ func (p *setupPage) viewPlan(w int) string {
 
 	if !pl.Configured {
 		b.WriteString("\n" + t.fg(t.warn).Bold(true).Render("Ainda sem configuracao.") + "\n")
-		b.WriteString(wrap.Render("Preencha o GitHub App e salve (ctrl+s). Salvar so grava a configuracao: nada sobe. "+
+		b.WriteString(wrap.Render("Conecte o GitHub App (o Conectar ja grava) ou preencha e salve (ctrl+s). Salvar so grava a configuracao: nada sobe. "+
 			"Depois, na aba Infra, ligue o proxy (publica os apps com HTTPS; o e-mail do Let's Encrypt fica no painel "+
 			"dele) e o que mais for usar: Postgres, MySQL, Garage.") + "\n")
 		return b.String()

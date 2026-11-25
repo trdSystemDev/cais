@@ -253,6 +253,13 @@ var handlers = map[string]handler{
 		text, err := a.FixHostItem(ctx, p.ID)
 		return textResult{Text: text}, err
 	}),
+	MethodGitHubLink: call(func(a core.API, ctx context.Context, p githubLinkParams) (textResult, error) {
+		link, err := a.GitHubConnectLink(ctx, p.Org)
+		return textResult{Text: link}, err
+	}),
+	MethodGitHubConnect: call(func(a core.API, ctx context.Context, p githubConnectParams) (core.GitHubConnected, error) {
+		return a.ConnectGitHub(ctx, p.Code)
+	}),
 	MethodUpdate: call(func(a core.API, ctx context.Context, p updateParams) (core.UpdateResult, error) {
 		return a.UpdateCais(ctx, p.Version)
 	}),

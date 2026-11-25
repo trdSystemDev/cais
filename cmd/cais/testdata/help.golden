@@ -28,6 +28,8 @@ Setup da VPS (so configura; os servicos ligam com cais service):
       --behind-proxy --github-app-id --host-s3 --notify-from --notify-to
   cais setup secret <nome>           grava um secret informado (le do stdin), ex: github_app_key
   cais setup notify-test             manda um e-mail de teste pros destinatarios dos avisos
+  cais setup github-connect [-org ORG]
+                                     cria o GitHub App pelo navegador e grava o App ID e a chave
   cais setup github-test             confere o GitHub App salvo e diz onde ele esta instalado
 
 Servicos (nada sobe sem ser ligado):
@@ -132,6 +134,8 @@ Setup da VPS (so configura; os servicos ligam com cais service):
       --behind-proxy --github-app-id --host-s3 --notify-from --notify-to
   cais setup secret <nome>           grava um secret informado (le do stdin), ex: github_app_key
   cais setup notify-test             manda um e-mail de teste pros destinatarios dos avisos
+  cais setup github-connect [-org ORG]
+                                     cria o GitHub App pelo navegador e grava o App ID e a chave
   cais setup github-test             confere o GitHub App salvo e diz onde ele esta instalado
 
 Servicos (nada sobe sem ser ligado):
@@ -408,6 +412,8 @@ Setup da VPS (so configura; os servicos ligam com cais service):
       --behind-proxy --github-app-id --host-s3 --notify-from --notify-to
   cais setup secret <nome>           grava um secret informado (le do stdin), ex: github_app_key
   cais setup notify-test             manda um e-mail de teste pros destinatarios dos avisos
+  cais setup github-connect [-org ORG]
+                                     cria o GitHub App pelo navegador e grava o App ID e a chave
   cais setup github-test             confere o GitHub App salvo e diz onde ele esta instalado
 
 Detalhes: cais setup <comando> -h.
@@ -484,6 +490,23 @@ Manda um e-mail de teste pros destinatarios dos avisos.
 Usa o remetente e os destinatarios da config (cais setup config
 --notify-from --notify-to) e a chave da Brevo (cais setup secret
 brevo_api_key). Se a Brevo recusar, o motivo aparece aqui.
+
+O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
+
+===== cais setup github-connect -h
+Uso: cais setup github-connect [-org ORG]
+
+Cria o GitHub App pelo navegador e grava o App ID e a chave.
+
+Mostra um link: ele abre o GitHub com o app do cais ja preenchido (privado,
+so le o codigo, sem webhook), na sua conta ou na organizacao do -org. Depois
+do Create GitHub App, a pagina mostra um codigo: cole aqui. O cais troca o
+codigo (vale 1 hora, uma vez) pelo App ID e a chave e grava os dois. Falta
+instalar o app nos repositorios: o link sai no fim. O mesmo pela TUI:
+Setup > Geral > Conectar ao GitHub.
+
+Flags:
+  -org ORG   organizacao dona do app (padrao: a sua conta)
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 

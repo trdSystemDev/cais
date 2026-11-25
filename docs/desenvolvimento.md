@@ -206,6 +206,16 @@ make release V=v0.3.0-rc1
 # na VPS: o comando de instalacao com --version v0.3.0-rc1
 ```
 
+## Pagina do Conectar ao GitHub
+
+O **Conectar ao GitHub** usa `docs/github/index.html`, publicado pelo GitHub
+Pages do repositorio (branch `main`, pasta `/docs`; o `docs/.nojekyll` serve
+os arquivos como estao) em `https://trdsystemdev.github.io/cais/github/`
+(`github.ConnectPage`). Com `?name=` ela monta o manifest do GitHub App (as
+permissoes ficam nela) e manda pro GitHub; com `?code=`, a volta, mostra o
+codigo pra colar no cais. Mudou a pagina, ela vale no push da `main`, sem
+release.
+
 ## Roadmap
 
 1. Esqueleto: TUI com abas clicaveis, checagem de Docker/Compose

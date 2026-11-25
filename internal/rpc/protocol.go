@@ -34,6 +34,8 @@ const (
 	MethodUpdate           = "cais.update"     // params: updateParams
 	MethodHostConfirm      = "host.confirm"    // params: hostConfirmParams
 	MethodGitHubTest       = "github.test"     // params: githubTestParams
+	MethodGitHubLink       = "github.link"     // params: githubLinkParams
+	MethodGitHubConnect    = "github.connect"  // params: githubConnectParams
 	MethodServiceSet       = "service.set"     // params: serviceParams
 	MethodServiceControl   = "service.control" // params: serviceControlParams
 	MethodAppsCheck        = "apps.check"
@@ -195,6 +197,16 @@ type backupClientParams struct {
 type backupScheduleParams struct {
 	Time string `json:"time"`
 	Days int    `json:"days"`
+}
+
+// githubLinkParams: Org vazia cria o app na conta de quem abre o link.
+type githubLinkParams struct {
+	Org string `json:"org,omitempty"`
+}
+
+// githubConnectParams e o codigo da volta do GitHub.
+type githubConnectParams struct {
+	Code string `json:"code"`
 }
 
 // updateParams: Version e a tag (vazia: o release mais novo).

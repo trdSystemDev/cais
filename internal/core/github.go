@@ -2,7 +2,13 @@ package core
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/config"
@@ -124,4 +130,72 @@ func (g githubSource) Download(ctx context.Context, repo, commit, dir string) er
 	return g.with(ctx, repo, func(s *github.Session) error {
 		return s.Download(ctx, commit, dir)
 	})
+}
+
+// GitHubConnected e o GitHub App criado e gravado pelo Conectar.
+type GitHubConnected struct {
+	AppID int64  `json:"app_id"`
+	Name  string `json:"name"`
+	Owner string `json:"owner"`
+	// InstallURL e onde escolher os repositorios que o app le.
+	InstallURL string `json:"install_url"`
+}
+
+// GitHubConnectLink e o link que cria o GitHub App do cais pelo manifest,
+// na conta de quem abre ou na organizacao org. O nome leva o hostname da
+// VPS e um sufixo aleatorio: nome de GitHub App e unico no GitHub inteiro.
+func (c *Core) GitHubConnectLink(_ context.Context, org string) (string, error) {
+	return github.ConnectLink(githubAppName(), org)
+}
+
+func githubAppName() string {
+	host, _ := os.Hostname()
+	host = strings.Trim(nonName.ReplaceAllString(strings.ToLower(host), "-"), "-")
+	const maxHost = 34 - len("cais--") - 4
+	if len(host) > maxHost {
+		host = strings.Trim(host[:maxHost], "-")
+	}
+	b := make([]byte, 4)
+	rand.Read(b)
+	suffix := hex.EncodeToString(b)[:4]
+	if host == "" {
+		return "cais-" + suffix
+	}
+	return "cais-" + host + "-" + suffix
+}
+
+var nonName = regexp.MustCompile(`[^a-z0-9]+`)
+
+// ConnectGitHub troca o codigo da volta do GitHub (o app criado pelo link
+// do GitHubConnectLink) pelo App ID e a chave privada e grava os dois: a
+// chave no secret e o App ID na config. Substitui o GitHub App que houver.
+func (c *Core) ConnectGitHub(ctx context.Context, code string) (GitHubConnected, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	app, err := github.App{BaseURL: c.deps.GitHubURL, Now: c.deps.Now}.ConvertManifest(ctx, code)
+	if err != nil {
+		return GitHubConnected{}, err
+	}
+	r := GitHubConnected{AppID: app.ID, Name: app.Name, Owner: app.Owner.Login, InstallURL: github.InstallLink(app.Slug)}
+	if r.Owner == "" {
+		r.Owner = "a sua conta"
+	}
+	// a chave so vem agora: grava antes da config, e o erro da config diz o
+	// App ID pra nao perder o app criado
+	if err := c.SetSecret(ctx, GitHubKeySecret, app.PEM); err != nil {
+		return r, fmt.Errorf("gravando a chave do GitHub App %d: %w", app.ID, err)
+	}
+	cfg, err := config.Load(c.deps.ConfigPath)
+	if errors.Is(err, config.ErrNotFound) {
+		cfg, err = config.Default(), nil
+	}
+	if err == nil {
+		cfg.GitHub.AppID = app.ID
+		err = c.saveConfig(cfg)
+	}
+	if err != nil {
+		return r, fmt.Errorf("a chave foi gravada, mas nao o App ID %d (grave com cais setup config --github-app-id %d): %w", app.ID, app.ID, err)
+	}
+	c.deps.Logger.Info("github app conectado", "app", app.Slug, "id", app.ID, "dono", r.Owner)
+	return r, nil
 }

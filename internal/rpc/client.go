@@ -125,6 +125,15 @@ func (c *Client) FixHostItem(ctx context.Context, id string) (string, error) {
 	return r.Text, err
 }
 
+func (c *Client) GitHubConnectLink(ctx context.Context, org string) (string, error) {
+	r, err := result[textResult](c, ctx, MethodGitHubLink, githubLinkParams{Org: org})
+	return r.Text, err
+}
+
+func (c *Client) ConnectGitHub(ctx context.Context, code string) (core.GitHubConnected, error) {
+	return result[core.GitHubConnected](c, ctx, MethodGitHubConnect, githubConnectParams{Code: code})
+}
+
 func (c *Client) UpdateCais(ctx context.Context, version string) (core.UpdateResult, error) {
 	return result[core.UpdateResult](c, ctx, MethodUpdate, updateParams{Version: version})
 }

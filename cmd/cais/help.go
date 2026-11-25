@@ -185,6 +185,16 @@ Exemplo:
 Usa o remetente e os destinatarios da config (cais setup config
 --notify-from --notify-to) e a chave da Brevo (cais setup secret
 brevo_api_key). Se a Brevo recusar, o motivo aparece aqui.`},
+		{name: "setup github-connect", usage: "setup github-connect [-org ORG]", short: "cria o GitHub App pelo navegador e grava o App ID e a chave", long: `
+Mostra um link: ele abre o GitHub com o app do cais ja preenchido (privado,
+so le o codigo, sem webhook), na sua conta ou na organizacao do -org. Depois
+do Create GitHub App, a pagina mostra um codigo: cole aqui. O cais troca o
+codigo (vale 1 hora, uma vez) pelo App ID e a chave e grava os dois. Falta
+instalar o app nos repositorios: o link sai no fim. O mesmo pela TUI:
+Setup > Geral > Conectar ao GitHub.
+
+Flags:
+  -org ORG   organizacao dona do app (padrao: a sua conta)`},
 		{name: "setup github-test", usage: "setup github-test", short: "confere o GitHub App salvo e diz onde ele esta instalado", long: `
 Usa o App ID da config e a chave (cais setup secret github_app_key). Se o
 GitHub recusar, o motivo aparece aqui; nao abre nenhum repositorio.`},

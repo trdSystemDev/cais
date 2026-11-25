@@ -363,3 +363,47 @@ func TestCompareETree(t *testing.T) {
 		t.Fatalf("Tree = %q, %v", tree, err)
 	}
 }
+
+func TestConnectLink(t *testing.T) {
+	link, err := ConnectLink("cais-srv1-ab12", "")
+	if err != nil || link != ConnectPage+"?name=cais-srv1-ab12" {
+		t.Fatalf("%s %v", link, err)
+	}
+	if link, err = ConnectLink("cais-srv1-ab12", " trdSystemDev "); err != nil || link != ConnectPage+"?name=cais-srv1-ab12&org=trdSystemDev" {
+		t.Fatalf("%s %v", link, err)
+	}
+	for _, c := range [][2]string{{"", ""}, {"cais com espaco", ""}, {strings.Repeat("a", 35), ""}, {"cais", "org/../x"}, {"cais", "-org"}} {
+		if _, err := ConnectLink(c[0], c[1]); err == nil {
+			t.Errorf("aceitou %q %q", c[0], c[1])
+		}
+	}
+}
+
+func TestConvertManifest(t *testing.T) {
+	_, pemKey := testKey(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/app-manifests/abc12345/conversions" || r.Header.Get("Authorization") != "" {
+			w.WriteHeader(404)
+			io.WriteString(w, `{"message":"Not Found"}`)
+			return
+		}
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]any{"id": 42, "slug": "cais-x", "name": "cais-x", "pem": string(pemKey),
+			"owner": map[string]string{"login": "dono"}})
+	}))
+	defer srv.Close()
+	a := App{BaseURL: srv.URL}
+	c, err := a.ConvertManifest(context.Background(), " abc12345\n")
+	if err != nil || c.ID != 42 || c.Slug != "cais-x" || c.Owner.Login != "dono" || c.PEM == "" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if _, err := a.ConvertManifest(context.Background(), "outro123"); err == nil || !strings.Contains(err.Error(), "vale 1 hora") {
+		t.Fatalf("codigo usado: %v", err)
+	}
+	if _, err := a.ConvertManifest(context.Background(), "../../x"); err == nil || !strings.Contains(err.Error(), "codigo invalido") {
+		t.Fatalf("codigo com caminho: %v", err)
+	}
+	if InstallLink("cais-x") != "https://github.com/apps/cais-x/installations/new" {
+		t.Error(InstallLink("cais-x"))
+	}
+}

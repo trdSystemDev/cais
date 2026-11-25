@@ -319,3 +319,18 @@ func TestCLIUpdate(t *testing.T) {
 		errOut: []string{"o daemon nao voltou na v0.6.0", "journalctl -u cais-update"}})
 	runCase(t, cliCase{name: "argumento sobrando", args: "update agora", code: 1, noCalls: true, errOut: []string{"uso: cais update"}})
 }
+
+// cais setup github-connect: o link, o codigo pelo stdin e o link de instalar
+func TestCLIGitHubConnect(t *testing.T) {
+	runCase(t, cliCase{name: "conecta", args: "setup github-connect -org trdSystemDev", stdin: "codigo-do-github\n",
+		setup: func(f *coretest.Recorder) {
+			f.SetOut("GitHubConnectLink", "https://trdsystemdev.github.io/cais/github/?name=cais-x&org=trdSystemDev")
+			f.SetOut("ConnectGitHub", core.GitHubConnected{AppID: 42, Name: "cais-x", Owner: "trdSystemDev",
+				InstallURL: "https://github.com/apps/cais-x/installations/new"})
+		},
+		calls: []string{"GitHubConnectLink", "ConnectGitHub"},
+		out: []string{"?name=cais-x&org=trdSystemDev", `Conectado: app "cais-x" (App ID 42) em trdSystemDev`,
+			"https://github.com/apps/cais-x/installations/new"}})
+	runCase(t, cliCase{name: "sem codigo", args: "setup github-connect", code: 1,
+		calls: []string{"GitHubConnectLink"}, errOut: []string{"sem codigo"}})
+}

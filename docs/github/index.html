@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>cais: conectar ao GitHub</title>
+<!--
+  Pagina do Conectar ao GitHub do cais (Setup > Geral, ou cais setup
+  github-connect). O cais roda numa VPS sem porta aberta, entao a volta do
+  GitHub nao chega nele: esta pagina faz as duas pontas no navegador.
+
+  ?name=NOME[&org=ORG]  monta o manifest do GitHub App e manda pro GitHub
+                        (o "Create GitHub App" fica la, com voce)
+  ?code=CODIGO          a volta do GitHub: mostra o codigo pra colar no cais
+
+  Nada sai daqui pra outro lugar: o manifest vai so pro github.com e o
+  codigo so aparece na tela. As permissoes do app ficam definidas aqui.
+-->
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#5b6472; --accent:#0e7c6b; --line:#dde1e7; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12161d; --card:#1a2029; --text:#e6e9ef; --muted:#9aa3b2; --accent:#4fd1b5; --line:#2c3440; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text);
+         font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding:24px; }
+  main { width:100%; max-width:560px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:32px; }
+  h1 { font-size:1.25rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  ol { padding-left:1.2em; margin:16px 0 0; } li { margin:6px 0; }
+  .code { display:flex; gap:8px; margin:20px 0 8px; }
+  .code output { flex:1; font: 600 1.15rem/1 ui-monospace, SFMono-Regular, Menlo, monospace; padding:14px 16px;
+                 border:1px solid var(--line); border-radius:8px; overflow-wrap:anywhere; user-select:all; }
+  button { font:inherit; font-weight:600; border:0; border-radius:8px; padding:0 18px; background:var(--accent); color:#fff; cursor:pointer; }
+  @media (prefers-color-scheme: dark) { button { color:#0b1a17; } }
+  button:focus-visible, a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .muted { color:var(--muted); font-size:.92rem; }
+  .erro { color:#c2413a; }
+  a { color:var(--accent); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section id="indo" hidden>
+    <h1>Abrindo o GitHub...</h1>
+    <p class="sub">O GitHub vai mostrar o app do cais já preenchido. Confira e clique em <strong>Create GitHub App</strong>.</p>
+    <form id="form" method="post">
+      <input type="hidden" name="manifest" id="manifest">
+      <button type="submit">Continuar no GitHub</button>
+    </form>
+    <p class="muted" id="permissoes"></p>
+  </section>
+
+  <section id="volta" hidden>
+    <h1>App criado no GitHub</h1>
+    <p class="sub">Falta só colar este código no cais. Ele vale 1 hora e serve uma vez só.</p>
+    <div class="code"><output id="codigo"></output><button type="button" id="copiar">Copiar</button></div>
+    <ol>
+      <li>Volte pro terminal do cais e cole o código em <strong>Código</strong> (Setup &gt; Geral), depois <strong>Concluir</strong>.</li>
+      <li>O cais mostra o link pra <strong>instalar o app</strong> nos repositórios que ele vai ler.</li>
+    </ol>
+    <p class="muted">Pode fechar esta aba depois.</p>
+  </section>
+
+  <section id="nada" hidden>
+    <h1>Conectar o cais ao GitHub</h1>
+    <p class="sub">Esta página é aberta pelo <strong>Conectar ao GitHub</strong> do cais (Setup &gt; Geral, ou <code>cais setup github-connect</code>). Abra o link que o cais mostra.</p>
+    <p class="erro" id="erro" hidden></p>
+    <p class="muted"><a href="https://github.com/trdSystemDev/cais">github.com/trdSystemDev/cais</a></p>
+  </section>
+</main>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var show = function (id) { document.getElementById(id).hidden = false; };
+  var fail = function (msg) { var e = document.getElementById("erro"); e.textContent = msg; e.hidden = false; show("nada"); };
+
+  var code = q.get("code");
+  if (code) {
+    if (!/^[A-Za-z0-9_-]{8,100}$/.test(code)) return fail("O código que o GitHub mandou não parece válido. Crie o app de novo pelo cais.");
+    document.getElementById("codigo").textContent = code;
+    var btn = document.getElementById("copiar");
+    btn.onclick = function () {
+      navigator.clipboard.writeText(code).then(function () { btn.textContent = "Copiado"; },
+        function () { btn.textContent = "Selecione e copie"; });
+    };
+    // o codigo nao fica no historico nem no endereco
+    history.replaceState(null, "", location.pathname);
+    return show("volta");
+  }
+
+  var name = q.get("name"), org = q.get("org") || "";
+  if (!name) return show("nada");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,33}$/.test(name)) return fail("Nome de app inválido no link. Abra o link do cais de novo.");
+  if (org && !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(org)) return fail("Organização inválida no link. Confira o nome dela no cais.");
+
+  // o GitHub App do cais: so le o codigo dos repositorios (o deploy baixa o
+  // tarball do commit); sem webhook (o deploy automatico pergunta ao GitHub)
+  var manifest = {
+    name: name,
+    url: "https://github.com/trdSystemDev/cais",
+    description: "cais: baixa o código dos repositórios pro deploy na VPS.",
+    redirect_url: location.origin + location.pathname,
+    public: false,
+    default_permissions: { contents: "read", metadata: "read" },
+    default_events: []
+  };
+  var form = document.getElementById("form");
+  form.action = org
+    ? "https://github.com/organizations/" + encodeURIComponent(org) + "/settings/apps/new"
+    : "https://github.com/settings/apps/new";
+  document.getElementById("manifest").value = JSON.stringify(manifest);
+  document.getElementById("permissoes").textContent =
+    "App " + name + (org ? " na organização " + org : " na sua conta") +
+    ", privado, só com leitura do código (Contents: read). Sem webhook.";
+  show("indo");
+  form.submit();
+})();
+</script>
+</body>
+</html>
