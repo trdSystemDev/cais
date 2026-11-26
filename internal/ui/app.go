@@ -371,6 +371,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) onState(s core.State) tea.Cmd {
 	m.state = s
 	m.db.importing = s.Import
+	// a atualizacao vem do estado: tambem a pedida por outra TUI ou pelo
+	// cais update; a que falhou libera o Atualizar de novo
+	switch u := s.Update; {
+	case u.Running():
+		m.updateTo, m.updateArm = u.To, false
+	case u != nil:
+		m.updateTo = ""
+	}
 	secCmd := m.setup.setState(s)
 	appsCmd := m.apps.onState(m.state)
 	var panels tea.Cmd

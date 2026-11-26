@@ -51,7 +51,7 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 	c := core.New(core.Deps{TraefikMetrics: noTraffic,
 		CheckDocker: check,
 		// nunca o systemd-run de verdade nos testes
-		SelfUpdate: func(context.Context, string) error { return errors.New("sem atualizar nos testes") },
+		SelfUpdate: func(context.Context, string, string) error { return errors.New("sem atualizar nos testes") },
 		// a VPS da aba Seguranca: o Corrigir liga o firewall e o Preparar
 		// VPS acerta o SSH (e fica esperando a confirmacao)
 		CheckHost: func(context.Context) []host.Item {

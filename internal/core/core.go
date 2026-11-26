@@ -116,8 +116,16 @@ type Deps struct {
 	Version       string
 	LatestRelease func(ctx context.Context) (string, error)
 	// SelfUpdate comeca a atualizacao pro release version e volta sem
-	// esperar (padrao: o install.sh da tag numa unidade do systemd).
-	SelfUpdate func(ctx context.Context, version string) error
+	// esperar (padrao: o install.sh da tag numa unidade do systemd), baixando
+	// o binario numa pasta dentro de downloadDir.
+	SelfUpdate func(ctx context.Context, version, downloadDir string) error
+	// ProbeUpdate le o andamento da atualizacao comecada em since (padrao:
+	// o journal e o estado da unidade cais-update e o arquivo baixando);
+	// ReleaseSize, o tamanho do binario do release (0: nao sabe).
+	ProbeUpdate func(ctx context.Context, since time.Time, downloadDir string) UpdateProbe
+	ReleaseSize func(ctx context.Context, version string) int64
+	// UpdateTick e de quanto em quanto tempo o andamento e lido (padrao 1s).
+	UpdateTick time.Duration
 	// Logger e o log do daemon (padrao: slog.Default(), que o main configura).
 	Logger *slog.Logger
 }
@@ -317,6 +325,15 @@ func New(d Deps) *Core {
 	}
 	if d.SelfUpdate == nil {
 		d.SelfUpdate = selfUpdate
+	}
+	if d.ProbeUpdate == nil {
+		d.ProbeUpdate = probeUpdate
+	}
+	if d.ReleaseSize == nil {
+		d.ReleaseSize = releaseSize
+	}
+	if d.UpdateTick <= 0 {
+		d.UpdateTick = time.Second
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()

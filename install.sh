@@ -445,7 +445,13 @@ fi
 
 # --- binario -----------------------------------------------------------------
 
-OUT=$(mktemp -d)
+# na atualizacao pelo cais, o daemon pede o download numa pasta dele
+# (CAIS_DOWNLOAD_DIR) pra mostrar o andamento na TUI
+if [ -n "${CAIS_DOWNLOAD_DIR:-}" ] && [ -d "$CAIS_DOWNLOAD_DIR" ]; then
+	OUT=$(mktemp -d -p "$CAIS_DOWNLOAD_DIR")
+else
+	OUT=$(mktemp -d)
+fi
 trap 'rm -rf "$OUT"' EXIT
 
 download

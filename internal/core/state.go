@@ -28,6 +28,9 @@ type State struct {
 	Hardening Hardening `json:"hardening"`
 	// Import e a importacao de banco em andamento (nil: nenhuma).
 	Import *DBImport `json:"import,omitempty"`
+	// Update e a atualizacao do cais em andamento, ou a que falhou (nil:
+	// nenhuma). A que da certo some com o daemon, que reinicia na versao nova.
+	Update *UpdateProgress `json:"update,omitempty"`
 }
 
 // DBImport e o andamento de um banco sendo importado de outro servidor.

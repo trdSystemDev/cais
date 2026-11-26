@@ -15,6 +15,9 @@ import (
 var (
 	updateWait = 10 * time.Minute
 	updatePoll = 2 * time.Second
+	// updateEvery e de quanto em quanto tempo o andamento repete sem mudar
+	// de passo (o download)
+	updateEvery = 10 * time.Second
 )
 
 // runUpdate pede ao daemon a atualizacao (o install.sh do release, como
@@ -50,11 +53,25 @@ func (e *cli) runUpdate(args []string) error {
 	}
 	fmt.Fprintf(e.out, "Atualizando de %s pra %s: os apps e os bancos continuam no ar, so o daemon reinicia.\n", r.From, r.To)
 	deadline := time.Now().Add(updateWait)
+	var step string
+	var printed time.Time
 	for time.Now().Before(deadline) {
 		time.Sleep(updatePoll)
 		if v := e.daemonVersion(*socket); v == r.To {
 			fmt.Fprintf(e.out, "Pronto: o cais esta na %s.\n", r.To)
 			return nil
+		}
+		// o andamento: uma linha quando o passo muda, e a cada 10s no download
+		u := e.updateProgress(*socket)
+		if u == nil || u.To != r.To {
+			continue
+		}
+		if u.Error != "" {
+			return fmt.Errorf("a atualizacao pra %s falhou (o cais segue na %s): %s", u.To, u.From, u.Error)
+		}
+		if u.Step != step || time.Since(printed) >= updateEvery {
+			step, printed = u.Step, time.Now()
+			fmt.Fprintln(e.out, "  "+u.Line(time.Now()))
 		}
 	}
 	return fmt.Errorf("o daemon nao voltou na %s em %s (um deploy ou backup em andamento segura o reinicio); acompanhe com: sudo journalctl -u %s -u cais",
@@ -75,4 +92,21 @@ func (e *cli) daemonVersion(socket string) string {
 		return ""
 	}
 	return h.Version
+}
+
+// updateProgress e o andamento da atualizacao no estado do daemon (nil: fora
+// do ar, reiniciando, ou nenhuma).
+func (e *cli) updateProgress(socket string) *core.UpdateProgress {
+	c, err := e.connect(socket)
+	if err != nil {
+		return nil
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	st, err := c.Snapshot(ctx)
+	if err != nil {
+		return nil
+	}
+	return st.Update
 }

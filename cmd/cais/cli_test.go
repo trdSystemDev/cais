@@ -319,6 +319,15 @@ func TestCLIUpdate(t *testing.T) {
 			f.SetOut("CheckHealth", core.Health{Version: "v0.5.3"})
 		},
 		errOut: []string{"o daemon nao voltou na v0.6.0", "journalctl -u cais-update"}})
+	runCase(t, cliCase{name: "andamento e falha", args: "update", code: 1,
+		setup: func(f *coretest.Recorder) {
+			f.SetOut("UpdateCais", core.UpdateResult{From: "v0.5.3", To: "v0.6.0", Started: true})
+			f.SetOut("CheckHealth", core.Health{Version: "v0.5.3"})
+			f.SetOut("Snapshot", core.State{Update: &core.UpdateProgress{From: "v0.5.3", To: "v0.6.0",
+				Error: "falhou o download de cais-linux-amd64"}})
+		},
+		calls:  []string{"UpdateCais", "CheckHealth", "Snapshot"},
+		errOut: []string{"a atualizacao pra v0.6.0 falhou (o cais segue na v0.5.3): falhou o download de cais-linux-amd64"}})
 	runCase(t, cliCase{name: "argumento sobrando", args: "update agora", code: 1, noCalls: true, errOut: []string{"uso: cais update"}})
 }
 

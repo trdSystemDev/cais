@@ -170,13 +170,17 @@ func (m *model) alerts(now time.Time) []dashAlert {
 			add(sevWarn, "", tabInfra, "Certificado de %s vence %s (o Traefik renova sozinho; se nao renovar, confira o DNS)", c.Domain, until(left))
 		}
 	}
-	if h.UpdateAvailable() || m.updateTo != "" {
+	if u := m.state.Update; h.UpdateAvailable() || m.updateTo != "" || u != nil {
 		text := fmt.Sprintf("Versao nova do cais: %s (rodando %s)", h.Latest, h.Version)
 		switch {
+		case u.Running():
+			text = u.Line(now)
 		case m.updateTo != "":
-			text = "Atualizando o cais pra " + m.updateTo + ": o daemon reinicia e esta tela fecha"
+			text = "Atualizando o cais pra " + m.updateTo + ": comecando"
 		case m.updateErr != "":
 			text += ". Nao atualizou: " + m.updateErr
+		case u != nil && u.Error != "":
+			text = fmt.Sprintf("A atualizacao pra %s falhou (o cais segue na %s): %s", u.To, u.From, u.Error)
 		case m.updateArm:
 			text += ". Confirma? A TUI fecha e os apps seguem no ar (clique de novo ou u)"
 		}

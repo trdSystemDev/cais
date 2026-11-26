@@ -159,14 +159,36 @@ func TestDashboardQuemMaisUsa(t *testing.T) {
 
 // o Atualizar do aviso de versao nova: o primeiro clique pergunta, o
 // segundo pede ao daemon; quando ele reinicia, a tela diz pra abrir de novo
+// probeFake finge a unidade cais-update pros testes da TUI.
+type probeFake struct {
+	mu sync.Mutex
+	p  core.UpdateProbe
+}
+
+func (f *probeFake) set(p core.UpdateProbe) { f.mu.Lock(); f.p = p; f.mu.Unlock() }
+func (f *probeFake) probe(context.Context, time.Time, string) core.UpdateProbe {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.p
+}
+
+func updateCore(t *testing.T, asked *[]string, pf *probeFake) *core.Core {
+	t.Helper()
+	root := t.TempDir()
+	return core.New(core.Deps{TraefikMetrics: noTraffic, CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
+		SecretsDir: filepath.Join(root, "secrets"), DataDir: root, Version: "v0.2.0",
+		LatestRelease: func(context.Context) (string, error) { return "v0.3.0", nil },
+		SelfUpdate:    func(_ context.Context, v, _ string) error { *asked = append(*asked, v); return nil },
+		ProbeUpdate:   pf.probe,
+		ReleaseSize:   func(context.Context, string) int64 { return 10 << 20 },
+		UpdateTick:    10 * time.Millisecond,
+		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
+}
+
 func TestDashboardAtualiza(t *testing.T) {
 	var asked []string
-	root := t.TempDir()
-	c := core.New(core.Deps{TraefikMetrics: noTraffic, CheckDocker: okChecker, ConfigPath: filepath.Join(root, "config.yaml"),
-		SecretsDir: filepath.Join(root, "secrets"), Version: "v0.2.0",
-		LatestRelease: func(context.Context) (string, error) { return "v0.3.0", nil },
-		SelfUpdate:    func(_ context.Context, v string) error { asked = append(asked, v); return nil },
-		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
+	pf := &probeFake{p: core.UpdateProbe{Active: true}}
+	c := updateCore(t, &asked, pf)
 	m := open(t, c)
 	waitFor(t, m, "Pronto.")
 	m.state.Health = core.Health{Version: "v0.2.0", Latest: "v0.3.0"}
@@ -181,6 +203,11 @@ func TestDashboardAtualiza(t *testing.T) {
 	if strings.Join(asked, " ") != "v0.3.0" {
 		t.Fatalf("pedidos: %v", asked)
 	}
+	// o andamento: o download com quanto falta, depois o passo do install.sh
+	pf.set(core.UpdateProbe{Active: true, Steps: []string{"Baixando o cais v0.3.0 (amd64) do release do GitHub"}, Bytes: 5 << 20})
+	waitFor(t, m, "baixando 5.0 MB de 10.0 MB (50%")
+	pf.set(core.UpdateProbe{Active: true, Steps: []string{"Baixando", "Reiniciando o daemon"}, Bytes: 10 << 20})
+	waitFor(t, m, "Reiniciando o daemon")
 	m.Update(closedMsg{})
 	if s := screen(m); !strings.Contains(s, "Abra o cais de novo em alguns segundos") || strings.Contains(s, "caiu") {
 		t.Fatalf("depois do reinicio:\n%s", s)
@@ -201,7 +228,7 @@ func TestDashboardVerificarPerguntaOReleaseNaHora(t *testing.T) {
 			asks++
 			return latest, nil
 		},
-		SelfUpdate: func(context.Context, string) error { return errors.New("sem atualizar nos testes") },
+		SelfUpdate: func(context.Context, string, string) error { return errors.New("sem atualizar nos testes") },
 		ComposePS:  func(context.Context, string) ([]docker.Container, error) { return nil, nil }})
 	count := func() int { mu.Lock(); defer mu.Unlock(); return asks }
 	m := open(t, c)
@@ -223,4 +250,22 @@ func TestDashboardVerificarPerguntaOReleaseNaHora(t *testing.T) {
 		t.Fatalf("Verificar: %d consultas", count())
 	}
 	waitFor(t, m, "Atualizar")
+}
+
+// a atualizacao que falha diz o motivo e libera o Atualizar de novo
+func TestDashboardAtualizacaoFalha(t *testing.T) {
+	var asked []string
+	pf := &probeFake{p: core.UpdateProbe{Active: true}}
+	m := open(t, updateCore(t, &asked, pf))
+	waitFor(t, m, "Pronto.")
+	m.state.Health = core.Health{Version: "v0.2.0", Latest: "v0.3.0"}
+	waitFor(t, m, "Versao nova do cais")
+	press(t, m, "u")
+	press(t, m, "u")
+	waitFor(t, m, "Atualizando o cais pra v0.3.0")
+	pf.set(core.UpdateProbe{Last: "install.sh: falhou o download de cais-linux-amd64"})
+	waitFor(t, m, "falhou (o cais segue na v0.2.0): falhou o download de cais-linux-amd64")
+	if !strings.Contains(screen(m), "Atualizar") {
+		t.Fatalf("sem o Atualizar depois da falha:\n%s", screen(m))
+	}
 }
