@@ -122,18 +122,23 @@ type appsPage struct {
 	rollbackArm string
 	promoSig    map[string]string // homologacao -> commits no ar quando consultou
 
-	container  int    // logs: container do app selecionado
-	pendingSel string // app recem-criado: seleciona quando chegar no estado
-	scroll     int
-	focusLine  int
-	focusH     int // altura do campo com foco (linhas)
-	follow     bool
-	busy       string
-	status     string
-	statusC    string
-	detailErr  string
-	shellErr   string   // por que o Shell dos Logs nao abriu
-	info       *infoBox // ajuda aberta pelo [i] (modal)
+	// logs: o que mostrar (nome do container ou apps.DeployLog); vazio ou
+	// um container que sumiu: o padrao de logTarget
+	logPick string
+	// deployFollowed e o app cujo deploy em andamento ja abriu o log do
+	// deploy (abre uma vez por deploy; depois o seletor e do usuario)
+	deployFollowed string
+	pendingSel     string // app recem-criado: seleciona quando chegar no estado
+	scroll         int
+	focusLine      int
+	focusH         int // altura do campo com foco (linhas)
+	follow         bool
+	busy           string
+	status         string
+	statusC        string
+	detailErr      string
+	shellErr       string   // por que o Shell dos Logs nao abriu
+	info           *infoBox // ajuda aberta pelo [i] (modal)
 }
 
 // respostas das chamadas ao core
@@ -383,7 +388,7 @@ func (p *appsPage) loadSelected(force bool) tea.Cmd {
 		return nil
 	}
 	p.loadedFor = a.Name
-	p.container = 0
+	p.logPick, p.deployFollowed = "", ""
 	p.detailErr = ""
 	p.repo.SetValue(a.Repo)
 	p.branch.SetValue(a.Branch)
@@ -659,14 +664,15 @@ func (p *appsPage) fieldsLinks(a *core.AppStatus) {
 
 // fieldsLogs e a secao Logs.
 func (p *appsPage) fieldsLogs(a *core.AppStatus) {
-	p.add(&field{id: "log-container", label: "Container", press: func() tea.Cmd {
-		if n := len(a.Containers); n > 0 {
-			p.container = (p.container + 1) % n
-		}
+	p.add(&field{id: "log-container", label: "Log", press: func() tea.Cmd {
+		targets := logTargets(a)
+		i := slices.Index(targets, p.logTarget(a))
+		p.logPick = targets[(i+1)%len(targets)]
 		p.shellErr = ""
+		p.rebuild() // o Shell so existe com um container escolhido
 		return nil
 	}})
-	if len(a.Containers) > 0 {
+	if p.logTarget(a) != apps.DeployLog {
 		p.add(&field{id: "app-shell", label: "Shell", kind: btnInfo, press: p.shell})
 	}
 }

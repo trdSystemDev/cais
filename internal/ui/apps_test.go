@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -43,7 +44,7 @@ func (f *fakeApps) Config(context.Context, docker.Project) ([]byte, error) {
 	}
 	return []byte(`{"services": {}}`), nil
 }
-func (f *fakeApps) Build(context.Context, docker.Project) error { return nil }
+func (f *fakeApps) Build(context.Context, docker.Project, io.Writer) error { return nil }
 func (f *fakeApps) Up(_ context.Context, p docker.Project) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -342,10 +343,55 @@ func TestAppsLogsDoApp(t *testing.T) {
 		t.Errorf("shell: %v %q", err, out.String())
 	}
 
+	// o seletor passa pelos containers e chega no log do deploy (sem Shell)
+	click(t, m, "log-container")
+	if m.logsTarget != apps.DeployLog {
+		t.Fatalf("alvo depois do seletor %q", m.logsTarget)
+	}
+	waitFor(t, m, "==> deploy de loja")
+	if sc := screen(m); !strings.Contains(sc, "‹ deploy (andamento e build) ›") || strings.Contains(sc, "Shell") {
+		t.Fatalf("log do deploy:\n%s", sc)
+	}
+	click(t, m, "log-container")
+	if m.logsTarget != "loja-web-1" {
+		t.Fatalf("o seletor nao voltou pro container: %q", m.logsTarget)
+	}
+
 	// saindo da aba, para de consultar
 	run(t, m, m.setTab(tabDashboard))
 	if _, cmd := m.Update(appLogsTick(m.logsGeneration)); cmd != nil {
 		t.Fatal("continuou consultando logs fora da aba Apps")
+	}
+}
+
+// sem container o log e o do deploy; um deploy que comeca abre o log dele
+// uma vez (depois o seletor e do usuario)
+func TestLogsSegueODeploy(t *testing.T) {
+	p := &appsPage{}
+	a := &core.AppStatus{App: apps.App{Name: "loja"}}
+	if got := p.logTarget(a); got != apps.DeployLog {
+		t.Errorf("sem container: %q", got)
+	}
+	a.Containers = []docker.Container{{Name: "loja-web-1"}}
+	if got := p.logTarget(a); got != "loja-web-1" {
+		t.Errorf("com container: %q", got)
+	}
+	a.Deploying = true
+	p.followDeploy(a)
+	if got := p.logTarget(a); got != apps.DeployLog {
+		t.Errorf("deploy comecou: %q", got)
+	}
+	p.logPick = "loja-web-1" // o usuario volta pro container
+	p.followDeploy(a)
+	if got := p.logTarget(a); got != "loja-web-1" {
+		t.Errorf("o mesmo deploy tirou a escolha do usuario: %q", got)
+	}
+	a.Deploying = false
+	p.followDeploy(a)
+	a.Deploying = true
+	p.followDeploy(a)
+	if got := p.logTarget(a); got != apps.DeployLog {
+		t.Errorf("deploy seguinte: %q", got)
 	}
 }
 

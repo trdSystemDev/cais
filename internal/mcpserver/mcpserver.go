@@ -103,7 +103,7 @@ type (
 	}
 	logsArgs struct {
 		App       string `json:"app" jsonschema:"nome do app"`
-		Container string `json:"container" jsonschema:"nome do container, como aparece em apps_list (ex: portal-web-1)"`
+		Container string `json:"container" jsonschema:"nome do container, como aparece em apps_list (ex: portal-web-1), ou deploy: o andamento e a saida do build do deploy em andamento ou do ultimo"`
 		logFilter
 	}
 	infraLogsArgs struct {
@@ -228,7 +228,8 @@ func (t tools) registerRead(s *mcp.Server) {
 			return nil, list, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_logs", Annotations: readOnly(),
-		Description: "Ultimas linhas do log de um container do app (o nome do container sai de apps_list; " + logsHelp + ")."},
+		Description: "Ultimas linhas do log de um container do app (o nome do container sai de apps_list; " + logsHelp + "). " +
+			"Com container deploy, o log do deploy em andamento ou do ultimo: os passos (==>) e a saida do docker compose build, pra acompanhar um app_deploy que ainda roda ou ver por que falhou."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logsArgs) (*mcp.CallToolResult, any, error) {
 			opt, err := in.options()
 			if err != nil {

@@ -153,8 +153,14 @@ type fileRef struct {
 }
 
 // secretArg e nome de build arg que parece segredo (TOKEN, NPM_TOKEN,
-// DB_PASSWORD, STRIPE_API_KEY...)
+// DB_PASSWORD, STRIPE_API_KEY...). Os publicos por convencao (publicArg)
+// ficam de fora.
 var secretArg = regexp.MustCompile(`(?i)(^|_)(token|secret|password|passwd|pass|pwd|apikey|api_key|private_key|credentials?)(_|$)`)
+
+// publicArg e build arg que o framework poe no JavaScript do navegador
+// (NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN, VITE_..., REACT_APP_...): e publico por
+// definicao, e build secret nem chegaria no bundle.
+var publicArg = regexp.MustCompile(`^(NEXT_PUBLIC|VITE|REACT_APP|NUXT_PUBLIC|PUBLIC|EXPO_PUBLIC|GATSBY)_`)
 
 // nomes de router/service/middleware nos labels do Traefik
 var traefikName = regexp.MustCompile(`^traefik\.(?:http|tcp|udp)\.(routers|services|middlewares)\.([^.]+)\.`)
@@ -320,7 +326,7 @@ func (k *composeCheck) build(n string, s *composeService) {
 			k.bad(n, "build com ssh repassa as chaves do servidor pro build. Tire o ssh do build")
 		}
 		for _, arg := range sortedKeys(b.Args) {
-			if secretArg.MatchString(arg) {
+			if secretArg.MatchString(arg) && !publicArg.MatchString(arg) {
 				id := strings.ToLower(arg)
 				k.warn(n, "o build arg %s parece segredo: build arg fica na imagem (docker history). Use build secret: secrets: [%s] no build, "+
 					"secrets: {%s: {environment: %s}} no compose e RUN --mount=type=secret,id=%s no Dockerfile (veja %s)", arg, id, id, arg, id, k.guide)

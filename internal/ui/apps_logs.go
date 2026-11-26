@@ -2,12 +2,14 @@ package ui
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 )
@@ -17,9 +19,9 @@ func (m *model) appsClick(msg tea.MouseMsg) tea.Cmd {
 		m.apps.info = nil // qualquer clique fecha a ajuda
 		return nil
 	}
-	sel, before, cont := m.apps.sel, m.apps.section, m.apps.container
+	sel, before, cont := m.apps.sel, m.apps.section, m.apps.logPick
 	cmd := m.apps.click(msg)
-	force := sel != m.apps.sel || m.apps.section != before || m.apps.container != cont
+	force := sel != m.apps.sel || m.apps.section != before || m.apps.logPick != cont
 	if force {
 		m.logSelection = logSelection{} // a selecao era dos logs de antes
 	}
@@ -45,9 +47,9 @@ func (m *model) appsKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 	}
-	sel, sec, cont := m.apps.sel, m.apps.section, m.apps.container
+	sel, sec, cont := m.apps.sel, m.apps.section, m.apps.logPick
 	cmd := m.apps.key(msg)
-	force := sel != m.apps.sel || sec != m.apps.section || cont != m.apps.container
+	force := sel != m.apps.sel || sec != m.apps.section || cont != m.apps.logPick
 	if force {
 		m.logSelection = logSelection{} // a selecao era dos logs de antes
 	}
@@ -64,14 +66,49 @@ func (m *model) scrollLogs(up bool) {
 	}
 }
 
-// syncAppLogs troca o container dos logs quando a secao Logs esta aberta.
+// logTargets e o que o seletor dos Logs oferece: os containers do app e,
+// por ultimo, o log do deploy.
+func logTargets(a *core.AppStatus) []string {
+	out := make([]string, 0, len(a.Containers)+1)
+	for _, c := range a.Containers {
+		out = append(out, c.Name)
+	}
+	return append(out, apps.DeployLog)
+}
+
+// logTarget e o log escolhido: o do seletor, se ainda existe; senao o
+// primeiro container, ou o do deploy quando nao ha container (primeiro
+// deploy rodando, deploy que falhou).
+func (p *appsPage) logTarget(a *core.AppStatus) string {
+	if slices.Contains(logTargets(a), p.logPick) {
+		return p.logPick
+	}
+	if len(a.Containers) > 0 {
+		return a.Containers[0].Name
+	}
+	return apps.DeployLog
+}
+
+// followDeploy abre o log do deploy quando um deploy do app comeca (uma
+// vez por deploy: o usuario pode voltar pros containers durante ele).
+func (p *appsPage) followDeploy(a *core.AppStatus) {
+	switch {
+	case a.Deploying && p.deployFollowed != a.Name:
+		p.logPick, p.deployFollowed = apps.DeployLog, a.Name
+	case !a.Deploying && p.deployFollowed == a.Name:
+		p.deployFollowed = ""
+	}
+}
+
+// syncAppLogs troca o log mostrado quando a secao Logs esta aberta.
 func (m *model) syncAppLogs(force bool) tea.Cmd {
 	if m.tab != tabApps || m.disconnected {
 		return nil
 	}
 	target := ""
-	if a := m.apps.selected(); a != nil && m.apps.section == secLogs && len(a.Containers) > 0 {
-		target = a.Containers[min(m.apps.container, len(a.Containers)-1)].Name
+	if a := m.apps.selected(); a != nil && m.apps.section == secLogs {
+		m.apps.followDeploy(a)
+		target = m.apps.logTarget(a)
 	}
 	if !force && target == m.logsTarget {
 		return nil
@@ -104,9 +141,13 @@ func (m *model) onAppLogs(msg appLogsMsg) tea.Cmd {
 		return nil
 	}
 	m.logsText, m.logsError = msg.text, ""
-	if msg.err != nil {
+	switch {
+	case msg.err != nil:
 		m.logsError = msg.err.Error()
-	} else if strings.TrimSpace(msg.text) == "" {
+	case strings.TrimSpace(msg.text) != "":
+	case m.logsTarget == apps.DeployLog:
+		m.logsText = "(nenhum deploy registrado ainda: o andamento do proximo aparece aqui)"
+	default:
 		m.logsText = "(o container ainda nao escreveu nada no log)"
 	}
 	generation := m.logsGeneration
@@ -152,13 +193,17 @@ func (m *model) viewAppLogs(a core.AppStatus, w, h int) string {
 	mark, status, c := appStatus(a, t)
 	b.WriteString(t.bold().Render(a.Name) + "  " + t.fg(c).Render(mark+" "+status) + "\n")
 	b.WriteString(p.viewSections() + "\n\n")
-	name := "nenhum"
-	if len(a.Containers) > 0 {
-		name = a.Containers[min(p.container, len(a.Containers)-1)].Name
+	target := p.logTarget(&a)
+	name := target
+	if target == apps.DeployLog {
+		name = "deploy (andamento e build)"
+		if a.Deploying {
+			name = "deploy (rodando agora)"
+		}
 	}
 	for i, f := range p.fields {
 		if f.id == "log-container" {
-			b.WriteString(p.zones.Mark(f.id, "  "+t.fg(t.text).Width(18).Render("Container")+t.selector("‹ "+name+" ›", p.inForm && i == p.focus)))
+			b.WriteString(p.zones.Mark(f.id, "  "+t.fg(t.text).Width(18).Render("Log")+t.selector("‹ "+name+" ›", p.inForm && i == p.focus)))
 			for j, sf := range p.fields {
 				if sf.id == "app-shell" {
 					b.WriteString("  " + p.zones.Mark(sf.id, t.button(sf.label, btnInfo, p.inForm && j == p.focus)))
@@ -175,10 +220,6 @@ func (m *model) viewAppLogs(a core.AppStatus, w, h int) string {
 		b.WriteString(lipgloss.NewStyle().Width(w-4).Foreground(t.danger).Render("  "+p.shellErr) + "\n")
 	}
 	b.WriteString("\n")
-	empty := ""
-	if len(a.Containers) == 0 {
-		empty = "Nenhum container: o app ainda nao teve deploy ou esta parado."
-	}
-	m.writeLogs(&b, empty, w, h)
+	m.writeLogs(&b, "", w, h)
 	return t.panel(p.inForm, w-2, h).MaxHeight(h + 2).Render(b.String())
 }

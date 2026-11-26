@@ -18,6 +18,7 @@ cais app deploy meu-app                      # o commit mais novo da branch
 cais app deploy meu-app -ref 3f2a1c9         # ou um commit/branch
 cais apps                                    # estado de todos
 cais app logs meu-app meu-app-web-1
+cais app logs meu-app deploy                 # andamento e build do deploy (o atual ou o ultimo)
 cais app shell meu-app web                   # bash (ou sh) dentro do container
 cais app history meu-app                     # ultimos deploys
 cais app rollback meu-app [commit]           # volta pra um deploy anterior (sem build)

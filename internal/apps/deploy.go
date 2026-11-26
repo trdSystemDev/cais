@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,11 +50,28 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	back := context.WithoutCancel(ctx)
 	ctx, dl := newDeadline(ctx, m.Timeout)
 	defer dl.stop()
+	if _, err := m.Get(name); err != nil {
+		return DeployResult{}, err
+	}
+	lg := m.openDeployLog(name)
+	defer lg.Close()
+	switch {
+	case tag.Rollback:
+		lg.Step("rollback de %s pra %s", name, ref)
+	case tag.PromotedFrom != "":
+		lg.Step("promocao de %s pra %s (%s)", tag.PromotedFrom, name, ref)
+	case tag.Auto:
+		lg.Step("deploy automatico de %s (commit %s)", name, ref)
+	default:
+		lg.Step("deploy de %s", name)
+	}
 	a, commit, err := m.deployTarget(ctx, name, ref, dl)
 	if err != nil {
+		lg.Step("falhou: %v", dl.wrap(err))
 		return DeployResult{}, err
 	}
 	res := DeployResult{App: name, Commit: commit}
+	lg.Step("baixando %s@%s (commit %s)", a.Repo, cmp.Or(ref, a.Branch, "branch principal"), short(commit))
 
 	// o codigo novo vai pra uma pasta propria: o app no ar nao e tocado ate
 	// o build terminar
@@ -66,12 +84,13 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	}
 	fail := func(err error) (DeployResult, error) {
 		err = dl.wrap(err)
+		lg.Step("falhou (a versao no ar continua): %v", err)
 		os.RemoveAll(filepath.Join(dir, next))
 		m.record(a, Deploy{At: m.Now(), Commit: commit, Error: err.Error(), Warnings: res.Warnings, Problems: res.Problems,
 			PromotedFrom: tag.PromotedFrom, Auto: tag.Auto, Rollback: tag.Rollback, Transient: transient(err)})
 		return res, err
 	}
-	cfg, built, err := m.buildNext(ctx, a, commit, tag, &res, dl)
+	cfg, built, err := m.buildNext(ctx, a, commit, tag, &res, dl, lg)
 	if err != nil {
 		return fail(err)
 	}
@@ -91,13 +110,16 @@ func (m Manager) deploy(ctx context.Context, name, ref string, tag Deploy) (Depl
 	}
 
 	p := m.project(a, SrcDir)
-	upErr := m.upNew(ctx, a, p, cfg)
+	upErr := m.upNew(ctx, a, p, cfg, lg)
 	last.At = m.Now()
 	if upErr != nil {
-		return res, m.failedUp(back, a, last, hadPrev, dl.wrap(upErr))
+		upErr = m.failedUp(back, a, last, hadPrev, dl.wrap(upErr), lg)
+		lg.Step("falhou: %v", upErr)
+		return res, upErr
 	}
 	a.Commit = commit
 	m.record(a, last)
+	lg.Step("pronto: %s no ar", short(commit))
 	// as imagens deste commit ficam guardadas (rollback sem build) e as de
 	// deploys velhos saem; o que sobrar sem tag e lixo. Falhar aqui nao
 	// desfaz um deploy que deu certo.
@@ -191,7 +213,7 @@ func (m Manager) deployTarget(ctx context.Context, name, ref string, dl *deadlin
 // formato do cais (problemas e avisos vao em res) e faz o build, ou usa as
 // imagens guardadas de um rollback. Devolve o compose resolvido e as
 // imagens que o build gera.
-func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy, res *DeployResult, dl *deadline) (cfg []byte, built []string, err error) {
+func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy, res *DeployResult, dl *deadline, lg *deployLog) (cfg []byte, built []string, err error) {
 	name, dir, next := a.Name, m.dir(a.Name), NextDir
 	if _, err := os.Stat(filepath.Join(dir, next, a.ComposeFile())); err != nil {
 		return nil, nil, fmt.Errorf("o commit %s nao tem o compose %s", short(commit), a.ComposeFile())
@@ -200,12 +222,16 @@ func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy
 		return nil, nil, err
 	}
 	p := m.project(a, next)
+	lg.Step("conferindo o compose %s", a.ComposeFile())
 	cfg, err = m.Docker.Config(ctx, p)
 	if err != nil {
 		return nil, nil, err
 	}
 	res.Problems, res.Warnings = CheckCompose(cfg, Rules{App: name, Src: filepath.Join(dir, next),
 		Bin: m.Bin, RunEnv: m.RunEnvPath(name), DotEnv: m.dotEnvPath(a, next), Networks: m.Networks, Apps: m.otherApps(name)})
+	for _, w := range res.Warnings {
+		lg.Step("aviso: %s", w)
+	}
 	if len(res.Problems) > 0 {
 		return nil, nil, &ComposeError{App: name, Problems: res.Problems}
 	}
@@ -213,15 +239,23 @@ func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy
 	// build); sem elas, ou num deploy normal, o build faz
 	built = builtImages(cfg, p.Name)
 	res.Images = tag.Rollback && m.restoreImages(ctx, built, commit)
-	if !res.Images {
-		release, err := m.Builds.acquire(ctx, name, dl.pause, dl.resume)
+	if res.Images {
+		lg.Step("usando as imagens guardadas de %s (sem build)", short(commit))
+	} else {
+		release, err := m.Builds.acquire(ctx, name, func() {
+			lg.Step("esperando o build de outro app terminar (um build por vez)")
+			dl.pause()
+		}, dl.resume)
 		if err != nil {
 			return nil, nil, err
 		}
 		defer release()
-		if err := m.Docker.Build(ctx, p); err != nil {
+		lg.Step("build (docker compose build --pull)")
+		start := time.Now()
+		if err := m.Docker.Build(ctx, p, lg); err != nil {
 			return nil, nil, err
 		}
+		lg.Step("build pronto em %s", time.Since(start).Round(time.Second))
 	}
 	return cfg, built, nil
 }
@@ -249,14 +283,19 @@ func (m Manager) swapIn(a App) (hadPrev bool, err error) {
 // upNew sobe o codigo novo: services atras do Traefik com healthcheck
 // trocam sem queda; o up depois sobe o resto (e nao recria os que ja
 // trocaram); e observa os containers.
-func (m Manager) upNew(ctx context.Context, a App, p docker.Project, cfg []byte) error {
+func (m Manager) upNew(ctx context.Context, a App, p docker.Project, cfg []byte, lg *deployLog) error {
 	for _, s := range rollingServices(cfg, p.Name) {
+		lg.Step("trocando %s sem queda: o novo sobe ao lado do antigo e espera o healthcheck", s.name)
 		if err := m.Docker.Rollout(ctx, p, s.name, s.image, s.drain); err != nil {
 			return err
 		}
 	}
+	lg.Step("subindo os containers (docker compose up --wait)")
 	if err := m.Docker.Up(ctx, p); err != nil {
 		return err
+	}
+	if m.Settle > 0 {
+		lg.Step("observando os containers por %s", m.Settle)
 	}
 	return m.settle(ctx, a)
 }
@@ -264,9 +303,10 @@ func (m Manager) upNew(ctx context.Context, a App, p docker.Project, cfg []byte)
 // failedUp registra o deploy cujo up falhou e, se havia versao anterior,
 // volta pra ela (mesmo com o limite do deploy estourado: back nao tem
 // prazo). Devolve o erro com o resultado da volta.
-func (m Manager) failedUp(back context.Context, a App, last Deploy, hadPrev bool, upErr error) error {
+func (m Manager) failedUp(back context.Context, a App, last Deploy, hadPrev bool, upErr error, lg *deployLog) error {
 	last.Error, last.Transient = upErr.Error(), transient(upErr)
 	if hadPrev {
+		lg.Step("a versao nova nao subiu; voltando pra %s", short(a.Commit))
 		// a volta roda mesmo com o limite do deploy estourado
 		rctx, cancel := context.WithTimeout(back, RollbackTimeout)
 		rerr := m.rollback(rctx, a)
@@ -384,7 +424,7 @@ func (m Manager) upCurrent(ctx context.Context, a App) error {
 	// que falhou, daemon que parou no meio) e nao espera o build de outro app
 	cfg, err := m.Docker.Config(ctx, p)
 	if err != nil || !m.restoreImages(ctx, builtImages(cfg, p.Name), a.Commit) {
-		if err := m.Docker.Build(ctx, p); err != nil {
+		if err := m.Docker.Build(ctx, p, nil); err != nil {
 			return err
 		}
 	}

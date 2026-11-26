@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/ptyio"
 )
 
@@ -36,7 +38,12 @@ func (p *appsPage) shell() tea.Cmd {
 	if a == nil || len(a.Containers) == 0 {
 		return nil
 	}
-	ct := a.Containers[min(p.container, len(a.Containers)-1)]
+	i := slices.IndexFunc(a.Containers, func(c docker.Container) bool { return c.Name == p.logTarget(a) })
+	if i < 0 {
+		p.shellErr = "escolha um container no seletor pra abrir o shell"
+		return nil
+	}
+	ct := a.Containers[i]
 	opener, ok := p.api.(core.ShellOpener)
 	if !ok {
 		p.shellErr = "esta conexao com o daemon nao abre shell"

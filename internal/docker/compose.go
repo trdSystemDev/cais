@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -160,10 +161,22 @@ func (CLI) Config(ctx context.Context, p Project) ([]byte, error) {
 }
 
 // Build constroi as imagens dos services com build. Nao mexe nos
-// containers no ar: o app continua respondendo durante o build.
-func (CLI) Build(ctx context.Context, p Project) error {
-	_, err := execRunner(ctx, "docker", p.args("build", "--pull")...)
-	if err != nil {
+// containers no ar: o app continua respondendo durante o build. A saida
+// (passos do Dockerfile, em texto) vai pra out enquanto roda; o fim dela
+// vai tambem no erro.
+func (CLI) Build(ctx context.Context, p Project, out io.Writer) error {
+	cmd := command(ctx, "docker", p.args("build", "--pull")...)
+	// sem terminal o buildkit ja imprime em texto; plain garante uma linha
+	// por passo, sem redesenhar a tela
+	cmd.Env = append(os.Environ(), "BUILDKIT_PROGRESS=plain")
+	last := &tailBuffer{limit: stderrLimit}
+	var w io.Writer = last
+	if out != nil {
+		w = io.MultiWriter(last, out)
+	}
+	cmd.Stdout, cmd.Stderr = w, w
+	if err := run(ctx, cmd); err != nil {
+		err = &CmdError{Args: cmd.Args, Stderr: strings.TrimSpace(last.String()), Err: err}
 		return fmt.Errorf("docker compose build (%s): %w", p.Name, tail(err, 20))
 	}
 	return nil

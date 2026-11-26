@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -419,8 +420,8 @@ func (f *fakeAppDocker) Config(context.Context, docker.Project) ([]byte, error) 
 	}
 	return []byte(`{"services": {"web": {}}}`), nil
 }
-func (f *fakeAppDocker) Build(context.Context, docker.Project) error { return nil }
-func (f *fakeAppDocker) Up(context.Context, docker.Project) error    { f.ups.Add(1); return nil }
+func (f *fakeAppDocker) Build(context.Context, docker.Project, io.Writer) error { return nil }
+func (f *fakeAppDocker) Up(context.Context, docker.Project) error               { f.ups.Add(1); return nil }
 func (f *fakeAppDocker) PS(_ context.Context, p docker.Project) ([]docker.Container, error) {
 	return []docker.Container{{Name: p.Name + "-web-1", Service: "web", State: "running"}}, nil
 }

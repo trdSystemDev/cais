@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -30,7 +31,7 @@ type fakeDocker struct {
 func (f *fakeDocker) Config(context.Context, docker.Project) ([]byte, error) {
 	return []byte(`{"services": {}}`), nil
 }
-func (f *fakeDocker) Build(context.Context, docker.Project) error { return nil }
+func (f *fakeDocker) Build(context.Context, docker.Project, io.Writer) error { return nil }
 func (f *fakeDocker) Up(_ context.Context, p docker.Project) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

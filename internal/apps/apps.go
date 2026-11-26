@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -244,7 +245,9 @@ func (c Comparison) InHistory() bool { return c.Status == "behind" || c.Status =
 // Docker sao as operacoes de projeto compose que os apps usam.
 type Docker interface {
 	Config(ctx context.Context, p docker.Project) ([]byte, error)
-	Build(ctx context.Context, p docker.Project) error
+	// Build manda a saida do docker (stdout e stderr) pra out, que pode
+	// ser nil.
+	Build(ctx context.Context, p docker.Project, out io.Writer) error
 	Up(ctx context.Context, p docker.Project) error
 	PS(ctx context.Context, p docker.Project) ([]docker.Container, error)
 	Restart(ctx context.Context, p docker.Project, service string) error

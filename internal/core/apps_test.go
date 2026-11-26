@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -45,7 +46,7 @@ func (d *appDocker) Config(_ context.Context, p docker.Project) ([]byte, error) 
 	return []byte(`{"services": {}}`), nil
 }
 
-func (d *appDocker) Build(_ context.Context, p docker.Project) error {
+func (d *appDocker) Build(_ context.Context, p docker.Project, _ io.Writer) error {
 	d.add("build " + p.Name)
 	if d.block != nil {
 		<-d.block
@@ -240,6 +241,13 @@ func TestAppLogsSoDoProprioApp(t *testing.T) {
 	out, err := c.AppLogs(ctx, "meu-app", "meu-app-web-1", docker.LogsOptions{})
 	if err != nil || out != "log de meu-app-web-1" {
 		t.Errorf("%q %v", out, err)
+	}
+	// "deploy" e o log do ultimo deploy, do proprio app
+	if out, err := c.AppLogs(ctx, "meu-app", apps.DeployLog, docker.LogsOptions{}); err != nil || !strings.Contains(out, "==> deploy de meu-app") {
+		t.Errorf("log do deploy %q %v", out, err)
+	}
+	if _, err := c.AppLogs(ctx, "../x", apps.DeployLog, docker.LogsOptions{}); err == nil {
+		t.Error("nome invalido")
 	}
 }
 

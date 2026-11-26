@@ -1149,7 +1149,9 @@ Uso: cais app logs <nome> <container>
 
 Ultimas linhas do log.
 
-O nome do container aparece em "cais apps" (ex: portal-web-1).
+O nome do container aparece em "cais apps" (ex: portal-web-1). Com deploy, o
+log do deploy em andamento ou do ultimo: os passos e a saida do build (o
+mesmo na TUI: aba Apps, secao Logs, seletor Log).
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 

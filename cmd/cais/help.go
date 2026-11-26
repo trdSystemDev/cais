@@ -493,7 +493,9 @@ Exemplos:
 		{name: "app stop", usage: "app stop <nome>", short: "para o app sem apagar nada", long: `
 Volta com: cais app restart <nome>`},
 		{name: "app logs", usage: "app logs <nome> <container>", short: "ultimas linhas do log", long: `
-O nome do container aparece em "cais apps" (ex: portal-web-1).`},
+O nome do container aparece em "cais apps" (ex: portal-web-1). Com deploy, o
+log do deploy em andamento ou do ultimo: os passos e a saida do build (o
+mesmo na TUI: aba Apps, secao Logs, seletor Log).`},
 		{name: "app shell", usage: "app shell <nome> [service]", short: "shell interativo (bash ou sh) num container do app", long: `
 Abre o bash do container (ou o sh, se nao tiver bash) neste terminal, como
 um docker exec -it. Sai com exit ou ctrl+d. Sem o service, vale quando o

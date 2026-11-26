@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -158,9 +159,12 @@ func (f *fakeDocker) wait(ctx context.Context, call string) error {
 	return nil
 }
 
-func (f *fakeDocker) Build(ctx context.Context, p docker.Project) error {
+func (f *fakeDocker) Build(ctx context.Context, p docker.Project, out io.Writer) error {
 	c := f.compose(p)
 	f.calls = append(f.calls, "build "+c)
+	if out != nil {
+		io.WriteString(out, "#1 [web] build "+c+"\r\n#2 DONE")
+	}
 	if err := f.wait(ctx, "build "+c); err != nil {
 		return err
 	}
@@ -1436,7 +1440,7 @@ func TestCheckComposeBuildSecret(t *testing.T) {
 		t.Errorf("build secret de arquivo: %v", p)
 	}
 
-	_, w = CheckCompose(cfg(`, "args": {"NPM_TOKEN": "x", "NODE_ENV": "production", "STRIPE_API_KEY": null, "PASSENGER": "1"}`, `"environment": "NPM_TOKEN"`), r)
+	_, w = CheckCompose(cfg(`, "args": {"NPM_TOKEN": "x", "NODE_ENV": "production", "STRIPE_API_KEY": null, "PASSENGER": "1", "NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN": "pk", "VITE_API_KEY": "x"}`, `"environment": "NPM_TOKEN"`), r)
 	if len(w) != 2 || !strings.Contains(w[0], "NPM_TOKEN parece segredo") || !strings.Contains(w[0], "id=npm_token") ||
 		!strings.Contains(w[1], "STRIPE_API_KEY parece segredo") {
 		t.Errorf("avisos dos build args %v", w)

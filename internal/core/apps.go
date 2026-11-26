@@ -226,8 +226,15 @@ func (c *Core) DeleteApp(ctx context.Context, name string, volumes bool) error {
 }
 
 // AppLogs so aceita containers do proprio app (nunca de uma stack ou de
-// outro app).
+// outro app). container apps.DeployLog ("deploy") e o log do ultimo deploy
+// (passos e saida do build), que existe ate antes do primeiro container.
 func (c *Core) AppLogs(ctx context.Context, name, container string, opt docker.LogsOptions) (string, error) {
+	if container == apps.DeployLog {
+		if err := apps.CheckName(name); err != nil {
+			return "", err
+		}
+		return c.appManager().ReadDeployLog(name, opt)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	containers, err := c.appManager().Status(ctx, name)
@@ -240,9 +247,9 @@ func (c *Core) AppLogs(ctx context.Context, name, container string, opt docker.L
 			names = append(names, ct.Name)
 		}
 		if len(names) == 0 {
-			return "", fmt.Errorf("container %q nao pertence ao app %s (o app nao tem containers: faca o deploy)", container, name)
+			return "", fmt.Errorf("container %q nao pertence ao app %s (o app nao tem containers: faca o deploy; o andamento dele sai em %q)", container, name, apps.DeployLog)
 		}
-		return "", fmt.Errorf("container %q nao pertence ao app %s (os dele: %s)", container, name, strings.Join(names, ", "))
+		return "", fmt.Errorf("container %q nao pertence ao app %s (os dele: %s; o log do ultimo deploy: %q)", container, name, strings.Join(names, ", "), apps.DeployLog)
 	}
 	return c.deps.ContainerLogs(ctx, container, opt)
 }

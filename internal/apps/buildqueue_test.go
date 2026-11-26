@@ -3,6 +3,7 @@ package apps
 import (
 	"context"
 	"errors"
+	"io"
 	"slices"
 	"sync"
 	"testing"
@@ -27,11 +28,11 @@ func (g gatedDocker) note(s string) {
 	*g.log = append(*g.log, s)
 }
 
-func (g gatedDocker) Build(ctx context.Context, p docker.Project) error {
+func (g gatedDocker) Build(ctx context.Context, p docker.Project, out io.Writer) error {
 	g.note("inicio " + g.app)
 	<-g.gate
 	g.note("fim " + g.app)
-	return g.fakeDocker.Build(ctx, p)
+	return g.fakeDocker.Build(ctx, p, out)
 }
 
 // dois apps fazendo deploy juntos: o segundo build espera o primeiro
