@@ -118,8 +118,9 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	}
 }
 
-// a sub-aba Backups troca o destino pro OneDrive: o passo 1 vira o app do
-// Azure (so o ID, sem secret) e o login e o da Microsoft
+// a sub-aba Backups troca o destino pro OneDrive: o passo 1 ja vem com o app
+// do cais (app proprio opcional, so o ID, sem secret) e o login e o da
+// Microsoft, com o Copiar codigo
 func TestBackupNoOneDrivePelaTUI(t *testing.T) {
 	o := onedrivetest.New()
 	defer o.Close()
@@ -144,7 +145,8 @@ func TestBackupNoOneDrivePelaTUI(t *testing.T) {
 	click(t, m, "setup-sec:Backups")
 	waitFor(t, m, "‹ Google Drive ›")
 	click(t, m, "bk-provider")
-	waitFor(t, m, "1 · App no Azure")
+	waitFor(t, m, "1 · App da Microsoft")
+	waitFor(t, m, "o do cais (nao precisa criar)")
 	// o passo a passo do Azure fica no [i] do passo, nao solto no painel
 	if strings.Contains(screen(m), "Permitir fluxos de clientes publicos") {
 		t.Fatalf("ajuda solta no painel:\n%s", screen(m))
@@ -162,12 +164,15 @@ func TestBackupNoOneDrivePelaTUI(t *testing.T) {
 		t.Fatalf("o Tab passa pelo secret no OneDrive: %v", ids)
 	}
 
-	m.bk.clientID.SetValue("0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b")
-	click(t, m, "bk-client-save")
-	waitFor(t, m, "Client gravado. Agora conecte o OneDrive.")
+	// sem gravar nada: Conectar ja pede o codigo pelo app do cais
 	click(t, m, "bk-connect")
 	waitFor(t, m, "MSFT-1234")
 	waitFor(t, m, "https://www.microsoft.com/link")
+	if ids := m.bk.ids(m.state.Backup); !slices.Contains(ids, "bk-login-copy") {
+		t.Fatalf("o Tab nao passa pelo Copiar codigo: %v", ids)
+	}
+	click(t, m, "bk-login-copy")
+	waitFor(t, m, "Codigo copiado")
 	o.Approve()
 	waitFor(t, m, "pessoa@outlook.com")
 

@@ -22,7 +22,8 @@ import (
 )
 
 // Secrets do backup, por destino: o OAuth client que a pessoa cria no
-// Google Cloud (ou o app no Azure, so com o ID) e o token do login (o
+// Google Cloud (ou um app proprio no Azure, so com o ID; sem ele vale o app
+// do cais) e o token do login (o
 // refresh token renova o acesso sozinho).
 const (
 	secretGoogleClient   = "google_oauth_client"
@@ -67,8 +68,8 @@ func clientLabel(p string) string {
 type BackupStatus struct {
 	// Provider e o destino: google (Google Drive) ou onedrive.
 	Provider string `json:"provider"`
-	// ClientID e o client informado (vazio: falta criar no Google Cloud ou
-	// no Azure).
+	// ClientID e o client em uso (vazio: falta criar no Google Cloud; no
+	// OneDrive, sem app proprio, e o app do cais).
 	ClientID string `json:"client_id,omitempty"`
 	// Email e a conta conectada no destino (vazio: sem login).
 	Email string `json:"email,omitempty"`
@@ -194,6 +195,9 @@ func (c *Core) backupClient(p string) (backup.Client, error) {
 	secret, _ := providerSecrets(p)
 	where := map[bool]string{true: "do app do Azure", false: "OAuth client do Google"}[p == backup.ProviderOneDrive]
 	data, err := c.secretStore().Get(secret)
+	if errors.Is(err, secrets.ErrNotFound) && p == backup.ProviderOneDrive {
+		return backup.Client{ID: backup.DefaultOneDriveClient}, nil // o app do cais
+	}
 	if errors.Is(err, secrets.ErrNotFound) {
 		return backup.Client{}, fmt.Errorf("falta %s (Setup -> Backups)", clientLabel(p))
 	}
@@ -388,14 +392,17 @@ func (c *Core) SetBackupProvider(ctx context.Context, p string) error {
 }
 
 // SetBackupClient grava o client do destino atual: o OAuth client do Google
-// (tipo "TVs e dispositivos de entrada limitada", com secret) ou o ID do app
-// no Azure (cliente publico: o secret e ignorado). Trocar o client desfaz o
-// login: o token e do client antigo.
+// (tipo "TVs e dispositivos de entrada limitada", com secret) ou o ID de um
+// app proprio no Azure (cliente publico: o secret e ignorado; vazio volta pro
+// app do cais). Trocar o client desfaz o login: o token e do client antigo.
 func (c *Core) SetBackupClient(ctx context.Context, id, secret string) error {
 	p := c.backupProvider()
 	id, secret = strings.TrimSpace(id), strings.TrimSpace(secret)
 	switch p {
 	case backup.ProviderOneDrive:
+		if id == "" || id == backup.DefaultOneDriveClient {
+			return c.resetOneDriveClient(ctx)
+		}
 		if !azureID.MatchString(id) {
 			return errors.New("ID do aplicativo invalido: copie o \"ID do aplicativo (cliente)\" do registro no Azure (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)")
 		}
@@ -417,6 +424,20 @@ func (c *Core) SetBackupClient(ctx context.Context, id, secret string) error {
 	data, _ := json.Marshal(backup.Client{ID: id, Secret: secret})
 	if err := c.secretStore().Put(clientSecret, data); err != nil {
 		return err
+	}
+	_, err := c.RefreshBackup(ctx)
+	return err
+}
+
+// resetOneDriveClient volta o OneDrive pro app do cais (sem app proprio).
+func (c *Core) resetOneDriveClient(ctx context.Context) error {
+	clientSecret, tokenSecret := providerSecrets(backup.ProviderOneDrive)
+	if old, err := c.backupClient(backup.ProviderOneDrive); err != nil || old.ID != backup.DefaultOneDriveClient {
+		for _, s := range []string{tokenSecret, clientSecret} {
+			if err := c.secretStore().Delete(s); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+				return err
+			}
+		}
 	}
 	_, err := c.RefreshBackup(ctx)
 	return err

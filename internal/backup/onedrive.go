@@ -31,6 +31,13 @@ var MicrosoftEndpoint = oauth2.Endpoint{
 // da o refresh token; User.Read, o e-mail da conta.
 var OneDriveScopes = []string{"Files.ReadWrite.AppFolder", "offline_access", "User.Read"}
 
+// DefaultOneDriveClient e o app "cais" da TRD System no Azure (contas
+// pessoais, cliente publico, fluxo de dispositivo): com ele conectar o
+// OneDrive e so o login, sem registrar app. O ID nao e segredo (cliente
+// publico); cada login so da acesso a pasta do app na conta de quem entrou.
+// Um app proprio (cais backup client) substitui este.
+const DefaultOneDriveClient = "71a420c4-b2f9-412b-978a-f21bfce04471"
+
 // OneDriveOAuth e a config do oauth2 pro app do Azure (cliente publico:
 // so o ID).
 func OneDriveOAuth(clientID string, endpoint oauth2.Endpoint) *oauth2.Config {

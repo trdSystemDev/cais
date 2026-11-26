@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/backup/onedrivetest"
 	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/secrets"
 )
 
 // waitBackupEmail espera o login terminar com a conta email.
@@ -52,11 +54,15 @@ func TestBackupNoOneDrive(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := c.RefreshBackup(ctx)
-	if st.Provider != backup.ProviderOneDrive || st.ClientID != "" || st.Email != "" || st.Ready() {
+	// sem app proprio vale o app do cais: falta so o login
+	if st.Provider != backup.ProviderOneDrive || st.ClientID != backup.DefaultOneDriveClient || st.Email != "" || st.Ready() {
 		t.Fatalf("OneDrive herdou o Google: %+v", st)
 	}
-	if _, err := c.RunBackup(ctx); err == nil || !strings.Contains(err.Error(), "falta o app do Azure (ID do aplicativo), conectar o OneDrive") {
+	if _, err := c.RunBackup(ctx); err == nil || !strings.Contains(err.Error(), "falta conectar o OneDrive") {
 		t.Fatalf("backup sem configurar o OneDrive: %v", err)
+	}
+	if err := c.SetBackupClient(ctx, "", ""); err != nil {
+		t.Fatalf("vazio volta pro app do cais: %v", err)
 	}
 
 	if err := c.SetBackupClient(ctx, "123-abc.apps.googleusercontent.com", "segredo"); err == nil {
@@ -108,6 +114,17 @@ func TestBackupNoOneDrive(t *testing.T) {
 	res, err := c.RestoreBackup(ctx, RestoreRequest{File: run.File, Identity: priv})
 	if err != nil || !slices.Equal(res.Available, []string{"mysql/blog", "postgres/loja"}) {
 		t.Fatalf("restore do OneDrive %+v %v", res, err)
+	}
+
+	// sem o app proprio volta o do cais, e o login (do app proprio) sai
+	if err := c.SetBackupClient(ctx, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ = c.RefreshBackup(ctx); st.ClientID != backup.DefaultOneDriveClient || st.Email != "" {
+		t.Fatalf("de volta pro app do cais: %+v", st)
+	}
+	if _, err := c.secretStore().Get(tokenSecret); !errors.Is(err, secrets.ErrNotFound) {
+		t.Errorf("o login do app proprio ficou: %v", err)
 	}
 
 	// de volta pro Google: client e login continuam la

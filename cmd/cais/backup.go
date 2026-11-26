@@ -110,7 +110,11 @@ func (e *cli) backupClient(ctx context.Context, c daemonAPI, pos []string) error
 			return err
 		}
 	}
-	if err := c.SetBackupClient(ctx, pos[0], secret); err != nil {
+	id := pos[0]
+	if st.Provider == backup.ProviderOneDrive && id == "padrao" {
+		id = "" // volta pro app do cais
+	}
+	if err := c.SetBackupClient(ctx, id, secret); err != nil {
 		return err
 	}
 	fmt.Fprintln(e.out, "Client do "+backup.ProviderName(st.Provider)+" gravado. Agora: cais backup login")

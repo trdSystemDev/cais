@@ -96,7 +96,7 @@ func (p *bkPanel) ids(st core.BackupStatus) []string {
 	ids = append(ids, "bk-client-save", "bk-info-login")
 	switch {
 	case st.Login != nil:
-		ids = append(ids, "bk-login-cancel")
+		ids = append(ids, "bk-login-copy", "bk-login-cancel")
 	case st.Email != "":
 		ids = append(ids, "bk-disconnect")
 	default:
@@ -201,12 +201,7 @@ func (p *bkPanel) press(st core.BackupStatus, id string) tea.Cmd {
 		})
 	case "bk-client-save":
 		cid, secret := strings.TrimSpace(p.clientID.Value()), strings.TrimSpace(p.secret.Value())
-		if st.Provider == backup.ProviderOneDrive {
-			if cid == "" {
-				p.err = "Informe o ID do aplicativo (cliente) do Azure."
-				return nil
-			}
-		} else if cid == "" || secret == "" {
+		if st.Provider != backup.ProviderOneDrive && (cid == "" || secret == "") { // OneDrive vazio: o app do cais
 			p.err = "Informe o client ID e o client secret."
 			return nil
 		}
@@ -218,6 +213,12 @@ func (p *bkPanel) press(st core.BackupStatus, id string) tea.Cmd {
 			_, err := p.api.StartDriveLogin(ctx)
 			return bkDoneMsg{err: err}
 		})
+	case "bk-login-copy":
+		if st.Login == nil {
+			return nil
+		}
+		p.done = "Codigo copiado (o terminal precisa aceitar OSC 52; confira colando)."
+		return tea.SetClipboard(st.Login.Code)
 	case "bk-login-cancel":
 		return p.run("cancel", func(ctx context.Context) bkDoneMsg { return bkDoneMsg{err: p.api.CancelDriveLogin(ctx)} })
 	case "bk-disconnect":
@@ -452,10 +453,18 @@ func (v *bkView) viewHeader(b *strings.Builder, head string) {
 func (v *bkView) viewClient(b *strings.Builder) {
 	p, st, rule, onedrive := v.p, v.st, v.rule, v.onedrive
 	// 1. client
+	save := "Gravar client"
 	if onedrive {
-		b.WriteString(v.step(1, "App no Azure", st.ClientID != "", cmpOrStr(st.ClientID, "falta"), "bk-info-client") + "\n")
-		p.clientID.Placeholder = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-		b.WriteString(v.field("bk-client-id", "ID do aplicativo", 41) + "\n")
+		// o app do cais ja vale: o passo 1 so existe pra quem quer um app
+		// proprio no Azure
+		detail := "o do cais (nao precisa criar)"
+		if st.ClientID != backup.DefaultOneDriveClient {
+			detail = "proprio: " + st.ClientID
+		}
+		b.WriteString(v.step(1, "App da Microsoft", st.ClientID != "", detail, "bk-info-client") + "\n")
+		p.clientID.Placeholder = "opcional: vazio usa o do cais"
+		b.WriteString(v.field("bk-client-id", "App proprio (ID)", 41) + "\n")
+		save = "Gravar app"
 	} else {
 		b.WriteString(v.step(1, "OAuth client do Google", st.ClientID != "", cmpOrStr(st.ClientID, "falta"), "bk-info-client") + "\n")
 		p.clientID.Placeholder = "....apps.googleusercontent.com"
@@ -463,7 +472,7 @@ func (v *bkView) viewClient(b *strings.Builder) {
 		b.WriteString(v.field("bk-client-secret", "Client secret", 41) + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString("  " + v.btn("bk-client-save", "Gravar client", btnNormal) + "\n" + rule)
+	b.WriteString("  " + v.btn("bk-client-save", save, btnNormal) + "\n" + rule)
 }
 
 // viewLogin desenha o passo 2: o login no destino.
@@ -473,9 +482,12 @@ func (v *bkView) viewLogin(b *strings.Builder) {
 	switch {
 	case st.Login != nil:
 		b.WriteString(v.step(2, name, false, "aguardando o login", "bk-info-login") + "\n")
-		b.WriteString("  Abra " + t.fg(t.accent).Bold(true).Render(st.Login.URL) + " em qualquer aparelho e digite:\n")
+		// o link e clicavel (OSC 8) no terminal que aceita; o codigo vai
+		// pelo Copiar pra colar na pagina
+		b.WriteString("  Abra " + t.fg(t.accent).Bold(true).Underline(true).Hyperlink(st.Login.URL).Render(st.Login.URL) +
+			" no navegador (qualquer aparelho) e digite:\n")
 		b.WriteString("    " + t.fg(t.accent).Bold(true).Render(st.Login.Code) + "  " + muted.Render("(expira as "+st.Login.Expires.Local().Format("15:04")+")") + "\n")
-		b.WriteString("  " + v.btn("bk-login-cancel", "Cancelar", btnNeutral) + "\n")
+		b.WriteString("  " + v.btn("bk-login-copy", "Copiar codigo", btnInfo) + " " + v.btn("bk-login-cancel", "Cancelar", btnNeutral) + "\n")
 	case st.Email != "":
 		b.WriteString(v.step(2, name, true, st.Email, "bk-info-login") + "\n")
 		b.WriteString("  " + v.btn("bk-disconnect", "Desconectar", btnWarn) + "\n")
@@ -589,16 +601,18 @@ func bkInfo(st core.BackupStatus, id string) infoBox {
 	switch id {
 	case "bk-info-client":
 		if st.Provider == backup.ProviderOneDrive {
-			return infoBox{"App no Azure", "No portal do Azure, em Registros de aplicativo: registre um app com \"Somente contas " +
-				"pessoais da Microsoft\" e, em Autenticacao, ligue \"Permitir fluxos de clientes publicos\". Copie o ID do aplicativo " +
-				"(cliente); nao tem secret. O cais so ve a pasta dele no OneDrive (Aplicativos/<nome do app>)."}
+			return infoBox{"App da Microsoft", "Nao precisa fazer nada: o cais ja vem com o app dele registrado na Microsoft. " +
+				"E so Conectar no passo 2 e autorizar com a sua conta pessoal (outlook.com, hotmail.com, live.com). O cais so ve " +
+				"a pasta dele no OneDrive (Aplicativos/cais), nada mais.\n\nApp proprio (opcional): no portal do Azure, em " +
+				"Registros de aplicativo, registre um com \"Somente contas pessoais da Microsoft\", ligue \"Permitir fluxos de " +
+				"clientes publicos\" em Autenticacao e cole aqui o ID do aplicativo (cliente). Gravar vazio volta pro do cais."}
 		}
 		return infoBox{"OAuth client do Google", "No Google Cloud: ative a Google Drive API, crie em Credenciais um ID do cliente OAuth " +
 			"do tipo \"TVs e dispositivos de entrada limitada\" e publique a tela de consentimento (em teste o login expira em 7 dias). " +
 			"Cole aqui o client ID e o client secret."}
 	case "bk-info-login":
 		return infoBox{"Conectar o " + name, "Conectar mostra um link e um codigo: abra o link em qualquer aparelho (celular, notebook), " +
-			"entre na conta que vai guardar os backups e digite o codigo. O cais guarda so o acesso a pasta dele. " +
+			"entre na conta que vai guardar os backups e digite o codigo (Copiar codigo poe ele na area de transferencia). O cais guarda so o acesso a pasta dele. " +
 			"Desconectar tira o acesso, mas os backups que ja estao no " + name + " ficam."}
 	case "bk-info-key":
 		return infoBox{"Chave do backup", "Cada backup e criptografado antes de sair da VPS. A chave publica fica no cais; a privada " +

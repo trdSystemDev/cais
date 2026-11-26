@@ -42,11 +42,14 @@ Credenciais um **ID do cliente OAuth** do tipo **TVs e dispositivos de
 entrada limitada**. O escopo e `drive.file`. O login e o codigo em
 google.com/device.
 
-**OneDrive** (so conta pessoal: outlook.com, hotmail.com, live.com): no
+**OneDrive** (so conta pessoal: outlook.com, hotmail.com, live.com): nao
+precisa criar nada, o cais ja vem com o app dele registrado na Microsoft
+(`cais` da TRD System); e so conectar. Pra usar um app proprio: no
 [portal do Azure](https://portal.azure.com), em **Registros de aplicativo**,
-registre um app com **Somente contas pessoais da Microsoft** e, em
-**Autenticacao**, ligue **Permitir fluxos de clientes publicos**. Copie o
-**ID do aplicativo (cliente)**: nao tem secret. O escopo e
+registre um com **Somente contas pessoais da Microsoft** e, em
+**Autenticacao**, ligue **Permitir fluxos de clientes publicos**; o
+`cais backup client <ID do aplicativo>` troca (nao tem secret) e
+`cais backup client padrao` volta pro do cais. O escopo e
 `Files.ReadWrite.AppFolder`: os backups ficam em `Aplicativos/<nome do
 app>/cais-backups-<hostname>`. O login e o codigo em microsoft.com/link. A
 Microsoft troca o refresh token a cada renovacao; o cais grava o novo, entao
@@ -60,7 +63,8 @@ TUI: aba Setup, sub-aba Backups, que tambem faz um backup agora e mostra o
 proximo e o ultimo. Ou o CLI:
 
 1. `cais backup provider onedrive` (so pro OneDrive; o padrao e o Google).
-2. `cais backup client <client-id>` (Google: o secret e pedido sem eco).
+2. `cais backup client <client-id>` (Google: o secret e pedido sem eco; o
+   OneDrive pula este passo, a nao ser com app proprio).
 3. `cais backup login`: abra o endereco em qualquer aparelho e digite o
    codigo (funciona pelo SSH, nada volta colado).
 4. `cais backup key`: guarde a chave privada que aparece.

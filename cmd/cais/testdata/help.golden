@@ -821,10 +821,12 @@ dispositivos de entrada limitada" e publique a tela de consentimento (em
 pasta que ele mesmo cria. O secret e lido sem eco, ou do stdin (cais backup
 client <id> < arquivo).
 
-OneDrive (conta pessoal): no portal do Azure, em Registros de aplicativo,
-registre um app com "Somente contas pessoais da Microsoft" e, em
-Autenticacao, ligue "Permitir fluxos de clientes publicos". O <client-id> e
-o "ID do aplicativo (cliente)"; nao tem secret. O cais pede so a pasta do
+OneDrive (conta pessoal): nao precisa. O cais ja vem com o app dele na
+Microsoft; e so cais backup login. Pra usar um app proprio: no portal do
+Azure, em Registros de aplicativo, registre um com "Somente contas pessoais
+da Microsoft" e, em Autenticacao, ligue "Permitir fluxos de clientes
+publicos". O <client-id> e o "ID do aplicativo (cliente)"; nao tem secret.
+cais backup client padrao volta pro app do cais. O cais pede so a pasta do
 app (Files.ReadWrite.AppFolder): fica em Aplicativos/<nome do app> e o resto
 do OneDrive nao e visto.
 
