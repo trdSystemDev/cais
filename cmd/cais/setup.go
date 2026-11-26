@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -16,6 +17,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
 // subcommand separa "cais setup <sub> ..." do resto dos argumentos.
@@ -387,8 +389,11 @@ func (e *cli) runService(args []string) error {
 		return err
 	}
 	actions := map[string]string{"start": core.ServiceStart, "stop": core.ServiceStop, "restart": core.ServiceRestart}
+	if fs.NArg() >= 2 && fs.Arg(1) == "version" {
+		return e.serviceVersion(*socket, fs.Args())
+	}
 	if fs.NArg() != 2 || (fs.Arg(1) != "on" && fs.Arg(1) != "off" && actions[fs.Arg(1)] == "") {
-		return errors.New("uso: cais service <proxy|postgres|mysql|garage> on|off|start|stop|restart")
+		return errors.New("uso: cais service <proxy|postgres|mysql|garage> on|off|start|stop|restart (bancos e garage: version [tag])")
 	}
 	c, err := e.connect(*socket)
 	if err != nil {
@@ -404,6 +409,57 @@ func (e *cli) runService(args []string) error {
 	}
 	return e.withProgress(c, func(ctx context.Context) error {
 		_, err := c.SetService(ctx, fs.Arg(0), fs.Arg(1) == "on")
+		return err
+	})
+}
+
+// serviceVersion mostra ou troca a versao (tag da imagem) de um banco ou do
+// Garage: cais service <nome> version [tag|padrao]. Trocar grava na config
+// e, com o servico ligado, aplica (baixa a imagem e recria o container).
+func (e *cli) serviceVersion(socket string, args []string) error {
+	name := args[0]
+	img, ok := stacks.Images[name]
+	if !ok || len(args) > 3 {
+		return errors.New("uso: cais service <postgres|mysql|garage> version [tag|padrao]")
+	}
+	c, err := e.connect(socket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	ctx := context.Background()
+	info, err := c.LoadConfig(ctx)
+	if err != nil {
+		return err
+	}
+	cfg := info.Config
+	if len(args) == 2 {
+		fmt.Fprintf(e.out, "%s: %s", name, stacks.ImageRef(cfg, name))
+		if cfg.Versions[name] == "" {
+			fmt.Fprint(e.out, " (a padrao do cais)")
+		}
+		fmt.Fprintf(e.out, "\nTroca com: cais service %s version <tag> (ex: %s)\n", name, img.Example)
+		return nil
+	}
+	tag := args[2]
+	cfg.Versions = maps.Clone(cfg.Versions)
+	if cfg.Versions == nil {
+		cfg.Versions = map[string]string{}
+	}
+	cfg.Versions[name] = tag
+	if tag == "padrao" || tag == "default" {
+		delete(cfg.Versions, name)
+	}
+	if err := c.SaveConfig(ctx, cfg); err != nil {
+		return err
+	}
+	if !cfg.HasStack(name) {
+		fmt.Fprintf(e.out, "%s: %s gravado; vale quando ligar (cais service %s on).\n", name, stacks.ImageRef(cfg, name), name)
+		return nil
+	}
+	fmt.Fprintf(e.out, "%s: aplicando %s (baixa a imagem e recria o container)\n", name, stacks.ImageRef(cfg, name))
+	return e.withProgress(c, func(ctx context.Context) error {
+		_, err := c.SetService(ctx, name, true)
 		return err
 	})
 }

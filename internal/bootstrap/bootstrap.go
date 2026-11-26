@@ -56,10 +56,10 @@ func (d Deps) ComposeFile(stack string) string {
 	return filepath.Join(d.StackDir(stack), "docker-compose.yml")
 }
 
-// disabledSuffix marca o compose de uma stack desativada: o arquivo fica
+// DisabledSuffix marca o compose de uma stack desativada: o arquivo fica
 // como registro do que existia (volumes inclusive), mas nao e mais
 // detectado como stack no ar.
-const disabledSuffix = ".desativada"
+const DisabledSuffix = ".desativada"
 
 // stacksOnDisk lista as stacks que tem compose gravado (ativo).
 func (d Deps) stacksOnDisk() ([]string, error) {
@@ -333,7 +333,7 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 				return "", err
 			}
 			// stack reativada: o registro de quando ela foi desligada sai
-			if err := os.Remove(sp.File + disabledSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := os.Remove(sp.File + DisabledSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return "", err
 			}
 			changed = append(changed, sp.Name)
@@ -351,7 +351,7 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 			if err := d.ComposeDown(ctx, sp.File); err != nil {
 				return "", err
 			}
-			return "", fsx.Rename(sp.File, sp.File+disabledSuffix)
+			return "", fsx.Rename(sp.File, sp.File+DisabledSuffix)
 		}); err != nil {
 			return r.steps, err
 		}

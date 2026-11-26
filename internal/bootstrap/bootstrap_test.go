@@ -344,7 +344,7 @@ func TestStackDesativadaEDerrubadaEReativada(t *testing.T) {
 	if _, err := os.Stat(d.ComposeFile("mysql")); !errors.Is(err, os.ErrNotExist) {
 		t.Error("compose da stack derrubada continua ativo")
 	}
-	if _, err := os.Stat(d.ComposeFile("mysql") + disabledSuffix); err != nil {
+	if _, err := os.Stat(d.ComposeFile("mysql") + DisabledSuffix); err != nil {
 		t.Error("compose da stack derrubada nao ficou como registro")
 	}
 
@@ -366,7 +366,7 @@ func TestStackDesativadaEDerrubadaEReativada(t *testing.T) {
 	if !slices.Contains(f.calls, "up mysql") || slices.Contains(f.calls, "down mysql") {
 		t.Errorf("chamadas ao religar: %v", f.calls)
 	}
-	if _, err := os.Stat(d.ComposeFile("mysql") + disabledSuffix); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(d.ComposeFile("mysql") + DisabledSuffix); !errors.Is(err, os.ErrNotExist) {
 		t.Error("registro de desativada sobrou depois de religar")
 	}
 }

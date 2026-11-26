@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,13 +14,14 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
 // svcConfig e a config de um servico, na secao Geral do card dele na aba
 // Infra. No proxy: os certificados (Let's Encrypt com o e-mail, ou a CA
 // local com o dominio do teste) e as portas no host (padrao 80/443, ou
-// atras de outro proxy da VPS). No Garage: o endereco publico do S3.
-// Salvar grava a config e, com o servico ligado, aplica (ele sobe de novo
+// atras de outro proxy da VPS). No Garage: o endereco publico do S3. Nos
+// bancos e no Garage: a versao (tag da imagem). Salvar grava a config e, com o servico ligado, aplica (ele sobe de novo
 // com ela). shown enquanto o card do servico esta selecionado; active diz
 // se o foco do teclado esta nele.
 type svcConfig struct {
@@ -31,18 +33,22 @@ type svcConfig struct {
 	name   string // o servico: proxy ou garage
 	active bool
 	s3     *textinput.Model // garage: endereco publico do S3
-	email  *textinput.Model
-	local  bool             // CA local (teste) em vez do Let's Encrypt
-	dns    bool             // Let's Encrypt pela prova no DNS da Cloudflare
-	token  *textinput.Model // token da API da Cloudflare (vazio mantem o gravado)
-	wild   *textinput.Model // dominios curinga, separados por virgula
-	domain *textinput.Model
-	http   *textinput.Model
-	https  *textinput.Model
-	behind bool // atras de outro proxy da VPS (so no 127.0.0.1)
-	focus  int  // indice em ids()
-	busy   bool
-	err    string // da validacao: varias linhas
+	// version e a tag da imagem (postgres, mysql, garage); vazio e a do cais
+	version *textinput.Model
+	// running e a tag do container no ar (vazio: parado ou sem subir)
+	running string
+	email   *textinput.Model
+	local   bool             // CA local (teste) em vez do Let's Encrypt
+	dns     bool             // Let's Encrypt pela prova no DNS da Cloudflare
+	token   *textinput.Model // token da API da Cloudflare (vazio mantem o gravado)
+	wild    *textinput.Model // dominios curinga, separados por virgula
+	domain  *textinput.Model
+	http    *textinput.Model
+	https   *textinput.Model
+	behind  bool // atras de outro proxy da VPS (so no 127.0.0.1)
+	focus   int  // indice em ids()
+	busy    bool
+	err     string // da validacao: varias linhas
 }
 
 // svcConfigSavedMsg e a volta do Salvar do painel de config do servico.
@@ -67,6 +73,7 @@ func newSvcConfig(api core.API, zones *zone.Manager, th theme) *svcConfig {
 	p.wild = mk("ex: dev.exemplo.com.br", 1000, 28)
 	p.domain = mk("ex: trd.localhost", 253, 28)
 	p.s3 = mk("ex: s3.exemplo.com.br", 253, 28)
+	p.version = mk("", 128, 28)
 	p.http, p.https = mk(strconv.Itoa(config.DefaultHTTPPort), 5, 8), mk(strconv.Itoa(config.DefaultHTTPSPort), 5, 8)
 	p.setTheme(th)
 	return p
@@ -80,17 +87,20 @@ func (p *svcConfig) setTheme(th theme) {
 }
 
 func (p *svcConfig) inputs() []*textinput.Model {
-	return []*textinput.Model{p.email, p.token, p.wild, p.domain, p.http, p.https, p.s3}
+	return []*textinput.Model{p.email, p.token, p.wild, p.domain, p.http, p.https, p.s3, p.version}
 }
 
 // hasConfig diz se o servico tem o painel de config.
-func hasConfig(name string) bool { return name == "proxy" || name == "garage" }
+func hasConfig(name string) bool { return name == "proxy" || stacks.Versioned(name) }
 
 // ids sao os itens na ordem do Tab. No proxy, o e-mail so com o Let's
 // Encrypt e o dominio do teste so com a CA local.
 func (p *svcConfig) ids() []string {
-	if p.name == "garage" {
-		return []string{"s3-host", "cfg-save"}
+	switch p.name {
+	case "garage":
+		return []string{"s3-host", "svc-version", "cfg-save"}
+	case "postgres", "mysql":
+		return []string{"svc-version", "cfg-save"}
 	}
 	ids := []string{"cert-tls"}
 	switch {
@@ -120,6 +130,8 @@ func (p *svcConfig) input(id string) *textinput.Model {
 		return p.https
 	case "s3-host":
 		return p.s3
+	case "svc-version":
+		return p.version
 	}
 	return nil
 }
@@ -183,6 +195,11 @@ func (p *svcConfig) fill(c config.Config) {
 	}
 	p.behind = c.Proxy.BehindProxy
 	p.s3.SetValue(c.Hosts.S3)
+	p.version.SetValue(c.Versions[p.name])
+	p.version.Placeholder = ""
+	if img, ok := stacks.Images[p.name]; ok {
+		p.version.Placeholder = "vazio: " + img.Default + " (a do cais)"
+	}
 }
 
 func (p *svcConfig) close() {
@@ -206,7 +223,7 @@ func (p *svcConfig) save() tea.Cmd {
 	httpPort, httpsPort := port(p.http, config.DefaultHTTPPort), port(p.https, config.DefaultHTTPSPort)
 	email, local, domain, behind := strings.TrimSpace(p.email.Value()), p.local, strings.TrimSpace(p.domain.Value()), p.behind
 	dns, token, wild := p.dns && !p.local, strings.TrimSpace(p.token.Value()), wildcards(p.wild.Value())
-	name, s3 := p.name, strings.TrimSpace(p.s3.Value())
+	name, s3, version := p.name, strings.TrimSpace(p.s3.Value()), strings.TrimSpace(p.version.Value())
 	p.busy, p.err = true, ""
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -215,8 +232,19 @@ func (p *svcConfig) save() tea.Cmd {
 			return svcConfigSavedMsg{name, err}
 		}
 		c := info.Config
-		if name == "garage" {
-			c.Hosts.S3 = s3
+		if stacks.Versioned(name) {
+			// copia: o mapa da config carregada nao e do painel
+			c.Versions = maps.Clone(c.Versions)
+			if c.Versions == nil {
+				c.Versions = map[string]string{}
+			}
+			c.Versions[name] = version
+			if version == "" {
+				delete(c.Versions, name)
+			}
+			if name == "garage" {
+				c.Hosts.S3 = s3
+			}
 			return svcConfigSavedMsg{name, p.api.SaveConfig(ctx, c)}
 		}
 		c.Email = email
@@ -341,25 +369,29 @@ func (p *svcConfig) view(c config.Config, on bool, w int) string {
 	}
 
 	saveBtn := func() string {
-		save := "Salvar"
-		if on {
-			save = "Salvar e aplicar"
-		}
 		kind := btnNormal
 		if p.busy {
-			save, kind = "Salvando...", btnOff
+			kind = btnOff
 		}
-		return "\n  " + p.zones.Mark("cfg-save", t.button(save, kind, focusID == "cfg-save")) + "\n"
+		return "\n  " + p.zones.Mark("cfg-save", t.button(saveLabel(on, p.busy), kind, focusID == "cfg-save")) + "\n"
 	}
 	var b strings.Builder
-	if p.name == "garage" {
-		b.WriteString(t.bold().Render("Endereco do S3") + "  " + muted.Render("API S3, com HTTPS pelo proxy") + "\n\n")
-		b.WriteString(field("s3-host", "Endereco", 30) + "\n")
-		b.WriteString(note("O nome publico por onde os apps e os clientes S3 acessam os buckets (regiao garage). " +
-			"O DNS dele aponta pra VPS, como o dos apps."))
-		b.WriteString(saveBtn())
+	if img, ok := stacks.Images[p.name]; ok {
+		if p.name == "garage" {
+			b.WriteString(t.bold().Render("Endereco do S3") + "  " + muted.Render("API S3, com HTTPS pelo proxy") + "\n\n")
+			b.WriteString(field("s3-host", "Endereco", 30) + "\n")
+			b.WriteString(note("O nome publico por onde os apps e os clientes S3 acessam os buckets (regiao garage). " +
+				"O DNS dele aponta pra VPS, como o dos apps."))
+			b.WriteString("\n" + t.rule(w) + "\n")
+		}
+		running := "nao esta no ar"
+		if p.running != "" {
+			running = "no ar: " + p.running
+		}
+		b.WriteString(field("svc-version", "Versao", 22) + "  " + p.zones.Mark("cfg-save", t.button(saveLabel(on, p.busy), btnNormal, focusID == "cfg-save")) + "\n")
+		b.WriteString(note("Tag de " + img.Repo + " (ex: " + img.Example + "), " + running + ". " + versionNote[p.name]))
 		if !on {
-			b.WriteString("\n" + wrap.Inherit(muted).Render("O Garage esta desligado: isso vale quando ele ligar.") + "\n")
+			b.WriteString("\n" + wrap.Inherit(muted).Render("O "+p.name+" esta desligado: isso vale quando ele ligar.") + "\n")
 		}
 		p.viewErr(&b, w)
 		return b.String()
@@ -416,6 +448,23 @@ func (p *svcConfig) view(c config.Config, on bool, w int) string {
 	}
 	p.viewErr(&b, w)
 	return b.String()
+}
+
+// versionNote e o que a troca de versao de cada servico pode e nao pode.
+var versionNote = map[string]string{
+	"postgres": "Aplicar recria o container (o banco cai por segundos). So na mesma major: outra nao abre os dados.",
+	"mysql":    "Aplicar recria o container (o banco cai por segundos). Nao volta pra uma versao mais velha.",
+	"garage":   "Aplicar recria o container. So na mesma major (outra pede garage migrate), sem voltar versao.",
+}
+
+func saveLabel(on, busy bool) string {
+	switch {
+	case busy:
+		return "Salvando..."
+	case on:
+		return "Salvar e aplicar"
+	}
+	return "Salvar"
 }
 
 // viewErr e o erro do ultimo Salvar (a validacao: varias linhas).

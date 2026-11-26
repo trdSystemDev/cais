@@ -34,7 +34,8 @@ ou use ↑/↓; ←/→ troca a secao; enter ou tab entra nos botoes e esc volta
   ligado). Embaixo, a config do servico, com um Salvar que ja aplica com
   ele ligado: no proxy, os **certificados** (Let's Encrypt com o e-mail dos
   avisos, ou a CA local com o dominio do teste) e as **portas**; no Garage, o
-  **endereco do S3**. E o **Novo banco** no Postgres/MySQL e o **Novo
+  **endereco do S3**; no Postgres, MySQL e Garage, a **versao** (a tag da
+  imagem; vazio e a do cais). E o **Novo banco** no Postgres/MySQL e o **Novo
   bucket** no Garage, com a lista dos ja criados.
 - **Logs**: os logs do container (ultimas 200 linhas, atualizadas a cada 2
   segundos). Enter entra e ←/→ troca o container nas stacks com mais de um;
@@ -42,6 +43,13 @@ ou use ↑/↓; ←/→ troca a secao; enter ou tab entra nos botoes e esc volta
 
 Pelo CLI: `cais service <nome> on` de novo aplica, e `start`, `stop` e
 `restart` iniciam, param e reiniciam.
+
+A versao: `cais service postgres version` mostra a do ar e
+`cais service postgres version 18-3.5-alpine` grava e aplica (baixa a imagem
+e recria o container: o banco cai por alguns segundos); `padrao` volta pra do
+cais. Os dados do volume nao voltam, entao o cais recusa versao mais velha que
+a do ar e outra major do Postgres (pg_upgrade, ou dump e restore) ou do Garage
+(garage migrate).
 Ligar e aplicar podem ser repetidos: nada que existe e regenerado e servico
 sem mudanca nao e recriado. O que for ligado pelo CLI aparece ao vivo na TUI
 aberta, e vice-versa.

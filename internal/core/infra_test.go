@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,5 +121,50 @@ func TestContainerLogsValidaPertencimento(t *testing.T) {
 	out, err := c.ContainerLogs(context.Background(), "proxy", "proxy-traefik", docker.LogsOptions{})
 	if err != nil || out != "traefik pronto" || called != "proxy-traefik" {
 		t.Fatalf("%q, %v, %q", out, err, called)
+	}
+}
+
+// a troca de versao parte da versao do container no ar (os dados no
+// volume sao dela): outra major do Postgres e recusada, dentro dela passa
+func TestVersaoDoBancoParteDoQueEstaNoAr(t *testing.T) {
+	root := t.TempDir()
+	stackDir := func(n string) string { return filepath.Join(root, "stacks", n) }
+	image := "postgis/postgis:17-3.5-alpine" // subiu antes, com outra padrao
+	c := New(Deps{
+		CheckDocker: okStatus,
+		Now:         func() time.Time { return fixedNow },
+		ConfigPath:  filepath.Join(root, "config.yaml"),
+		SecretsDir:  filepath.Join(root, "secrets"),
+		StackDir:    stackDir,
+		ComposePS: func(_ context.Context, file string) ([]docker.Container, error) {
+			return []docker.Container{{Name: "postgres", Image: image, State: "running"}}, nil
+		},
+	})
+	cfg := config.Default()
+	cfg.Stacks = []string{"postgres"}
+	cfg.Versions = map[string]string{"postgres": "17-3.5-alpine"}
+	if err := c.SaveConfig(context.Background(), cfg); err != nil {
+		t.Fatal(err) // ainda sem compose: nada no ar
+	}
+	os.MkdirAll(stackDir("postgres"), 0o700)
+	os.WriteFile(filepath.Join(stackDir("postgres"), "docker-compose.yml"), []byte("name: postgres"), 0o644)
+
+	cfg.Versions = map[string]string{"postgres": "18-3.6-alpine"}
+	if err := c.SaveConfig(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "pg_upgrade") {
+		t.Fatalf("trocou a major com dados do 17: %v", err)
+	}
+	cfg.Versions = nil // a padrao do cais (18) tambem e outra major
+	if err := c.SaveConfig(context.Background(), cfg); err == nil {
+		t.Fatal("voltar pra padrao trocou a major")
+	}
+	cfg.Versions = map[string]string{"postgres": "17-3.6-alpine"}
+	if err := c.SaveConfig(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	// parado: vale a versao da config (a dos dados)
+	image = ""
+	cfg.Versions = map[string]string{"postgres": "18-3.6-alpine"}
+	if err := c.SaveConfig(context.Background(), cfg); err == nil {
+		t.Fatal("parado, trocou a major")
 	}
 }

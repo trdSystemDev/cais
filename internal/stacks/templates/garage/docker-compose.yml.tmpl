@@ -10,7 +10,7 @@ name: garage
 
 services:
   garage:
-    image: dxflrs/garage:v2.5.0
+    image: {{image "garage"}}
     container_name: garage
     restart: unless-stopped
     # sem limite o log do docker cresce ate encher o disco

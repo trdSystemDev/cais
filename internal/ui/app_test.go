@@ -21,6 +21,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/host"
 	"github.com/trdSystemDev/cais/internal/ptyio"
 	"github.com/trdSystemDev/cais/internal/rpc"
+	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
 func okChecker(context.Context) docker.Status {
@@ -701,6 +702,7 @@ func TestInfraEnderecoDoS3NoGarage(t *testing.T) {
 	}
 	// os dois paineis no Tab: do Salvar da config pro nome do bucket
 	click(t, m, "s3-host")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // Versao
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // Salvar
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // nome do bucket
 	if !m.db.active || m.db.focusID() != "db-name" || m.svc.active {
@@ -804,4 +806,37 @@ func (v *fakeVPS) tailscale() host.Tailscale {
 			KeyExpiry: time.Date(2027, 5, 24, 12, 0, 0, 0, time.Local)}
 	}
 	return t
+}
+
+// a versao do banco pelo painel dele: Salvar e aplicar grava e sobe de novo;
+// outra major do Postgres nao passa (os dados no volume sao da de agora)
+func TestInfraVersaoDoBanco(t *testing.T) {
+	c, ups, _ := testCore(t, okChecker)
+	setupDone(t, c, "postgres")
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	click(t, m, "stack:postgres")
+	waitFor(t, m, "postgres  ✓ no ar")
+	waitFor(t, m, "postgis/postgis")
+	if !strings.Contains(screen(m), "vazio: "+stacks.Images["postgres"].Default) {
+		t.Fatalf("sem a padrao no campo:\n%s", screen(m))
+	}
+	before := ups.Load()
+	typeIn(t, m, "svc-version", "18-3.5-alpine")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "config aplicada no postgres.")
+	if info, _ := c.LoadConfig(context.Background()); info.Config.Versions["postgres"] != "18-3.5-alpine" {
+		t.Fatalf("versions = %v", info.Config.Versions)
+	}
+	if ups.Load() == before {
+		t.Fatal("nao aplicou")
+	}
+
+	click(t, m, "svc-version")
+	m.svc.version.SetValue("19-3.6-alpine")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "pg_upgrade")
+	if info, _ := c.LoadConfig(context.Background()); info.Config.Versions["postgres"] != "18-3.5-alpine" {
+		t.Fatalf("gravou a outra major: %v", info.Config.Versions)
+	}
 }

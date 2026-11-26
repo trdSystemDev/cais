@@ -39,8 +39,8 @@ Setup da VPS (so configura; os servicos ligam com cais service):
   cais setup github-test             confere o GitHub App salvo e diz onde ele esta instalado
 
 Servicos (nada sobe sem ser ligado):
-  cais service <nome> on|off|start|stop|restart
-                                     liga/desliga, inicia/para ou reinicia um servico
+  cais service <nome> on|off|start|stop|restart|version
+                                     liga/desliga, inicia/para, reinicia ou troca a versao
 
 Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis] [-import]
@@ -151,8 +151,8 @@ Setup da VPS (so configura; os servicos ligam com cais service):
   cais setup github-test             confere o GitHub App salvo e diz onde ele esta instalado
 
 Servicos (nada sobe sem ser ligado):
-  cais service <nome> on|off|start|stop|restart
-                                     liga/desliga, inicia/para ou reinicia um servico
+  cais service <nome> on|off|start|stop|restart|version
+                                     liga/desliga, inicia/para, reinicia ou troca a versao
 
 Bancos (no Postgres/MySQL da infra):
   cais db create postgres|mysql <nome> [-extensions postgis] [-import]
@@ -594,9 +594,9 @@ GitHub recusar, o motivo aparece aqui; nao abre nenhum repositorio.
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.
 
 ===== cais service -h
-Uso: cais service <nome> on|off|start|stop|restart
+Uso: cais service <nome> on|off|start|stop|restart|version
 
-Liga/desliga, inicia/para ou reinicia um servico.
+Liga/desliga, inicia/para, reinicia ou troca a versao.
 
 Ligar gera os secrets que faltam, grava o compose e sobe o servico (e
 mostra o progresso, tambem na TUI aberta). "on" num servico ja ligado
@@ -611,10 +611,20 @@ o backup falhar ate ele voltar.
 O proxy (Traefik) publica os apps com HTTPS: sem ele, app com dominio nao
 sobe. O Garage precisa do proxy ligado.
 
+version mostra a versao (tag da imagem) do postgres, mysql ou garage;
+com uma tag, grava e, ligado, aplica: baixa a imagem e recria o container
+(os apps perdem o banco por alguns segundos). padrao volta pra do cais.
+Os dados no volume nao voltam, entao o cais recusa: versao mais velha que
+a do ar, outra major do Postgres (precisa de pg_upgrade ou dump e
+restore) e outra major do Garage (garage migrate). O mesmo na TUI: aba
+Infra, no servico, campo Versao.
+
 Exemplos:
   cais service proxy on
   cais service postgres on
   cais service postgres restart
+  cais service postgres version 18-3.6-alpine
+  cais service mysql version padrao
   cais service garage off
 
 O socket padrao e /run/cais/cais.sock (ou a variavel CAIS_SOCKET); todo comando aceita --socket.

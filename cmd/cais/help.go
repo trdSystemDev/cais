@@ -234,7 +234,7 @@ Usa o App ID da config e a chave (cais setup secret github_app_key). Se o
 GitHub recusar, o motivo aparece aqui; nao abre nenhum repositorio.`},
 	}},
 	{title: "Servicos (nada sobe sem ser ligado):", cmds: []command{
-		{name: "service", usage: "service <nome> on|off|start|stop|restart", short: "liga/desliga, inicia/para ou reinicia um servico", long: `
+		{name: "service", usage: "service <nome> on|off|start|stop|restart|version", short: "liga/desliga, inicia/para, reinicia ou troca a versao", long: `
 Ligar gera os secrets que faltam, grava o compose e sobe o servico (e
 mostra o progresso, tambem na TUI aberta). "on" num servico ja ligado
 aplica nele a config salva no Setup. Desligar derruba os containers e
@@ -248,10 +248,20 @@ o backup falhar ate ele voltar.
 O proxy (Traefik) publica os apps com HTTPS: sem ele, app com dominio nao
 sobe. O Garage precisa do proxy ligado.
 
+version mostra a versao (tag da imagem) do postgres, mysql ou garage;
+com uma tag, grava e, ligado, aplica: baixa a imagem e recria o container
+(os apps perdem o banco por alguns segundos). padrao volta pra do cais.
+Os dados no volume nao voltam, entao o cais recusa: versao mais velha que
+a do ar, outra major do Postgres (precisa de pg_upgrade ou dump e
+restore) e outra major do Garage (garage migrate). O mesmo na TUI: aba
+Infra, no servico, campo Versao.
+
 Exemplos:
   cais service proxy on
   cais service postgres on
   cais service postgres restart
+  cais service postgres version 18-3.6-alpine
+  cais service mysql version padrao
   cais service garage off`},
 	}},
 	{title: "Bancos (no Postgres/MySQL da infra):", group: "db", cmds: []command{

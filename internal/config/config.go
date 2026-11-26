@@ -45,6 +45,10 @@ type Config struct {
 	GitHub GitHub   `yaml:"github,omitempty" json:"github"`
 	Backup Backup   `yaml:"backup,omitempty" json:"backup"`
 	Notify Notify   `yaml:"notify,omitempty" json:"notify"`
+	// Versions e a versao (tag da imagem) escolhida dos bancos e do Garage
+	// (postgres, mysql, garage); sem ela, a padrao do cais. O formato de
+	// cada uma e conferido no pacote stacks.
+	Versions map[string]string `yaml:"versions,omitempty" json:"versions,omitempty"`
 
 	// campos de versoes antigas (CI e registry saíram): aceitos na leitura
 	// pra config velha continuar valendo, e descartados ao gravar
@@ -229,6 +233,9 @@ func (c Config) HasStack(name string) bool {
 	return false
 }
 
+// imageTag e o formato de tag do docker (vai direto pro compose)
+var imageTag = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+
 var hostLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Validate confere os campos gerais. As regras de cada stack (dependencias)
@@ -259,6 +266,11 @@ func (c Config) Validate() error {
 	if c.Hosts.S3 != "" {
 		if err := validHost(c.Hosts.S3); err != nil {
 			errs = append(errs, fmt.Errorf("hosts.s3: %w", err))
+		}
+	}
+	for name, v := range c.Versions {
+		if v != "" && !imageTag.MatchString(v) {
+			errs = append(errs, fmt.Errorf("versions.%s: tag invalida %q", name, v))
 		}
 	}
 	if c.TLS != "" && c.TLS != TLSLetsEncrypt && c.TLS != TLSSelfSigned {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
@@ -54,18 +56,76 @@ func (c *Core) LoadConfig(context.Context) (ConfigInfo, error) {
 	return info, nil
 }
 
-func (c *Core) SaveConfig(_ context.Context, cfg config.Config) error {
-	return c.saveConfig(cfg)
+func (c *Core) SaveConfig(ctx context.Context, cfg config.Config) error {
+	return c.saveConfig(ctx, cfg)
 }
 
-func (c *Core) saveConfig(cfg config.Config) error {
+func (c *Core) saveConfig(ctx context.Context, cfg config.Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
 	if _, err := stacks.Enabled(cfg); err != nil {
 		return err
 	}
+	if err := c.checkVersions(ctx, cfg); err != nil {
+		return err
+	}
 	return config.Save(c.deps.ConfigPath, cfg)
+}
+
+// checkVersions recusa a troca de versao que os dados no volume nao
+// aguentam (stacks.CheckUpgrade). A versao de partida e a do container no
+// ar; sem ele (parado, desligado com os volumes), a da config de agora, que
+// e a dos dados. Servico que nunca subiu nao tem dados: aceita qualquer uma.
+func (c *Core) checkVersions(ctx context.Context, cfg config.Config) error {
+	old, err := config.Load(c.deps.ConfigPath)
+	if err != nil && !errors.Is(err, config.ErrNotFound) {
+		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(stacks.Images)) {
+		to := stacks.Version(cfg, name)
+		from := c.runningVersion(ctx, name)
+		if from == "" && c.stackEverUp(name) {
+			from = stacks.Version(old, name)
+		}
+		if err := stacks.CheckUpgrade(name, from, to); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stackEverUp diz se o servico ja subiu: tem o compose gravado, ligado ou
+// desligado (o desligado guarda o arquivo e os volumes).
+func (c *Core) stackEverUp(name string) bool {
+	file := c.setupDeps().ComposeFile(name)
+	for _, f := range []string{file, file + bootstrap.DisabledSuffix} {
+		if _, err := os.Stat(f); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// runningVersion e a tag da imagem do container do servico (vazio sem
+// container).
+func (c *Core) runningVersion(ctx context.Context, name string) string {
+	file := c.setupDeps().ComposeFile(name)
+	if _, err := os.Stat(file); err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cs, err := c.deps.ComposePS(ctx, file)
+	if err != nil {
+		return ""
+	}
+	for _, ct := range cs {
+		if tag := stacks.TagOf(name, ct.Image); tag != "" {
+			return tag
+		}
+	}
+	return ""
 }
 
 func (c *Core) SetSecret(_ context.Context, name, value string) error {
@@ -117,7 +177,7 @@ func (c *Core) SetService(ctx context.Context, name string, on bool) (Setup, err
 	} else {
 		cfg.Stacks = slices.DeleteFunc(cfg.Stacks, func(s string) bool { return s == name })
 	}
-	if err := c.saveConfig(cfg); err != nil {
+	if err := c.saveConfig(ctx, cfg); err != nil {
 		return Setup{}, err
 	}
 	return c.runSetupLocked(ctx, name, on)

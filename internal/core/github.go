@@ -191,7 +191,7 @@ func (c *Core) ConnectGitHub(ctx context.Context, code string) (GitHubConnected,
 	}
 	if err == nil {
 		cfg.GitHub.AppID = app.ID
-		err = c.saveConfig(cfg)
+		err = c.saveConfig(ctx, cfg)
 	}
 	if err != nil {
 		return r, fmt.Errorf("a chave foi gravada, mas nao o App ID %d (grave com cais setup config --github-app-id %d): %w", app.ID, app.ID, err)

@@ -75,6 +75,9 @@ func Enabled(c config.Config) ([]Stack, error) {
 		}
 		out = append(out, s)
 	}
+	if err := CheckVersions(c); err != nil {
+		errs = append(errs, err)
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -130,6 +133,9 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 	if err := checkStack(name, c); err != nil {
 		return Rendered{}, err
 	}
+	if err := CheckVersions(c); err != nil {
+		return Rendered{}, err
+	}
 	if !filepath.IsAbs(secretsDir) || strings.ContainsAny(secretsDir, "\"\\\n") {
 		return Rendered{}, fmt.Errorf("pasta de secrets invalida %q: precisa ser absoluta e sem aspas", secretsDir)
 	}
@@ -144,6 +150,13 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 				used = append(used, n)
 			}
 			return filepath.Join(secretsDir, n), nil
+		},
+		// a imagem com a versao escolhida (config.Versions) ou a padrao
+		"image": func(n string) (string, error) {
+			if !Versioned(n) {
+				return "", fmt.Errorf("servico sem versao escolhida %q", n)
+			}
+			return ImageRef(c, n), nil
 		},
 	}
 	path := "templates/" + name + "/docker-compose.yml.tmpl"

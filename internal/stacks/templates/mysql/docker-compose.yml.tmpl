@@ -9,7 +9,7 @@ name: mysql
 
 services:
   mysql:
-    image: mysql:9.7
+    image: {{image "mysql"}}
     container_name: mysql
     restart: unless-stopped
     # sem limite o log do docker cresce ate encher o disco

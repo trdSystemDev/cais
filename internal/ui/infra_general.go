@@ -308,6 +308,12 @@ func (m *model) viewInfraGeneral(w, h int) string {
 	var subs []string
 	if m.svc.shown {
 		m.svc.fill(m.setup.plan.Config)
+		m.svc.running = ""
+		for _, ct := range st.Containers {
+			if tag := stacks.TagOf(st.Name, ct.Image); tag != "" && ct.State == "running" {
+				m.svc.running = tag
+			}
+		}
 		subs = append(subs, m.svc.view(m.setup.plan.Config, st.Enabled, inner))
 	}
 	switch {
