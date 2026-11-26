@@ -29,7 +29,13 @@ jobs:
         run: make test-race
 
       - name: Binarios
+        env:
+          # o client do Google dos backups vai no binario, fora do codigo
+          CAIS_GOOGLE_CLIENT_ID: ${{ secrets.CAIS_GOOGLE_CLIENT_ID }}
+          CAIS_GOOGLE_CLIENT_SECRET: ${{ secrets.CAIS_GOOGLE_CLIENT_SECRET }}
         run: |
+          test -n "$CAIS_GOOGLE_CLIENT_ID" && test -n "$CAIS_GOOGLE_CLIENT_SECRET" ||
+            { echo "::error::faltam os secrets CAIS_GOOGLE_CLIENT_ID e CAIS_GOOGLE_CLIENT_SECRET do repositorio"; exit 1; }
           make build VERSION="$GITHUB_REF_NAME"
           ./dist/cais-linux-amd64 version
           # o release sai com o Go do toolchain do go.mod (o mesmo do PC):

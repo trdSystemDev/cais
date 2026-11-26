@@ -362,9 +362,6 @@ var handlers = map[string]handler{
 	MethodBackupProvider: do(func(a core.API, ctx context.Context, p textResult) error {
 		return a.SetBackupProvider(ctx, p.Text)
 	}),
-	MethodBackupClient: do(func(a core.API, ctx context.Context, p backupClientParams) error {
-		return a.SetBackupClient(ctx, p.ID, p.Secret)
-	}),
 	MethodBackupSchedule: do(func(a core.API, ctx context.Context, p backupScheduleParams) error {
 		return a.SetBackupSchedule(ctx, p.Time, p.Days)
 	}),

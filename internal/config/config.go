@@ -143,7 +143,7 @@ type GitHub struct {
 }
 
 // Backup e quando e pra quem sai o backup diario (bancos e estado do cais,
-// pro Google Drive). O login no Drive e o OAuth client ficam nos secrets.
+// pro Google Drive). O login no destino fica nos secrets (o client e o app do cais).
 type Backup struct {
 	// Provider e o destino dos backups: google (Google Drive, o padrao) ou
 	// onedrive (OneDrive pessoal).

@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -14,7 +13,6 @@ import (
 	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/backup/onedrivetest"
 	"github.com/trdSystemDev/cais/internal/config"
-	"github.com/trdSystemDev/cais/internal/secrets"
 )
 
 // waitBackupEmail espera o login terminar com a conta email.
@@ -54,22 +52,12 @@ func TestBackupNoOneDrive(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := c.RefreshBackup(ctx)
-	// sem app proprio vale o app do cais: falta so o login
-	if st.Provider != backup.ProviderOneDrive || st.ClientID != backup.DefaultOneDriveClient || st.Email != "" || st.Ready() {
+	// o app e sempre o do cais: falta so o login
+	if st.Provider != backup.ProviderOneDrive || st.Email != "" || st.Ready() {
 		t.Fatalf("OneDrive herdou o Google: %+v", st)
 	}
 	if _, err := c.RunBackup(ctx); err == nil || !strings.Contains(err.Error(), "falta conectar o OneDrive") {
 		t.Fatalf("backup sem configurar o OneDrive: %v", err)
-	}
-	if err := c.SetBackupClient(ctx, "", ""); err != nil {
-		t.Fatalf("vazio volta pro app do cais: %v", err)
-	}
-
-	if err := c.SetBackupClient(ctx, "123-abc.apps.googleusercontent.com", "segredo"); err == nil {
-		t.Error("aceitou client do Google no OneDrive")
-	}
-	if err := c.SetBackupClient(ctx, "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b", ""); err != nil {
-		t.Fatal(err)
 	}
 	login, err := c.StartDriveLogin(ctx)
 	if err != nil {
@@ -93,7 +81,7 @@ func TestBackupNoOneDrive(t *testing.T) {
 	}
 
 	// o acesso venceu: a renovacao traz outro refresh token, que e gravado
-	_, tokenSecret := providerSecrets(backup.ProviderOneDrive)
+	tokenSecret := loginSecret(backup.ProviderOneDrive)
 	data, _ := c.secretStore().Get(tokenSecret)
 	var tok oauth2.Token
 	json.Unmarshal(data, &tok)
@@ -114,17 +102,6 @@ func TestBackupNoOneDrive(t *testing.T) {
 	res, err := c.RestoreBackup(ctx, RestoreRequest{File: run.File, Identity: priv})
 	if err != nil || !slices.Equal(res.Available, []string{"mysql/blog", "postgres/loja"}) {
 		t.Fatalf("restore do OneDrive %+v %v", res, err)
-	}
-
-	// sem o app proprio volta o do cais, e o login (do app proprio) sai
-	if err := c.SetBackupClient(ctx, "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if st, _ = c.RefreshBackup(ctx); st.ClientID != backup.DefaultOneDriveClient || st.Email != "" {
-		t.Fatalf("de volta pro app do cais: %+v", st)
-	}
-	if _, err := c.secretStore().Get(tokenSecret); !errors.Is(err, secrets.ErrNotFound) {
-		t.Errorf("o login do app proprio ficou: %v", err)
 	}
 
 	// de volta pro Google: client e login continuam la

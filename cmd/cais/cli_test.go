@@ -215,7 +215,6 @@ func TestCLIComandos(t *testing.T) {
 		// backup
 		{name: "backup status", args: "backup status", calls: []string{"RefreshBackup"}},
 		{name: "backup provider", args: "backup provider google", calls: []string{"SetBackupProvider", "RefreshBackup"}},
-		{name: "backup client", args: "backup client id-123", stdin: "segredo\n", calls: []string{"RefreshBackup", "SetBackupClient"}},
 		{name: "backup logout", args: "backup logout", calls: []string{"RefreshBackup", "DisconnectDrive"}},
 		{name: "backup schedule", args: "backup schedule 03:00 -days 10", calls: []string{"SetBackupSchedule", "RefreshBackup"}},
 		{name: "backup schedule off", args: "backup schedule off", calls: []string{"SetBackupSchedule", "RefreshBackup"}},

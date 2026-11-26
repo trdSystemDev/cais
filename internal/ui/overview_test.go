@@ -34,7 +34,7 @@ func dashState(now time.Time) core.State {
 			{Name: "garage", Enabled: true, Installed: true},
 			{Name: "mysql"},
 		}},
-		Backup: core.BackupStatus{ClientID: "x", Email: "a@b", Recipient: "age1", Time: "03:00",
+		Backup: core.BackupStatus{Email: "a@b", Recipient: "age1", Time: "03:00",
 			Next: now.Add(14 * time.Hour), Last: &core.BackupRun{At: now.Add(-7 * time.Hour), Size: 2048}},
 		Health: core.Health{Version: "v0.1.0", Latest: "v0.2.0",
 			Certs: []core.Cert{{Domain: "medko.exemplo.com", NotAfter: now.Add(5 * 24 * time.Hour)}}},

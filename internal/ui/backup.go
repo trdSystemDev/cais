@@ -27,12 +27,10 @@ type bkPanel struct {
 	zones *zone.Manager
 	th    theme
 
-	active   bool
-	focus    int
-	clientID *textinput.Model
-	secret   *textinput.Model
-	at       *textinput.Model
-	days     *textinput.Model
+	active bool
+	focus  int
+	at     *textinput.Model
+	days   *textinput.Model
 	// filled: horario e retencao ja vieram do estado (nao sobrescreve o
 	// que a pessoa esta digitando)
 	filled bool
@@ -67,9 +65,6 @@ func newBkPanel(api core.API, zones *zone.Manager, th theme) *bkPanel {
 		ti.SetWidth(w)
 		return &ti
 	}
-	p.clientID = mk("....apps.googleusercontent.com", 40)
-	p.secret = mk("client secret", 40)
-	p.secret.EchoMode = textinput.EchoPassword
 	p.at = mk("03:00", 5)
 	p.days = mk("30", 4)
 	p.setTheme(th)
@@ -77,7 +72,7 @@ func newBkPanel(api core.API, zones *zone.Manager, th theme) *bkPanel {
 }
 
 func (p *bkPanel) inputs() []*textinput.Model {
-	return []*textinput.Model{p.clientID, p.secret, p.at, p.days}
+	return []*textinput.Model{p.at, p.days}
 }
 
 func (p *bkPanel) setTheme(th theme) {
@@ -89,11 +84,7 @@ func (p *bkPanel) setTheme(th theme) {
 
 // ids na ordem do Tab, conforme o que esta na tela
 func (p *bkPanel) ids(st core.BackupStatus) []string {
-	ids := []string{"bk-info", "bk-provider", "bk-info-client", "bk-client-id"}
-	if st.Provider != backup.ProviderOneDrive { // o app do Azure nao tem secret
-		ids = append(ids, "bk-client-secret")
-	}
-	ids = append(ids, "bk-client-save", "bk-info-login")
+	ids := []string{"bk-info", "bk-provider", "bk-info-login"}
 	switch {
 	case st.Login != nil:
 		ids = append(ids, "bk-login-copy", "bk-login-cancel")
@@ -113,10 +104,6 @@ func (p *bkPanel) ids(st core.BackupStatus) []string {
 
 func (p *bkPanel) input(id string) *textinput.Model {
 	switch id {
-	case "bk-client-id":
-		return p.clientID
-	case "bk-client-secret":
-		return p.secret
 	case "bk-time":
 		return p.at
 	case "bk-days":
@@ -199,15 +186,6 @@ func (p *bkPanel) press(st core.BackupStatus, id string) tea.Cmd {
 		return p.run("provider", func(ctx context.Context) bkDoneMsg {
 			return bkDoneMsg{err: p.api.SetBackupProvider(ctx, next)}
 		})
-	case "bk-client-save":
-		cid, secret := strings.TrimSpace(p.clientID.Value()), strings.TrimSpace(p.secret.Value())
-		if st.Provider != backup.ProviderOneDrive && (cid == "" || secret == "") { // OneDrive vazio: o app do cais
-			p.err = "Informe o client ID e o client secret."
-			return nil
-		}
-		return p.run("client", func(ctx context.Context) bkDoneMsg {
-			return bkDoneMsg{err: p.api.SetBackupClient(ctx, cid, secret)}
-		})
 	case "bk-connect":
 		return p.run("login", func(ctx context.Context) bkDoneMsg {
 			_, err := p.api.StartDriveLogin(ctx)
@@ -255,7 +233,7 @@ func (p *bkPanel) press(st core.BackupStatus, id string) tea.Cmd {
 		})
 	case "bk-run":
 		if !st.Ready() {
-			p.err = "Complete os passos 1 a 3 antes."
+			p.err = "Complete os passos de cima antes (conectar e a chave)."
 			return nil
 		}
 		return p.run("backup", func(ctx context.Context) bkDoneMsg {
@@ -277,14 +255,6 @@ func (p *bkPanel) update(st core.BackupStatus, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	switch d.action {
-	case "provider":
-		// o client digitado era do outro destino
-		p.clientID.SetValue("")
-		p.secret.SetValue("")
-	case "client":
-		p.clientID.SetValue("")
-		p.secret.SetValue("")
-		p.done = "Client gravado. Agora conecte o " + backup.ProviderName(st.Provider) + "."
 	case "logout":
 		p.done = backup.ProviderName(st.Provider) + " desconectado (os backups que ja estao la ficam)."
 	case "key":
@@ -313,8 +283,7 @@ func (p *bkPanel) key(st core.BackupStatus, msg tea.KeyPressMsg) tea.Cmd {
 		return p.setFocus(st, p.focus-1)
 	case "enter":
 		if p.input(id) != nil {
-			next := map[string]string{"bk-client-id": "bk-client-secret", "bk-client-secret": "bk-client-save",
-				"bk-time": "bk-days", "bk-days": "bk-schedule"}[id]
+			next := map[string]string{"bk-time": "bk-days", "bk-days": "bk-schedule"}[id]
 			return p.setFocus(st, slices.Index(p.ids(st), next))
 		}
 		return p.press(st, id)
@@ -366,7 +335,7 @@ func (p *bkPanel) view(st core.BackupStatus, w, h int, head string) string {
 	v := p.newView(st, w)
 	var b strings.Builder
 	v.viewHeader(&b, head)
-	for _, part := range []func(*strings.Builder){v.viewClient, v.viewLogin, v.viewKey, v.viewSchedule, v.viewRun} {
+	for _, part := range []func(*strings.Builder){v.viewLogin, v.viewKey, v.viewSchedule, v.viewRun} {
 		part(&b)
 	}
 	return p.th.panel(p.active, w, h).MaxHeight(h + 2).Render(b.String())
@@ -430,8 +399,7 @@ func (v *bkView) step(n int, title string, ok bool, detail, infoID string) strin
 func (v *bkView) viewHeader(b *strings.Builder, head string) {
 	p, t, wrap, focusID, name, rule := v.p, v.t, v.wrap, v.focusID, v.name, v.rule
 	b.WriteString(head + "\n\n")
-	// destino no titulo, como seletor: trocar nao apaga o client nem o
-	// login do outro
+	// destino no titulo, como seletor: trocar nao apaga o login do outro
 	dest := t.fg(t.muted).Render("Destino ")
 	if focusID == "bk-provider" {
 		dest = t.fg(t.accent).Bold(true).Render("› Destino ")
@@ -449,39 +417,13 @@ func (v *bkView) viewHeader(b *strings.Builder, head string) {
 	b.WriteString(rule)
 }
 
-// viewClient desenha o passo 1: o client do Google ou o app do Azure.
-func (v *bkView) viewClient(b *strings.Builder) {
-	p, st, rule, onedrive := v.p, v.st, v.rule, v.onedrive
-	// 1. client
-	save := "Gravar client"
-	if onedrive {
-		// o app do cais ja vale: o passo 1 so existe pra quem quer um app
-		// proprio no Azure
-		detail := "o do cais (nao precisa criar)"
-		if st.ClientID != backup.DefaultOneDriveClient {
-			detail = "proprio: " + st.ClientID
-		}
-		b.WriteString(v.step(1, "App da Microsoft", st.ClientID != "", detail, "bk-info-client") + "\n")
-		p.clientID.Placeholder = "opcional: vazio usa o do cais"
-		b.WriteString(v.field("bk-client-id", "App proprio (ID)", 41) + "\n")
-		save = "Gravar app"
-	} else {
-		b.WriteString(v.step(1, "OAuth client do Google", st.ClientID != "", cmpOrStr(st.ClientID, "falta"), "bk-info-client") + "\n")
-		p.clientID.Placeholder = "....apps.googleusercontent.com"
-		b.WriteString(v.field("bk-client-id", "Client ID", 41) + "\n")
-		b.WriteString(v.field("bk-client-secret", "Client secret", 41) + "\n")
-	}
-	b.WriteString("\n")
-	b.WriteString("  " + v.btn("bk-client-save", save, btnNormal) + "\n" + rule)
-}
-
-// viewLogin desenha o passo 2: o login no destino.
+// viewLogin desenha o passo 1: o login no destino.
 func (v *bkView) viewLogin(b *strings.Builder) {
 	t, st, muted, wrap, name, rule := v.t, v.st, v.muted, v.wrap, v.name, v.rule
-	// 2. login no destino
+	// 1. login no destino
 	switch {
 	case st.Login != nil:
-		b.WriteString(v.step(2, name, false, "aguardando o login", "bk-info-login") + "\n")
+		b.WriteString(v.step(1, name, false, "aguardando o login", "bk-info-login") + "\n")
 		// o link e clicavel (OSC 8) no terminal que aceita; o codigo vai
 		// pelo Copiar pra colar na pagina
 		b.WriteString("  Abra " + t.fg(t.accent).Bold(true).Underline(true).Hyperlink(st.Login.URL).Render(st.Login.URL) +
@@ -489,15 +431,11 @@ func (v *bkView) viewLogin(b *strings.Builder) {
 		b.WriteString("    " + t.fg(t.accent).Bold(true).Render(st.Login.Code) + "  " + muted.Render("(expira as "+st.Login.Expires.Local().Format("15:04")+")") + "\n")
 		b.WriteString("  " + v.btn("bk-login-copy", "Copiar codigo", btnInfo) + " " + v.btn("bk-login-cancel", "Cancelar", btnNeutral) + "\n")
 	case st.Email != "":
-		b.WriteString(v.step(2, name, true, st.Email, "bk-info-login") + "\n")
+		b.WriteString(v.step(1, name, true, st.Email, "bk-info-login") + "\n")
 		b.WriteString("  " + v.btn("bk-disconnect", "Desconectar", btnWarn) + "\n")
 	default:
-		b.WriteString(v.step(2, name, false, "nao conectado", "bk-info-login") + "\n")
-		k := btnNormal
-		if st.ClientID == "" {
-			k = btnOff
-		}
-		b.WriteString("  " + v.btn("bk-connect", "Conectar", k) + "\n")
+		b.WriteString(v.step(1, name, false, "nao conectado", "bk-info-login") + "\n")
+		b.WriteString("  " + v.btn("bk-connect", "Conectar", btnNormal) + "\n")
 	}
 	if st.LoginError != "" {
 		b.WriteString(wrap.Foreground(t.danger).Render(st.LoginError) + "\n")
@@ -505,15 +443,15 @@ func (v *bkView) viewLogin(b *strings.Builder) {
 	b.WriteString(rule)
 }
 
-// viewKey desenha o passo 3: a chave do backup.
+// viewKey desenha o passo 2: a chave do backup.
 func (v *bkView) viewKey(b *strings.Builder) {
 	p, t, st, w, muted, wrap, rule := v.p, v.t, v.st, v.w, v.muted, v.wrap, v.rule
-	// 3. chave
+	// 2. chave
 	short := st.Recipient
 	if len(short) > 20 {
 		short = short[:12] + "…" + short[len(short)-6:]
 	}
-	b.WriteString(v.step(3, "Chave do backup", st.Recipient != "", cmpOrStr(short, "falta"), "bk-info-key") + "\n")
+	b.WriteString(v.step(2, "Chave do backup", st.Recipient != "", cmpOrStr(short, "falta"), "bk-info-key") + "\n")
 	if p.priv != "" {
 		b.WriteString(wrap.Foreground(t.warn).Bold(true).Render("Guarde esta chave privada agora (gerenciador de senhas). Ela NAO fica na VPS: sem ela nenhum backup abre.") + "\n")
 		// a chave e uma linha so: se o painel e estreito ela quebra, e o
@@ -539,15 +477,15 @@ func (v *bkView) viewKey(b *strings.Builder) {
 	b.WriteString(rule)
 }
 
-// viewSchedule desenha o passo 4: o horario e a retencao.
+// viewSchedule desenha o passo 3: o horario e a retencao.
 func (v *bkView) viewSchedule(b *strings.Builder) {
 	st, rule := v.st, v.rule
-	// 4. horario
+	// 3. horario
 	when := "desligado (so manual)"
 	if st.Time != "" {
 		when = fmt.Sprintf("todo dia as %s, guarda %d dias", st.Time, st.RetentionDays)
 	}
-	b.WriteString(v.step(4, "Horario", st.Time != "", when, "bk-info-schedule") + "\n")
+	b.WriteString(v.step(3, "Horario", st.Time != "", when, "bk-info-schedule") + "\n")
 	b.WriteString(v.field("bk-time", "Horario (HH:MM)", 6) + "\n")
 	b.WriteString(v.field("bk-days", "Retencao (dias)", 6) + "\n")
 	b.WriteString("\n")
@@ -599,21 +537,10 @@ func (v *bkView) viewRun(b *strings.Builder) {
 func bkInfo(st core.BackupStatus, id string) infoBox {
 	name := backup.ProviderName(st.Provider)
 	switch id {
-	case "bk-info-client":
-		if st.Provider == backup.ProviderOneDrive {
-			return infoBox{"App da Microsoft", "Nao precisa fazer nada: o cais ja vem com o app dele registrado na Microsoft. " +
-				"E so Conectar no passo 2 e autorizar com a sua conta pessoal (outlook.com, hotmail.com, live.com). O cais so ve " +
-				"a pasta dele no OneDrive (Aplicativos/cais), nada mais.\n\nApp proprio (opcional): no portal do Azure, em " +
-				"Registros de aplicativo, registre um com \"Somente contas pessoais da Microsoft\", ligue \"Permitir fluxos de " +
-				"clientes publicos\" em Autenticacao e cole aqui o ID do aplicativo (cliente). Gravar vazio volta pro do cais."}
-		}
-		return infoBox{"OAuth client do Google", "No Google Cloud: ative a Google Drive API, crie em Credenciais um ID do cliente OAuth " +
-			"do tipo \"TVs e dispositivos de entrada limitada\" e publique a tela de consentimento (em teste o login expira em 7 dias). " +
-			"Cole aqui o client ID e o client secret."}
 	case "bk-info-login":
 		return infoBox{"Conectar o " + name, "Conectar mostra um link e um codigo: abra o link em qualquer aparelho (celular, notebook), " +
 			"entre na conta que vai guardar os backups e digite o codigo (Copiar codigo poe ele na area de transferencia). O cais guarda so o acesso a pasta dele. " +
-			"Desconectar tira o acesso, mas os backups que ja estao no " + name + " ficam."}
+			"Desconectar tira o acesso, mas os backups que ja estao no " + name + " ficam." + loginNote(st)}
 	case "bk-info-key":
 		return infoBox{"Chave do backup", "Cada backup e criptografado antes de sair da VPS. A chave publica fica no cais; a privada " +
 			"aparece uma vez so, pra voce guardar num gerenciador de senhas. Ela NAO fica na VPS: sem ela nenhum backup abre. " +
@@ -622,13 +549,24 @@ func bkInfo(st core.BackupStatus, id string) infoBox {
 		return infoBox{"Horario", "O backup automatico roda todo dia nesse horario (hora da VPS). Vazio desliga, e fica so o " +
 			"manual. Retencao: depois de cada backup, os arquivos mais velhos que esse numero de dias sao apagados do " + name + "."}
 	case "bk-info-run":
-		return infoBox{"Backup agora", "Faz um backup na hora, sem esperar o horario (precisa dos passos 1 a 3). " +
+		return infoBox{"Backup agora", "Faz um backup na hora, sem esperar o horario (precisa dos passos de cima, menos o horario). " +
 			"Se o envio falhar, o cais tenta de novo e mostra a nova tentativa em Proximo.\n\n" +
 			"Restaurar (na VPS): cais backup files lista os arquivos; cais backup restore <arquivo> -key <arquivo> postgres/<db> " +
 			"volta um banco."}
 	}
 	return infoBox{"Backups", "Os bancos da infra e o estado do cais, num arquivo criptografado por dia, no destino escolhido. " +
-		"Destino: ←→ troca entre Google Drive e OneDrive; o client e o login de cada um ficam guardados.\n\n" + core.BackupGap}
+		"Destino: ←→ troca entre Google Drive e OneDrive; o login de cada um fica guardado.\n\n" + core.BackupGap}
+}
+
+// loginNote explica que o app e o do cais (sem registrar nada) e onde
+// ficam os backups em cada destino.
+func loginNote(st core.BackupStatus) string {
+	if st.Provider == backup.ProviderOneDrive {
+		return "\n\nO cais ja vem com o app dele na Microsoft: nao precisa registrar nada, so entrar com a conta pessoal " +
+			"(outlook.com, hotmail.com, live.com). Os backups ficam em Aplicativos/cais; o resto do OneDrive o cais nao ve."
+	}
+	return "\n\nO cais ja vem com o app dele no Google: nao precisa criar nada, so entrar com a conta. Os backups ficam " +
+		"na pasta cais-backups-<nome da VPS> do seu Drive; o cais so ve os arquivos que ele mesmo criou."
 }
 
 // backupRefreshCmd pede ao core o estado do backup (chega pelo estado).

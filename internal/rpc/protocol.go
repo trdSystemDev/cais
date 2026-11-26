@@ -73,7 +73,6 @@ const (
 	MethodAppBucketUnlink  = "app.bucket.unlink" // params: appBucketParams
 	MethodBackupRefresh    = "backup.refresh"
 	MethodBackupProvider   = "backup.provider" // params: textResult (o destino)
-	MethodBackupClient     = "backup.client"   // params: backupClientParams
 	MethodBackupLogin      = "backup.login"
 	MethodBackupLoginStop  = "backup.login.cancel"
 	MethodBackupDisconnect = "backup.disconnect"
@@ -195,11 +194,6 @@ type bucketParams struct {
 type appBucketParams struct {
 	App    string `json:"app"`
 	Bucket string `json:"bucket"`
-}
-
-type backupClientParams struct {
-	ID     string `json:"id"`
-	Secret string `json:"secret"`
 }
 
 type backupScheduleParams struct {

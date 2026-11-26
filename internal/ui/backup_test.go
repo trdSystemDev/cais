@@ -58,7 +58,10 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 		t.Fatalf("Backups na sub-aba Geral:\n%s", screen(m))
 	}
 	click(t, m, "setup-sec:Backups")
-	waitFor(t, m, "1 · OAuth client do Google")
+	waitFor(t, m, "1 · Google Drive")
+	if strings.Contains(screen(m), "Client") {
+		t.Fatalf("o Google pede client:\n%s", screen(m))
+	}
 	// o Tab entra no painel de Backups, pelo [i] do titulo e depois o destino
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if !m.bk.active || m.bk.focusID(m.state.Backup) != "bk-info" {
@@ -70,27 +73,18 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if !m.bk.active || m.bk.focusID(m.state.Backup) != "bk-client-id" || m.setup.typing() {
+	if !m.bk.active || m.bk.focusID(m.state.Backup) != "bk-connect" || m.setup.typing() {
 		t.Fatalf("tab na sub-aba Backups: bk ativo %v, foco %q", m.bk.active, m.bk.focusID(m.state.Backup))
 	}
 
-	// 1. client
-	m.bk.clientID.SetValue("123-abc.apps.googleusercontent.com")
-	m.bk.secret.SetValue("segredo")
-	click(t, m, "bk-client-save")
-	waitFor(t, m, "Client gravado. Agora conecte o Google Drive.")
-	if strings.Contains(screen(m), "segredo") {
-		t.Fatal("client secret na tela")
-	}
-
-	// 2. login pelo codigo
+	// 1. login pelo codigo (o client e o app do cais)
 	click(t, m, "bk-connect")
 	waitFor(t, m, "ABCD-EFGH")
 	waitFor(t, m, "https://www.google.com/device")
 	s.Approve()
 	waitFor(t, m, "pessoa@exemplo.com")
 
-	// 3. chave: aparece uma vez
+	// 2. chave: aparece uma vez
 	click(t, m, "bk-key")
 	waitFor(t, m, "AGE-SECRET-KEY-")
 	waitFor(t, m, "Ela NAO fica")
@@ -103,7 +97,7 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	click(t, m, "bk-key")
 	waitFor(t, m, "Confirmar: gerar outra")
 
-	// 4. horario
+	// 3. horario
 	m.bk.at.SetValue("03:00")
 	m.bk.days.SetValue("14")
 	click(t, m, "bk-schedule")
@@ -118,9 +112,8 @@ func TestBackupConfiguradoPelaTUI(t *testing.T) {
 	}
 }
 
-// a sub-aba Backups troca o destino pro OneDrive: o passo 1 ja vem com o app
-// do cais (app proprio opcional, so o ID, sem secret) e o login e o da
-// Microsoft, com o Copiar codigo
+// a sub-aba Backups troca o destino pro OneDrive: sem passo de client (o app
+// e o do cais), o 1 ja e o login da Microsoft, com o Copiar codigo
 func TestBackupNoOneDrivePelaTUI(t *testing.T) {
 	o := onedrivetest.New()
 	defer o.Close()
@@ -145,23 +138,20 @@ func TestBackupNoOneDrivePelaTUI(t *testing.T) {
 	click(t, m, "setup-sec:Backups")
 	waitFor(t, m, "‹ Google Drive ›")
 	click(t, m, "bk-provider")
-	waitFor(t, m, "1 · App da Microsoft")
-	waitFor(t, m, "o do cais (nao precisa criar)")
-	// o passo a passo do Azure fica no [i] do passo, nao solto no painel
-	if strings.Contains(screen(m), "Permitir fluxos de clientes publicos") {
-		t.Fatalf("ajuda solta no painel:\n%s", screen(m))
+	// sem passo de client: o 1 ja e conectar, com o app do cais
+	waitFor(t, m, "1 · OneDrive")
+	waitFor(t, m, "3 · Horario")
+	if strings.Contains(screen(m), "Client") || strings.Contains(screen(m), "App proprio") {
+		t.Fatalf("OneDrive pede client:\n%s", screen(m))
 	}
-	click(t, m, "bk-info-client")
-	waitFor(t, m, "Permitir fluxos de clientes publicos")
+	if ids := m.bk.ids(m.state.Backup); slices.ContainsFunc(ids, func(id string) bool { return strings.HasPrefix(id, "bk-client") }) {
+		t.Fatalf("o Tab passa pelo client no OneDrive: %v", ids)
+	}
+	click(t, m, "bk-info-login")
+	waitFor(t, m, "app dele na Microsoft")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.bk.info != nil || strings.Contains(screen(m), "Permitir fluxos de clientes publicos") {
+	if m.bk.info != nil || strings.Contains(screen(m), "app dele na Microsoft") {
 		t.Fatalf("esc nao fechou a ajuda:\n%s", screen(m))
-	}
-	if strings.Contains(screen(m), "Client secret") {
-		t.Fatalf("OneDrive pede secret:\n%s", screen(m))
-	}
-	if ids := m.bk.ids(m.state.Backup); slices.Contains(ids, "bk-client-secret") {
-		t.Fatalf("o Tab passa pelo secret no OneDrive: %v", ids)
 	}
 
 	// sem gravar nada: Conectar ja pede o codigo pelo app do cais
@@ -178,7 +168,10 @@ func TestBackupNoOneDrivePelaTUI(t *testing.T) {
 
 	// volta pro Google: o client do OneDrive fica guardado
 	click(t, m, "bk-provider")
-	waitFor(t, m, "1 · OAuth client do Google")
+	waitFor(t, m, "1 · Google Drive")
+	if strings.Contains(screen(m), "Client") {
+		t.Fatalf("o Google pede client:\n%s", screen(m))
+	}
 	click(t, m, "bk-provider")
 	waitFor(t, m, "pessoa@outlook.com")
 }

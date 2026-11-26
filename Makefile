@@ -1,5 +1,10 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
+# client do Google dos backups (o app "cais" da TRD System): fora do codigo,
+# vem do ambiente (no release, dos secrets do GitHub Actions). Sem ele o
+# binario funciona, mas o login no Google Drive diz que falta.
+GOOGLE_LDFLAGS := -X github.com/trdSystemDev/cais/internal/backup.GoogleClientID=$(CAIS_GOOGLE_CLIENT_ID) \
+	-X github.com/trdSystemDev/cais/internal/backup.GoogleClientSecret=$(CAIS_GOOGLE_CLIENT_SECRET)
+LDFLAGS := -s -w -X main.version=$(VERSION) $(GOOGLE_LDFLAGS)
 # release reproduzivel: sem os caminhos da maquina que compilou (-trimpath) e
 # com o commit gravado no binario (go version -m, cais version). O Go e o
 # do toolchain do go.mod, o mesmo no PC e no GitHub Actions.
@@ -14,7 +19,7 @@ DEV_ENV := CAIS_SOCKET=$(DEV_DIR)/cais.sock CAIS_CONFIG=$(DEV_DIR)/etc/config.ya
 # binario local (./cais), sempre recompilado. Estatico (CGO_ENABLED=0) como o
 # do release: os apps montam ele no container pro cais run (alpine, distroless)
 cais:
-	CGO_ENABLED=0 go build -ldflags "-X main.version=$(VERSION)" -o cais ./cmd/cais
+	CGO_ENABLED=0 go build -ldflags "-X main.version=$(VERSION) $(GOOGLE_LDFLAGS)" -o cais ./cmd/cais
 
 # make dev: sobe o daemon em segundo plano (log em $(DEV_DIR)/daemon.log), abre a
 # TUI e, ao sair dela, para o daemon. Se ja tem um daemon de pe, so abre a TUI.

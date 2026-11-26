@@ -26,11 +26,28 @@ var GoogleEndpoint = oauth2.Endpoint{
 	DeviceAuthURL: "https://oauth2.googleapis.com/device/code",
 }
 
-// Client e o OAuth client (do projeto do Google Cloud da pessoa, tipo "TVs
-// e dispositivos de entrada limitada").
+// Client e o OAuth client do login (tipo "TVs e dispositivos de entrada
+// limitada" no Google; app publico, sem secret, na Microsoft).
 type Client struct {
 	ID     string `json:"client_id"`
 	Secret string `json:"client_secret"`
+}
+
+// GoogleClientID e GoogleClientSecret sao o OAuth client "cais" da TRD
+// System no Google Cloud (tipo "TVs e dispositivos de entrada limitada", so
+// o escopo drive.file, em producao): com ele conectar o Google Drive e so o
+// login. Vem no build do release (-ldflags -X, dos secrets
+// CAIS_GOOGLE_CLIENT_ID e CAIS_GOOGLE_CLIENT_SECRET do GitHub Actions), fora
+// do codigo: o secret de um client desse tipo nao abre nada sem o login da
+// pessoa, mas no repositorio publico o Google o trataria como vazado.
+var GoogleClientID, GoogleClientSecret string
+
+// GoogleClient e o client do Google do binario; erro no build sem ele (dev).
+func GoogleClient() (Client, error) {
+	if GoogleClientID == "" || GoogleClientSecret == "" {
+		return Client{}, errors.New("este binario do cais foi compilado sem o client do Google (CAIS_GOOGLE_CLIENT_ID e CAIS_GOOGLE_CLIENT_SECRET no make): use o do release")
+	}
+	return Client{ID: GoogleClientID, Secret: GoogleClientSecret}, nil
 }
 
 // OAuth e a config do oauth2 pro client.

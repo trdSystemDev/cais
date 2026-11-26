@@ -365,7 +365,7 @@ func TestSetupSubAbasPeloTeclado(t *testing.T) {
 		t.Fatal("esc nao saiu do formulario")
 	}
 	key(tea.KeyRight)
-	waitFor(t, m, "OAuth client do Google")
+	waitFor(t, m, "1 · Google Drive")
 	key(tea.KeyRight)
 	waitFor(t, m, "Checar de novo")
 	key(tea.KeyRight)

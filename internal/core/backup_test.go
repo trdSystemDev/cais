@@ -92,12 +92,7 @@ func newBackupCore(t *testing.T) (*Core, *drivetest.Server, *fakeDBs, string) {
 func setupBackup(t *testing.T, c *Core, s *drivetest.Server) string {
 	t.Helper()
 	ctx := context.Background()
-	if err := c.SetBackupClient(ctx, "123-abc", "segredo"); err == nil {
-		t.Error("aceitou client ID invalido")
-	}
-	if err := c.SetBackupClient(ctx, "123-abc.apps.googleusercontent.com", "segredo"); err != nil {
-		t.Fatal(err)
-	}
+	// sem client pra gravar: o login ja usa o app do cais
 	login, err := c.StartDriveLogin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +125,7 @@ func setupBackup(t *testing.T, c *Core, s *drivetest.Server) string {
 func TestBackupDoLoginAoRestore(t *testing.T) {
 	c, s, dbs, _ := newBackupCore(t)
 	ctx := context.Background()
-	if _, err := c.RunBackup(ctx); err == nil || !strings.Contains(err.Error(), "falta o OAuth client do Google, conectar o Google Drive, a chave do backup") {
+	if _, err := c.RunBackup(ctx); err == nil || !strings.Contains(err.Error(), "falta conectar o Google Drive, a chave do backup") {
 		t.Fatalf("backup sem configurar: %v", err)
 	}
 	priv := setupBackup(t, c, s)

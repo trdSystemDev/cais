@@ -30,28 +30,21 @@ mais novo fica sempre. Um database que falha no dump nao impede os outros.
 ## Destino: Google Drive ou OneDrive
 
 O destino e um so por vez (`cais backup provider google|onedrive`, ou o
-**Destino** no topo da sub-aba Backups). O client e o login de cada um ficam
-guardados: trocar e voltar nao pede login de novo. Os backups ja feitos ficam
+**Destino** no topo da sub-aba Backups). Nos dois nao ha nada pra criar: o
+cais ja vem com o app dele (`cais`, da TRD System) no Google e na Microsoft,
+e e so conectar. O login de cada um fica guardado: trocar e voltar nao pede
+login de novo. Os backups ja feitos ficam
 onde estao; `files`, `restore` e a retencao olham so o destino atual. Nos
 dois, o cais so ve a pasta que ele mesmo cria, nada mais da sua nuvem.
 
-**Google Drive** (padrao): no [Google Cloud](https://console.cloud.google.com),
-crie um projeto, ative a **Google Drive API**, configure a tela de
-consentimento e **publique** (em "Teste" o login expira em 7 dias) e crie em
-Credenciais um **ID do cliente OAuth** do tipo **TVs e dispositivos de
-entrada limitada**. O escopo e `drive.file`. O login e o codigo em
+**Google Drive** (padrao): o escopo e `drive.file`, so os arquivos que o
+cais cria (a pasta `cais-backups-<hostname>`). O login e o codigo em
 google.com/device.
 
-**OneDrive** (so conta pessoal: outlook.com, hotmail.com, live.com): nao
-precisa criar nada, o cais ja vem com o app dele registrado na Microsoft
-(`cais` da TRD System); e so conectar. Pra usar um app proprio: no
-[portal do Azure](https://portal.azure.com), em **Registros de aplicativo**,
-registre um com **Somente contas pessoais da Microsoft** e, em
-**Autenticacao**, ligue **Permitir fluxos de clientes publicos**; o
-`cais backup client <ID do aplicativo>` troca (nao tem secret) e
-`cais backup client padrao` volta pro do cais. O escopo e
-`Files.ReadWrite.AppFolder`: os backups ficam em `Aplicativos/<nome do
-app>/cais-backups-<hostname>`. O login e o codigo em microsoft.com/link. A
+**OneDrive** (so conta pessoal: outlook.com, hotmail.com, live.com): o
+escopo e
+`Files.ReadWrite.AppFolder`: os backups ficam em
+`Aplicativos/cais/cais-backups-<hostname>`. O login e o codigo em microsoft.com/link. A
 Microsoft troca o refresh token a cada renovacao; o cais grava o novo, entao
 o login nao expira enquanto os backups rodarem (parado mais de 90 dias, pede
 login de novo). Backup apagado pela retencao vai pra lixeira do OneDrive,
@@ -63,17 +56,17 @@ TUI: aba Setup, sub-aba Backups, que tambem faz um backup agora e mostra o
 proximo e o ultimo. Ou o CLI:
 
 1. `cais backup provider onedrive` (so pro OneDrive; o padrao e o Google).
-2. `cais backup client <client-id>` (Google: o secret e pedido sem eco; o
-   OneDrive pula este passo, a nao ser com app proprio).
-3. `cais backup login`: abra o endereco em qualquer aparelho e digite o
+2. `cais backup login`: abra o endereco em qualquer aparelho e digite o
    codigo (funciona pelo SSH, nada volta colado).
-4. `cais backup key`: guarde a chave privada que aparece.
-5. `cais backup schedule 03:00 -days 30` (fuso da VPS). Se a VPS estava
+3. `cais backup key`: guarde a chave privada que aparece.
+4. `cais backup schedule 03:00 -days 30` (fuso da VPS). Se a VPS estava
    desligada na hora, o backup sai assim que o daemon subir. Um backup que
    nao chega na nuvem (fora do ar, rede, disco) e tentado de novo a cada
    hora ate subir, sem esperar o dia seguinte; o "Proximo" mostra a nova
    tentativa. Backup que subiu sem algum database nao repete (o database
    quebrado falharia de novo): o erro fica no ultimo backup.
+
+O que o cais acessa e onde ficam os dados: [privacidade](privacidade.md).
 
 ## Restaurar
 

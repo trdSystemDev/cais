@@ -485,10 +485,6 @@ func (c *Client) SetBackupProvider(ctx context.Context, provider string) error {
 	return c.call(ctx, MethodBackupProvider, textResult{Text: provider}, nil)
 }
 
-func (c *Client) SetBackupClient(ctx context.Context, id, secret string) error {
-	return c.call(ctx, MethodBackupClient, backupClientParams{ID: id, Secret: secret}, nil)
-}
-
 func (c *Client) StartDriveLogin(ctx context.Context) (core.DriveLogin, error) {
 	return result[core.DriveLogin](c, ctx, MethodBackupLogin, nil)
 }

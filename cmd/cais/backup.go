@@ -31,7 +31,7 @@ func (e *cli) runBackup(args []string) error {
 		return err
 	}
 	switch sub {
-	case "status", "now", "files", "restore", "provider", "client", "login", "logout", "key", "schedule":
+	case "status", "now", "files", "restore", "provider", "login", "logout", "key", "schedule":
 	case "open":
 		return e.backupOpen(pos, *keyFile, *to)
 	default:
@@ -60,8 +60,6 @@ func (e *cli) runBackup(args []string) error {
 		}
 		st, _ := c.RefreshBackup(ctx)
 		e.printBackupStatus(st)
-	case "client":
-		return e.backupClient(ctx, c, pos)
 	case "login":
 		return e.backupLogin(ctx, c)
 	case "logout":
@@ -92,32 +90,6 @@ func (e *cli) runBackup(args []string) error {
 	case "restore":
 		return e.backupRestore(ctx, c, pos, *keyFile, *yes)
 	}
-	return nil
-}
-
-// backupClient grava o client do destino (o secret e pedido sem eco).
-func (e *cli) backupClient(ctx context.Context, c daemonAPI, pos []string) error {
-	if len(pos) != 1 {
-		return errors.New("uso: cais backup client <client-id> (Google: o secret e pedido sem eco ou lido do stdin)")
-	}
-	st, err := c.RefreshBackup(ctx)
-	if err != nil {
-		return err
-	}
-	secret := ""
-	if st.Provider != backup.ProviderOneDrive { // o app do Azure e publico: sem secret
-		if secret, err = e.readSecret("Client secret: "); err != nil {
-			return err
-		}
-	}
-	id := pos[0]
-	if st.Provider == backup.ProviderOneDrive && id == "padrao" {
-		id = "" // volta pro app do cais
-	}
-	if err := c.SetBackupClient(ctx, id, secret); err != nil {
-		return err
-	}
-	fmt.Fprintln(e.out, "Client do "+backup.ProviderName(st.Provider)+" gravado. Agora: cais backup login")
 	return nil
 }
 
@@ -216,7 +188,6 @@ func (e *cli) printBackupStatus(st core.BackupStatus) {
 	}
 	name := backup.ProviderName(st.Provider)
 	fmt.Fprintf(e.out, "Destino:       %s (cais backup provider google|onedrive)\n", name)
-	fmt.Fprintf(e.out, "Client:        %s\n", yes(st.ClientID != "", st.ClientID))
 	fmt.Fprintf(e.out, "Conta:         %s\n", yes(st.Email != "", st.Email))
 	fmt.Fprintf(e.out, "Chave:         %s\n", yes(st.Recipient != "", st.Recipient))
 	when := "desligado (so manual)"

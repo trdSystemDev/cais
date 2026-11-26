@@ -246,9 +246,7 @@ func (f *Recorder) RefreshBackup(context.Context) (core.BackupStatus, error) {
 func (f *Recorder) SetBackupProvider(_ context.Context, provider string) error {
 	return only(f, "SetBackupProvider", provider)
 }
-func (f *Recorder) SetBackupClient(_ context.Context, id, secret string) error {
-	return only(f, "SetBackupClient", id, secret)
-}
+
 func (f *Recorder) StartDriveLogin(context.Context) (core.DriveLogin, error) {
 	return ret[core.DriveLogin](f, "StartDriveLogin")
 }

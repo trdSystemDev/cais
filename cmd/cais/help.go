@@ -340,26 +340,15 @@ Mostra a configuracao, o proximo e o ultimo backup, e o que fica de fora:
 os arquivos do Garage (buckets S3) e os volumes dos apps nao entram no
 backup do cais.`},
 		{name: "backup provider", usage: "backup provider google|onedrive", short: "escolhe o destino: Google Drive ou OneDrive pessoal", long: `
-Client e login de cada destino ficam guardados: voltar pro outro nao pede
-login de novo. Os backups ja feitos ficam onde estao; files, restore e a
+O login de cada destino fica guardado: voltar pro outro nao pede login de
+novo. Nao ha nada pra criar no Google Cloud nem no Azure: o cais ja vem com
+o app dele nos dois. Os backups ja feitos ficam onde estao; files, restore e a
 retencao olham so o destino atual.`},
-		{name: "backup client", usage: "backup client <client-id>", short: "grava o client do destino (Google Cloud ou Azure)", long: `
-Google Drive: o client e do seu projeto no Google Cloud. Ative a Google
-Drive API, crie em Credenciais -> ID do cliente OAuth do tipo "TVs e
-dispositivos de entrada limitada" e publique a tela de consentimento (em
-"Teste" o login expira em 7 dias). O escopo e drive.file: o cais so ve a
-pasta que ele mesmo cria. O secret e lido sem eco, ou do stdin (cais backup
-client <id> < arquivo).
-
-OneDrive (conta pessoal): nao precisa. O cais ja vem com o app dele na
-Microsoft; e so cais backup login. Pra usar um app proprio: no portal do
-Azure, em Registros de aplicativo, registre um com "Somente contas pessoais
-da Microsoft" e, em Autenticacao, ligue "Permitir fluxos de clientes
-publicos". O <client-id> e o "ID do aplicativo (cliente)"; nao tem secret.
-cais backup client padrao volta pro app do cais. O cais pede so a pasta do
-app (Files.ReadWrite.AppFolder): fica em Aplicativos/<nome do app> e o resto
-do OneDrive nao e visto.`},
-		{name: "backup login", usage: "backup login", short: "conecta o destino (um codigo pra digitar em outro aparelho)"},
+		{name: "backup login", usage: "backup login", short: "conecta o destino (um codigo pra digitar em outro aparelho)", long: `
+Mostra um endereco (google.com/device ou microsoft.com/link) e um codigo:
+abra em qualquer aparelho, entre na conta e digite o codigo. O cais usa o
+app dele: no Google so o escopo drive.file (os arquivos que ele cria); no
+OneDrive so a pasta do app (Aplicativos/cais).`},
 		{name: "backup logout", usage: "backup logout", short: "desconecta o destino (os backups ficam la)"},
 		{name: "backup key", usage: "backup key [-yes]", short: "gera a chave e mostra a privada uma vez", long: `
 A publica fica na config e criptografa os backups; a privada aparece so

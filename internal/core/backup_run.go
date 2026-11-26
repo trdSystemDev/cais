@@ -180,9 +180,6 @@ func (c *Core) runBackup(ctx context.Context, auto bool) (run BackupRun, err err
 
 func missingBackup(st BackupStatus) string {
 	var miss []string
-	if st.ClientID == "" {
-		miss = append(miss, clientLabel(st.Provider))
-	}
 	if st.Email == "" {
 		miss = append(miss, "conectar o "+backup.ProviderName(st.Provider))
 	}

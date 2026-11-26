@@ -178,13 +178,8 @@ type API interface {
 	// RefreshBackup le a config do backup e publica em State.Backup.
 	RefreshBackup(ctx context.Context) (BackupStatus, error)
 	// SetBackupProvider troca o destino dos backups: google (Google Drive)
-	// ou onedrive (OneDrive pessoal). Client e login de cada um ficam
-	// guardados.
+	// ou onedrive (OneDrive pessoal). O login de cada um fica guardado.
 	SetBackupProvider(ctx context.Context, provider string) error
-	// SetBackupClient grava o client do destino atual: o OAuth client do
-	// Google (tipo "TVs e dispositivos de entrada limitada", com secret) ou
-	// o ID do app no Azure (sem secret).
-	SetBackupClient(ctx context.Context, id, secret string) error
 	// StartDriveLogin comeca o login no destino atual: o codigo pra digitar
 	// (google.com/device ou microsoft.com/link) aparece em
 	// State.Backup.Login, e o resultado tambem chega pelo estado.

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -21,23 +20,19 @@ import (
 	"github.com/trdSystemDev/cais/internal/secrets"
 )
 
-// Secrets do backup, por destino: o OAuth client que a pessoa cria no
-// Google Cloud (ou um app proprio no Azure, so com o ID; sem ele vale o app
-// do cais) e o token do login (o
-// refresh token renova o acesso sozinho).
+// Secrets do backup: o token do login de cada destino (o refresh token
+// renova o acesso sozinho). O client e sempre o app do cais, embutido.
 const (
-	secretGoogleClient   = "google_oauth_client"
-	secretDriveToken     = "google_drive_token"
-	secretOneDriveClient = "onedrive_oauth_client"
-	secretOneDriveToken  = "onedrive_token"
+	secretDriveToken    = "google_drive_token"
+	secretOneDriveToken = "onedrive_token"
 )
 
-// providerSecrets sao os secrets do client e do login do destino p.
-func providerSecrets(p string) (client, token string) {
+// loginSecret e o secret do login do destino p.
+func loginSecret(p string) string {
 	if p == backup.ProviderOneDrive {
-		return secretOneDriveClient, secretOneDriveToken
+		return secretOneDriveToken
 	}
-	return secretGoogleClient, secretDriveToken
+	return secretDriveToken
 }
 
 // providerOf e o destino da config (vazio: Google Drive).
@@ -54,23 +49,12 @@ func (c *Core) backupProvider() string {
 	return providerOf(cfg)
 }
 
-// clientLabel e o nome do client de cada destino nas mensagens.
-func clientLabel(p string) string {
-	if p == backup.ProviderOneDrive {
-		return "o app do Azure (ID do aplicativo)"
-	}
-	return "o OAuth client do Google"
-}
-
 // BackupStatus e o backup no estado: o destino (Google Drive ou OneDrive),
-// o que esta configurado, o login e o ultimo backup. Nunca leva segredo (nem o client secret nem o
-// token; a chave publica nao e segredo).
+// o login e o ultimo backup. Nunca leva segredo (nem o token; a chave
+// publica nao e segredo). O client e sempre o app do cais.
 type BackupStatus struct {
 	// Provider e o destino: google (Google Drive) ou onedrive.
 	Provider string `json:"provider"`
-	// ClientID e o client em uso (vazio: falta criar no Google Cloud; no
-	// OneDrive, sem app proprio, e o app do cais).
-	ClientID string `json:"client_id,omitempty"`
 	// Email e a conta conectada no destino (vazio: sem login).
 	Email string `json:"email,omitempty"`
 	// Login e o login esperando a pessoa digitar o codigo.
@@ -92,7 +76,7 @@ type BackupStatus struct {
 }
 
 // Ready diz se o backup tem tudo pra rodar: client, login e chave.
-func (b BackupStatus) Ready() bool { return b.ClientID != "" && b.Email != "" && b.Recipient != "" }
+func (b BackupStatus) Ready() bool { return b.Email != "" && b.Recipient != "" }
 
 // DriveLogin e o codigo que a pessoa digita em URL pra liberar o destino
 // (Google Drive ou OneDrive).
@@ -191,43 +175,24 @@ func (c *Core) changeBackupDisk(fn func(*backupDisk)) error {
 	return fsx.WriteAtomic(c.backupStatePath(), data, 0o600)
 }
 
-func (c *Core) backupClient(p string) (backup.Client, error) {
-	secret, _ := providerSecrets(p)
-	where := map[bool]string{true: "do app do Azure", false: "OAuth client do Google"}[p == backup.ProviderOneDrive]
-	data, err := c.secretStore().Get(secret)
-	if errors.Is(err, secrets.ErrNotFound) && p == backup.ProviderOneDrive {
-		return backup.Client{ID: backup.DefaultOneDriveClient}, nil // o app do cais
-	}
-	if errors.Is(err, secrets.ErrNotFound) {
-		return backup.Client{}, fmt.Errorf("falta %s (Setup -> Backups)", clientLabel(p))
-	}
-	if err != nil {
-		return backup.Client{}, err
-	}
-	var cl backup.Client
-	if err := json.Unmarshal(data, &cl); err != nil || cl.ID == "" {
-		return backup.Client{}, fmt.Errorf("ID %s invalido: informe de novo (Setup -> Backups)", where)
-	}
-	return cl, nil
-}
-
-// oauthConfig e o login do destino p com o client dele.
-func (c *Core) oauthConfig(p string, cl backup.Client) *oauth2.Config {
+// oauthConfig e o login do destino p com o app do cais (o do Google vem
+// no build do release).
+func (c *Core) oauthConfig(p string) (*oauth2.Config, error) {
 	if p == backup.ProviderOneDrive {
-		return backup.OneDriveOAuth(cl.ID, c.deps.MicrosoftEndpoint)
+		return backup.OneDriveOAuth(backup.DefaultOneDriveClient, c.deps.MicrosoftEndpoint), nil
 	}
-	return cl.OAuth(c.deps.GoogleEndpoint)
+	cl, err := backup.GoogleClient()
+	if err != nil {
+		return nil, err
+	}
+	return cl.OAuth(c.deps.GoogleEndpoint), nil
 }
 
 // store abre o destino p com o token do login. O token renovado volta pro
 // secret (a Microsoft troca o refresh token a cada renovacao), a nao ser
 // que o login tenha mudado no meio (desconectou ou entrou de novo).
 func (c *Core) store(p string) (backup.Store, error) {
-	cl, err := c.backupClient(p)
-	if err != nil {
-		return nil, err
-	}
-	_, tokenSecret := providerSecrets(p)
+	tokenSecret := loginSecret(p)
 	name := backup.ProviderName(p)
 	data, err := c.secretStore().Get(tokenSecret)
 	if errors.Is(err, secrets.ErrNotFound) {
@@ -266,7 +231,11 @@ func (c *Core) store(p string) (backup.Store, error) {
 	// o oauth2 renova o acesso sozinho; o contexto e o do cliente HTTP,
 	// que vive mais que uma chamada
 	ctx := context.Background()
-	src := backup.SavingSource(c.oauthConfig(p, cl).TokenSource(ctx, &tok), tok.RefreshToken, save)
+	cfg, err := c.oauthConfig(p)
+	if err != nil {
+		return nil, err
+	}
+	src := backup.SavingSource(cfg.TokenSource(ctx, &tok), tok.RefreshToken, save)
 	if p == backup.ProviderOneDrive {
 		o := backup.NewOneDrive(ctx, src)
 		o.API = c.deps.GraphAPI
@@ -303,11 +272,8 @@ func (c *Core) readBackup() BackupStatus {
 	b := cfg.Backup
 	st.Provider = providerOf(cfg)
 	st.Recipient, st.Time, st.RetentionDays = b.Recipient, b.Time, b.Retention()
-	if cl, err := c.backupClient(st.Provider); err == nil {
-		st.ClientID = cl.ID
-	}
 	disk := c.loadBackupDisk()
-	_, tokenSecret := providerSecrets(st.Provider)
+	tokenSecret := loginSecret(st.Provider)
 	if _, err := c.secretStore().Get(tokenSecret); err == nil {
 		_, email := disk.at(st.Provider)
 		st.Email = cmpOr(*email, "(conta conectada)")
@@ -364,9 +330,6 @@ func later(a, b time.Time) time.Time {
 	return b
 }
 
-// azureID e o ID do aplicativo (cliente) de um registro no Azure.
-var azureID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
 // SetBackupProvider troca o destino dos backups (google ou onedrive). O
 // client e o login de cada um ficam guardados: voltar pro outro nao pede
 // login de novo. Um login pendente e cancelado (era do outro destino).
@@ -391,58 +354,6 @@ func (c *Core) SetBackupProvider(ctx context.Context, p string) error {
 	return err
 }
 
-// SetBackupClient grava o client do destino atual: o OAuth client do Google
-// (tipo "TVs e dispositivos de entrada limitada", com secret) ou o ID de um
-// app proprio no Azure (cliente publico: o secret e ignorado; vazio volta pro
-// app do cais). Trocar o client desfaz o login: o token e do client antigo.
-func (c *Core) SetBackupClient(ctx context.Context, id, secret string) error {
-	p := c.backupProvider()
-	id, secret = strings.TrimSpace(id), strings.TrimSpace(secret)
-	switch p {
-	case backup.ProviderOneDrive:
-		if id == "" || id == backup.DefaultOneDriveClient {
-			return c.resetOneDriveClient(ctx)
-		}
-		if !azureID.MatchString(id) {
-			return errors.New("ID do aplicativo invalido: copie o \"ID do aplicativo (cliente)\" do registro no Azure (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)")
-		}
-		secret = ""
-	default:
-		if !strings.HasSuffix(id, ".apps.googleusercontent.com") {
-			return errors.New("client ID invalido: copie o ID do OAuth client (termina em .apps.googleusercontent.com)")
-		}
-		if secret == "" {
-			return errors.New("informe o client secret")
-		}
-	}
-	clientSecret, tokenSecret := providerSecrets(p)
-	if old, err := c.backupClient(p); err != nil || old.ID != id {
-		if err := c.secretStore().Delete(tokenSecret); err != nil && !errors.Is(err, secrets.ErrNotFound) {
-			return err
-		}
-	}
-	data, _ := json.Marshal(backup.Client{ID: id, Secret: secret})
-	if err := c.secretStore().Put(clientSecret, data); err != nil {
-		return err
-	}
-	_, err := c.RefreshBackup(ctx)
-	return err
-}
-
-// resetOneDriveClient volta o OneDrive pro app do cais (sem app proprio).
-func (c *Core) resetOneDriveClient(ctx context.Context) error {
-	clientSecret, tokenSecret := providerSecrets(backup.ProviderOneDrive)
-	if old, err := c.backupClient(backup.ProviderOneDrive); err != nil || old.ID != backup.DefaultOneDriveClient {
-		for _, s := range []string{tokenSecret, clientSecret} {
-			if err := c.secretStore().Delete(s); err != nil && !errors.Is(err, secrets.ErrNotFound) {
-				return err
-			}
-		}
-	}
-	_, err := c.RefreshBackup(ctx)
-	return err
-}
-
 // StartDriveLogin comeca o login no destino atual pelo fluxo de
 // dispositivo: o codigo aparece em State.Backup.Login e o daemon espera a
 // pessoa liberar (google.com/device ou microsoft.com/link). O resultado
@@ -450,11 +361,10 @@ func (c *Core) resetOneDriveClient(ctx context.Context) error {
 func (c *Core) StartDriveLogin(ctx context.Context) (DriveLogin, error) {
 	p := c.backupProvider()
 	name := backup.ProviderName(p)
-	cl, err := c.backupClient(p)
+	cfg, err := c.oauthConfig(p)
 	if err != nil {
 		return DriveLogin{}, err
 	}
-	cfg := c.oauthConfig(p, cl)
 	da, err := cfg.DeviceAuth(ctx)
 	if err != nil {
 		return DriveLogin{}, fmt.Errorf("pedindo o codigo pro login no %s: %w", name, err)
@@ -499,7 +409,7 @@ func (c *Core) saveDriveLogin(ctx context.Context, p string, tok *oauth2.Token) 
 	if tok.RefreshToken == "" {
 		return fmt.Errorf("o %s nao devolveu o refresh token", backup.ProviderName(p))
 	}
-	_, tokenSecret := providerSecrets(p)
+	tokenSecret := loginSecret(p)
 	data, _ := json.Marshal(tok)
 	if err := c.secretStore().Put(tokenSecret, data); err != nil {
 		return err
@@ -532,7 +442,7 @@ func (c *Core) CancelDriveLogin(context.Context) error {
 // DisconnectDrive esquece o login no destino atual (os backups ficam la).
 func (c *Core) DisconnectDrive(ctx context.Context) error {
 	p := c.backupProvider()
-	_, tokenSecret := providerSecrets(p)
+	tokenSecret := loginSecret(p)
 	if err := c.secretStore().Delete(tokenSecret); err != nil && !errors.Is(err, secrets.ErrNotFound) {
 		return err
 	}
