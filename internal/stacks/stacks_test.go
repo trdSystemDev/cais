@@ -149,13 +149,22 @@ func TestProxyNasceVazioComPortasEEmail(t *testing.T) {
 	if tr.ContainerName != docker.TraefikContainer {
 		t.Errorf("container_name %q, o rollout procura %q", tr.ContainerName, docker.TraefikContainer)
 	}
-	// nenhum site declarado no proxy: so os headers padrao
+	// o proxy nao se publica: com traefik.enable o Traefik criaria a regra
+	// padrao Host(`traefik-proxy`) e pediria certificado pra ela sem fim
 	var labels map[string]string
 	tr.Labels.Decode(&labels)
-	for k := range labels {
-		if strings.Contains(k, ".routers.") {
-			t.Errorf("site declarado no proxy: %s", k)
-		}
+	if len(labels) > 0 {
+		t.Errorf("labels no proxy: %v", labels)
+	}
+	// os headers de todo site vem do arquivo, nos dois modos de TLS
+	if !slices.Contains(tr.Command, "--entrypoints.websecure.http.middlewares=cais-headers@file") ||
+		!slices.Contains(tr.Command, "--providers.file.directory=/etc/traefik/dynamic") {
+		t.Errorf("headers fora do provider de arquivo: %v", tr.Command)
+	}
+	r, _ := render(t, "proxy", c)
+	if text := string(r.Compose); !strings.Contains(text, "cais-headers:") || !strings.Contains(text, "stsSeconds: 31536000") ||
+		!strings.Contains(text, "target: /etc/traefik/dynamic/headers.yml") {
+		t.Errorf("arquivo dos headers:\n%s", text)
 	}
 }
 
@@ -268,7 +277,7 @@ func TestTLSAutoassinadoParaTesteLocal(t *testing.T) {
 
 	c.TLS = ""
 	r, _ = render(t, "proxy", c)
-	if slices.Contains(r.Secrets, "tls_cert") || strings.Contains(string(r.Compose), "providers.file") {
+	if slices.Contains(r.Secrets, "tls_cert") || strings.Contains(string(r.Compose), "tls.yml") {
 		t.Error("Let's Encrypt nao usa certificado da CA local")
 	}
 }

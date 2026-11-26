@@ -14,6 +14,7 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/ptyio"
 )
@@ -186,7 +187,7 @@ func (e *cli) runApp(args []string) error {
 	case "shell":
 		return e.appShell(ctx, c, name, arg(1))
 	case "logs":
-		out, err := c.AppLogs(ctx, name, arg(1))
+		out, err := c.AppLogs(ctx, name, arg(1), docker.LogsOptions{})
 		if err != nil {
 			return err
 		}

@@ -91,19 +91,21 @@ func appsCore(t *testing.T) (*core.Core, *fakeApps, *githubtest.Server) {
 	})
 	fa := &fakeApps{up: map[string]bool{}}
 	c := core.New(core.Deps{TraefikMetrics: noTraffic,
-		CheckDocker:   okChecker,
-		ConfigPath:    filepath.Join(root, "config.yaml"),
-		SecretsDir:    filepath.Join(root, "secrets"),
-		StackDir:      func(n string) string { return filepath.Join(root, "stacks", n) },
-		AppsDir:       filepath.Join(root, "apps"),
-		AppDocker:     fa,
-		AppSettle:     -1,
-		GitHubURL:     gh.URL,
-		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil },
-		ContainerLogs: func(_ context.Context, name string) (string, error) { return "log do " + name, nil },
-		DockerStats:   func(context.Context) ([]docker.ContainerStats, error) { return nil, nil },
-		ExecInput:     func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
-		Exec:          fakeGarage,
+		CheckDocker: okChecker,
+		ConfigPath:  filepath.Join(root, "config.yaml"),
+		SecretsDir:  filepath.Join(root, "secrets"),
+		StackDir:    func(n string) string { return filepath.Join(root, "stacks", n) },
+		AppsDir:     filepath.Join(root, "apps"),
+		AppDocker:   fa,
+		AppSettle:   -1,
+		GitHubURL:   gh.URL,
+		ComposePS:   func(context.Context, string) ([]docker.Container, error) { return nil, nil },
+		ContainerLogs: func(_ context.Context, name string, _ docker.LogsOptions) (string, error) {
+			return "log do " + name, nil
+		},
+		DockerStats: func(context.Context) ([]docker.ContainerStats, error) { return nil, nil },
+		ExecInput:   func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
+		Exec:        fakeGarage,
 		StartTerminal: func(container, term string, rows, cols uint16, args ...string) (*os.File, error) {
 			shellsOpened.Add(1)
 			return ptyio.Start(exec.Command("sh", "-c", "echo dentro do "+container), rows, cols)

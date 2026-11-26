@@ -41,7 +41,7 @@ services:
 {{- else}}
       - --entrypoints.websecure.http3=true
 {{- end}}
-      - --entrypoints.websecure.http.middlewares=cais-headers@docker
+      - --entrypoints.websecure.http.middlewares=cais-headers@file
       # o padrao de 60s corta upload grande (arquivos, S3)
       - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=30m
 {{- if .LetsEncrypt}}
@@ -63,11 +63,13 @@ services:
 {{- else}}
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
 {{- end}}
-{{- else}}
-      # tls: selfsigned -- certificado da CA local do cais como padrao
+{{- end}}
+      # config fixa do proxy (os headers; no selfsigned, o certificado
+      # padrao): arquivos do compose, nao labels. Label no proprio Traefik
+      # pediria traefik.enable, e ele se publicaria com a regra padrao
+      # Host(`traefik-proxy`), pedindo certificado pra esse nome sem fim
       - --providers.file.directory=/etc/traefik/dynamic
       - --providers.file.watch=false
-{{- end}}
       - --ping=true
       # API so no loopback do container (sem porta publicada; os apps na
       # proxy_network nao alcancam): o deploy sem queda do cais pergunta por
@@ -93,14 +95,13 @@ services:
       - "{{.HTTPSPort}}:443"
       - "{{.HTTPSPort}}:443/udp"
 {{- end}}
-    labels:
-      # headers aplicados em todo site (middleware do entrypoint websecure).
-      # HSTS sem includeSubDomains: nao forca HTTPS em nome que o cais nao
-      # controla
-      traefik.enable: "true"
-      traefik.http.middlewares.cais-headers.headers.stsSeconds: "31536000"
-      traefik.http.middlewares.cais-headers.headers.contentTypeNosniff: "true"
-      traefik.http.middlewares.cais-headers.headers.referrerPolicy: "strict-origin-when-cross-origin"
+    configs:
+      - source: traefik_headers
+        target: /etc/traefik/dynamic/headers.yml
+{{- if not .LetsEncrypt}}
+      - source: traefik_tls
+        target: /etc/traefik/dynamic/tls.yml
+{{- end}}
 {{- if .LetsEncrypt}}
     volumes:
       - traefik_acme:/letsencrypt
@@ -112,9 +113,6 @@ services:
       - cloudflare_dns_token
 {{- end}}
 {{- else}}
-    configs:
-      - source: traefik_tls
-        target: /etc/traefik/dynamic/tls.yml
     secrets:
       - tls_cert
       - tls_key
@@ -167,6 +165,30 @@ networks:
     name: traefik-docker-proxy-network
     driver: bridge
     internal: true
+
+configs:
+  # headers aplicados em todo site (middleware do entrypoint websecure).
+  # HSTS sem includeSubDomains: nao forca HTTPS em nome que o cais nao
+  # controla
+  traefik_headers:
+    content: |
+      http:
+        middlewares:
+          cais-headers:
+            headers:
+              stsSeconds: 31536000
+              contentTypeNosniff: true
+              referrerPolicy: strict-origin-when-cross-origin
+{{- if not .LetsEncrypt}}
+  traefik_tls:
+    content: |
+      tls:
+        stores:
+          default:
+            defaultCertificate:
+              certFile: /run/secrets/tls_cert
+              keyFile: /run/secrets/tls_key
+{{- end}}
 {{- if .LetsEncrypt}}
 
 volumes:
@@ -179,16 +201,6 @@ secrets:
     file: "{{secret "cloudflare_dns_token"}}"
 {{- end}}
 {{- else}}
-
-configs:
-  traefik_tls:
-    content: |
-      tls:
-        stores:
-          default:
-            defaultCertificate:
-              certFile: /run/secrets/tls_cert
-              keyFile: /run/secrets/tls_key
 
 secrets:
   tls_cert:

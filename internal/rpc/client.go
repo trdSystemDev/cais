@@ -17,6 +17,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/host"
 )
@@ -334,8 +335,8 @@ func (c *Client) publish(st core.State) {
 	}
 }
 
-func (c *Client) ContainerLogs(ctx context.Context, stack, container string) (string, error) {
-	return result[string](c, ctx, MethodContainerLogs, logsParams{Stack: stack, Container: container})
+func (c *Client) ContainerLogs(ctx context.Context, stack, container string, opt docker.LogsOptions) (string, error) {
+	return result[string](c, ctx, MethodContainerLogs, logsParams{Stack: stack, Container: container, Logs: opt})
 }
 
 func (c *Client) CheckApps(ctx context.Context) (core.Apps, error) {
@@ -377,8 +378,8 @@ func (c *Client) DeleteApp(ctx context.Context, name string, volumes bool) error
 	return c.call(ctx, MethodAppDelete, deleteParams{Name: name, Volumes: volumes}, nil)
 }
 
-func (c *Client) AppLogs(ctx context.Context, name, container string) (string, error) {
-	return result[string](c, ctx, MethodAppLogs, appParams{Name: name, Container: container})
+func (c *Client) AppLogs(ctx context.Context, name, container string, opt docker.LogsOptions) (string, error) {
+	return result[string](c, ctx, MethodAppLogs, appParams{Name: name, Container: container, Logs: opt})
 }
 
 func (c *Client) AppEnv(ctx context.Context, name string) (map[string]string, error) {

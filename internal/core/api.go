@@ -8,6 +8,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/backup"
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/host"
 )
@@ -48,7 +49,7 @@ type API interface {
 	// CheckStacks pergunta ao docker o estado das stacks base.
 	CheckStacks(ctx context.Context) (Infra, error)
 
-	ContainerLogs(ctx context.Context, stack, container string) (string, error)
+	ContainerLogs(ctx context.Context, stack, container string, opt docker.LogsOptions) (string, error)
 
 	// LoadConfig le o config.yaml. Sem arquivo, devolve Exists falso e a
 	// config padrao (ponto de partida do Setup).
@@ -137,7 +138,7 @@ type API interface {
 	// da infra fica (aba Infra).
 	DeleteApp(ctx context.Context, name string, volumes bool) error
 	// AppLogs le as ultimas linhas de um container do app.
-	AppLogs(ctx context.Context, name, container string) (string, error)
+	AppLogs(ctx context.Context, name, container string, opt docker.LogsOptions) (string, error)
 	// AppEnv le as variaveis do app (o cais run injeta no processo dele).
 	AppEnv(ctx context.Context, name string) (map[string]string, error)
 	// SetAppEnv troca as variaveis do app; valem no proximo deploy.

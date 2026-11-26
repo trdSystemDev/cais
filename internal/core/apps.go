@@ -227,7 +227,7 @@ func (c *Core) DeleteApp(ctx context.Context, name string, volumes bool) error {
 
 // AppLogs so aceita containers do proprio app (nunca de uma stack ou de
 // outro app).
-func (c *Core) AppLogs(ctx context.Context, name, container string) (string, error) {
+func (c *Core) AppLogs(ctx context.Context, name, container string, opt docker.LogsOptions) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	containers, err := c.appManager().Status(ctx, name)
@@ -235,9 +235,16 @@ func (c *Core) AppLogs(ctx context.Context, name, container string) (string, err
 		return "", err
 	}
 	if !slices.ContainsFunc(containers, func(ct docker.Container) bool { return ct.Name == container }) {
-		return "", fmt.Errorf("container %q nao pertence ao app %s", container, name)
+		names := make([]string, 0, len(containers))
+		for _, ct := range containers {
+			names = append(names, ct.Name)
+		}
+		if len(names) == 0 {
+			return "", fmt.Errorf("container %q nao pertence ao app %s (o app nao tem containers: faca o deploy)", container, name)
+		}
+		return "", fmt.Errorf("container %q nao pertence ao app %s (os dele: %s)", container, name, strings.Join(names, ", "))
 	}
-	return c.deps.ContainerLogs(ctx, container)
+	return c.deps.ContainerLogs(ctx, container, opt)
 }
 
 func (c *Core) AppEnv(_ context.Context, name string) (map[string]string, error) {

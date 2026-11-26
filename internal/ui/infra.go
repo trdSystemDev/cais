@@ -14,6 +14,7 @@ import (
 
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
@@ -260,7 +261,7 @@ func (m *model) fetchInfraLogs() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
-		out, err := m.api.ContainerLogs(ctx, stack, target)
+		out, err := m.api.ContainerLogs(ctx, stack, target, docker.LogsOptions{})
 		return infraLogsMsg{generation, out, err}
 	}
 }

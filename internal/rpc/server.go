@@ -241,7 +241,7 @@ var handlers = map[string]handler{
 		if err := params(m, &p); err != nil {
 			return nil, err
 		}
-		return wrap(s.api.ContainerLogs(c.ctx, p.Stack, p.Container))
+		return wrap(s.api.ContainerLogs(c.ctx, p.Stack, p.Container, p.Logs))
 	},
 
 	// setup
@@ -308,7 +308,7 @@ var handlers = map[string]handler{
 		return a.DeleteApp(ctx, p.Name, p.Volumes)
 	}),
 	MethodAppLogs: call(func(a core.API, ctx context.Context, p appParams) (string, error) {
-		return a.AppLogs(ctx, p.Name, p.Container)
+		return a.AppLogs(ctx, p.Name, p.Container, p.Logs)
 	}),
 	MethodAppEnvGet: call(func(a core.API, ctx context.Context, p appParams) (map[string]string, error) {
 		return a.AppEnv(ctx, p.Name)

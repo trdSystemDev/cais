@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
@@ -54,6 +56,9 @@ func (*fakeDocker) PruneImages(context.Context, string) error               { re
 func (f *fakeDocker) Rollout(context.Context, docker.Project, string, string, bool) error { return nil }
 func (f *fakeDocker) Down(context.Context, string, bool) error                            { return nil }
 
+// logsAsked e o ultimo pedido de log que chegou ao docker falso.
+var logsAsked docker.LogsOptions
+
 // connect sobe o servidor MCP sobre um core de teste (Postgres e Garage
 // ligados, GitHub App falso com o repositorio trdSystemDev/loja) e devolve
 // um cliente MCP conectado nele.
@@ -69,7 +74,7 @@ func connect(t *testing.T) *mcp.ClientSession {
 		// a VPS da checagem de seguranca: o Tailscale esperando o login
 		CheckHost: func(context.Context) []host.Item {
 			return []host.Item{
-				{ID: "ssh-root", Title: "Login do root pelo SSH", OK: true, Detail: "bloqueado"},
+				{ID: "ssh-root", Title: "Login do root pelo SSH", OK: true, Detail: "bloqueado", Fix: "sudo cais host harden"},
 				{ID: "tailscale", Title: "Tailscale (VPN pra administrar a VPS)", Detail: "instalado, fora da tailnet (NeedsLogin)", Fix: host.TailscaleFix},
 			}
 		},
@@ -86,8 +91,15 @@ func connect(t *testing.T) *mcp.ClientSession {
 		AppSettle:     -1,
 		GitHubURL:     gh.URL,
 		ComposePS:     func(context.Context, string) ([]docker.Container, error) { return nil, nil },
-		ContainerLogs: func(_ context.Context, name string) (string, error) { return "log do " + name, nil },
-		ExecInput:     func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
+		ContainerLogs: func(_ context.Context, name string, opt docker.LogsOptions) (string, error) {
+			logsAsked = opt
+			// 3 linhas como o docker logs --timestamps devolve, com as cores
+			// do terminal
+			return "2026-11-26T13:09:53.474428458Z log do " + name + "\n" +
+				"2026-11-26T13:09:54.000000001Z \x1b[31mERR\x1b[0m conexao recusada\n" +
+				"2026-11-26T13:09:55.5Z pronto\n", nil
+		},
+		ExecInput: func(context.Context, string, []byte, ...string) (string, error) { return "", nil },
 		Exec: func(_ context.Context, _ string, args ...string) (string, error) {
 			if strings.Contains(strings.Join(args, " "), "key create") {
 				return "Key ID:              GK5d0e\nSecret key:          6c9b79\n", nil
@@ -236,6 +248,25 @@ func TestErroVoltaComMotivo(t *testing.T) {
 	}
 	// argumento obrigatorio faltando: recusado pelo schema
 	call(t, cs, "app_logs", map[string]any{"app": "loja"}, true)
+
+	// container errado: o erro lista os do app
+	call(t, cs, "app_create", map[string]any{"name": "loja", "repo": "trdSystemDev/loja"}, false)
+	if out := call(t, cs, "app_logs", map[string]any{"app": "loja", "container": "loja-web-2"}, true); !strings.Contains(out, "faca o deploy") {
+		t.Errorf("container sem deploy: %s", out)
+	}
+	call(t, cs, "app_deploy", map[string]any{"app": "loja"}, false)
+	if out := call(t, cs, "app_logs", map[string]any{"app": "loja", "container": "loja-web-2"}, true); !strings.Contains(out, "os dele: loja-web-1") {
+		t.Errorf("container errado: %s", out)
+	}
+	if out := call(t, cs, "app_promote_check", map[string]any{"app": "loja"}, true); !strings.Contains(out, "promote_to") {
+		t.Errorf("promote_check fora da homologacao: %s", out)
+	}
+	// sem nada criado: lista vazia, nao null
+	for _, tool := range []string{"databases_list", "buckets_list"} {
+		if out := call(t, cs, tool, nil, false); out != "[]" {
+			t.Errorf("%s vazio: %q", tool, out)
+		}
+	}
 }
 
 // "esta tudo certo com a VPS?": o security_check roda a checagem e devolve
@@ -252,6 +283,13 @@ func TestSecurityCheck(t *testing.T) {
 		r.Failed[0].Fix == "" || len(r.OK) != 1 || !strings.Contains(r.Where, "Setup > Seguranca") || r.CheckedAt.IsZero() {
 		t.Errorf("relatorio: %+v", r)
 	}
+	// conserto so no que esta errado, aqui e no status
+	if r.OK[0].Fix != "" {
+		t.Errorf("item certo com conserto: %+v", r.OK[0])
+	}
+	if out := call(t, cs, "status", nil, false); strings.Contains(out, "cais host harden") {
+		t.Errorf("status com conserto de item certo: %s", out)
+	}
 	if !r.Tailscale.Installed || r.Tailscale.State != "NeedsLogin" {
 		t.Errorf("tailscale: %+v", r.Tailscale)
 	}
@@ -259,5 +297,95 @@ func TestSecurityCheck(t *testing.T) {
 		if out := call(t, cs, tool, nil, false); strings.Contains(out, "segredo123") {
 			t.Errorf("%s devolveu o link de login do Tailscale: %s", tool, out)
 		}
+	}
+}
+
+// os logs chegam limpos pra IA: sem cores, horario ate o segundo, com lines,
+// since e grep
+func TestLogsParaIA(t *testing.T) {
+	cs := connect(t)
+	call(t, cs, "app_create", map[string]any{"name": "loja", "repo": "trdSystemDev/loja"}, false)
+	call(t, cs, "app_deploy", map[string]any{"app": "loja"}, false)
+	args := func(extra map[string]any) map[string]any {
+		m := map[string]any{"app": "loja", "container": "loja-web-1"}
+		maps.Copy(m, extra)
+		return m
+	}
+
+	out := call(t, cs, "app_logs", args(nil), false)
+	want := "2026-11-26T13:09:53Z log do loja-web-1\n2026-11-26T13:09:54Z ERR conexao recusada\n2026-11-26T13:09:55Z pronto\n"
+	if out != want {
+		t.Errorf("logs:\n%q\nquer\n%q", out, want)
+	}
+	if logsAsked != (docker.LogsOptions{Tail: 50}) {
+		t.Errorf("pedido ao docker: %+v", logsAsked)
+	}
+	if out := call(t, cs, "app_logs", args(map[string]any{"lines": 1}), false); out != "2026-11-26T13:09:55Z pronto\n" {
+		t.Errorf("lines 1: %q", out)
+	}
+	// o grep procura numa janela maior e devolve so as linhas com o texto
+	if out := call(t, cs, "app_logs", args(map[string]any{"grep": "err", "since": "2h"}), false); out != "2026-11-26T13:09:54Z ERR conexao recusada\n" {
+		t.Errorf("grep: %q", out)
+	}
+	if logsAsked != (docker.LogsOptions{Tail: grepWindow, Since: "2h"}) {
+		t.Errorf("pedido ao docker com grep: %+v", logsAsked)
+	}
+	if out := call(t, cs, "app_logs", args(map[string]any{"grep": "timeout"}), false); !strings.Contains(out, "nenhuma linha") {
+		t.Errorf("grep sem achar: %q", out)
+	}
+	for _, bad := range []map[string]any{{"lines": 5000}, {"lines": -1}, {"since": "ontem"}, {"since": "-5m"}} {
+		call(t, cs, "app_logs", args(bad), true)
+	}
+}
+
+// as respostas mandam a IA pras ferramentas deste MCP, nao pra TUI ou CLI
+func TestRespostasApontamProMCP(t *testing.T) {
+	cs := connect(t)
+	call(t, cs, "app_create", map[string]any{"name": "loja", "repo": "trdSystemDev/loja"}, false)
+	guide := call(t, cs, "app_guide", map[string]any{"app": "loja"}, false)
+	for _, s := range []string{"database_create e depois app_link_database", "bucket_create e depois app_link_bucket"} {
+		if !strings.Contains(guide, s) {
+			t.Errorf("guia sem %q:\n%s", s, guide)
+		}
+	}
+	for _, s := range []string{"aba Infra", "cais app db", "cais app bucket", "Apps ->"} {
+		if strings.Contains(guide, s) {
+			t.Errorf("guia com %q (caminho da TUI/CLI):\n%s", s, guide)
+		}
+	}
+	out := call(t, cs, "app_link_database", map[string]any{"app": "loja", "engine": "postgres", "name": "nao_existe"}, true)
+	if !strings.Contains(out, "crie com database_create") {
+		t.Errorf("link de banco inexistente: %s", out)
+	}
+	out = call(t, cs, "app_link_bucket", map[string]any{"app": "loja", "bucket": "nao-existe"}, true)
+	if !strings.Contains(out, "crie com bucket_create") {
+		t.Errorf("link de bucket inexistente: %s", out)
+	}
+	// mysql desligado no teste: ligar e com o usuario
+	out = call(t, cs, "database_create", map[string]any{"engine": "mysql", "name": "loja"}, true)
+	if !strings.Contains(out, "peca ao usuario") || !strings.Contains(out, "cais service mysql on") {
+		t.Errorf("stack desligada: %s", out)
+	}
+}
+
+func TestRewriteForAI(t *testing.T) {
+	err := (&apps.ComposeError{App: "loja", Problems: []string{"web: publica a porta 80 no host (porta 80). Use os labels (cais app guide loja)"}}).Error()
+	got := rewriteForAI(err)
+	if strings.Contains(got, "cais app guide") || strings.Count(got, "app_guide (app loja)") != 2 {
+		t.Errorf("erro do compose: %s", got)
+	}
+	got = rewriteForAI("a rede mysql_network e do mysql, que esta desligado. Ligue o mysql na aba Infra (ou cais service mysql on)")
+	if !strings.Contains(got, "Ligar o mysql nao e pelo MCP: peca ao usuario") {
+		t.Errorf("rede de stack desligada: %s", got)
+	}
+	// no JSON: a string trocada no lugar, a ordem dos campos mantida
+	raw := json.RawMessage(`{"z":1,"history":[{"error":"x\n\nModelo pronto pra colar: cais app guide loja"}],"a":"crie na aba Infra -\u003e Novo banco"}`)
+	out, changed := rewriteJSON(raw)
+	want := `{"z":1,"history":[{"error":"x\n\nModelo pronto pra colar: app_guide (app loja)"}],"a":"crie com database_create"}`
+	if !changed || string(out) != want {
+		t.Errorf("json:\n%s\nquer\n%s", out, want)
+	}
+	if _, changed := rewriteJSON(json.RawMessage(`{"a":"nada a trocar"}`)); changed {
+		t.Error("trocou JSON sem referencia da TUI")
 	}
 }

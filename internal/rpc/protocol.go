@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 // Metodos aceitos pelo daemon.
@@ -144,14 +146,17 @@ type serviceControlParams struct {
 }
 
 type logsParams struct {
-	Stack     string `json:"stack"`
-	Container string `json:"container"`
+	Stack     string             `json:"stack"`
+	Container string             `json:"container"`
+	Logs      docker.LogsOptions `json:"logs,omitzero"`
 }
 
 type appParams struct {
 	Name      string `json:"name"`
 	Service   string `json:"service,omitempty"`
 	Container string `json:"container,omitempty"`
+	// Logs e o pedaco do log pedido (app.logs)
+	Logs docker.LogsOptions `json:"logs,omitzero"`
 }
 
 type deleteParams struct {

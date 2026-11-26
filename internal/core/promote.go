@@ -41,7 +41,7 @@ func (c *Core) PromoteApp(ctx context.Context, from string, confirm bool) (apps.
 		return apps.DeployResult{}, err
 	}
 	if h.PromoteTo == "" {
-		return apps.DeployResult{}, fmt.Errorf("%s nao e homologacao de nenhum app", from)
+		return apps.DeployResult{}, fmt.Errorf("%s nao e homologacao de nenhum app (a homologacao e outro app, com promote_to apontando pra producao)", from)
 	}
 	unlock, err := c.lockApp(h.PromoteTo)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
 )
 
 func (m *model) appsClick(msg tea.MouseMsg) tea.Cmd {
@@ -93,7 +94,7 @@ func (m *model) fetchAppLogs() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
-		out, err := m.api.AppLogs(ctx, app, target)
+		out, err := m.api.AppLogs(ctx, app, target, docker.LogsOptions{})
 		return appLogsMsg{generation, out, err}
 	}
 }

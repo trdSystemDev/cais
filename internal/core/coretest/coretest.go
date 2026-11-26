@@ -16,6 +16,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/bootstrap"
 	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/host"
 )
@@ -120,8 +121,8 @@ func (f *Recorder) CheckUpdate(context.Context) (core.Health, error) {
 func (f *Recorder) CheckStacks(context.Context) (core.Infra, error) {
 	return ret[core.Infra](f, "CheckStacks")
 }
-func (f *Recorder) ContainerLogs(_ context.Context, stack, container string) (string, error) {
-	return ret[string](f, "ContainerLogs", stack, container)
+func (f *Recorder) ContainerLogs(_ context.Context, stack, container string, opt docker.LogsOptions) (string, error) {
+	return ret[string](f, "ContainerLogs", stack, container, opt)
 }
 func (f *Recorder) LoadConfig(context.Context) (core.ConfigInfo, error) {
 	return ret[core.ConfigInfo](f, "LoadConfig")
@@ -197,8 +198,8 @@ func (f *Recorder) StopApp(_ context.Context, name string) error {
 func (f *Recorder) DeleteApp(_ context.Context, name string, volumes bool) error {
 	return only(f, "DeleteApp", name, volumes)
 }
-func (f *Recorder) AppLogs(_ context.Context, name, container string) (string, error) {
-	return ret[string](f, "AppLogs", name, container)
+func (f *Recorder) AppLogs(_ context.Context, name, container string, opt docker.LogsOptions) (string, error) {
+	return ret[string](f, "AppLogs", name, container, opt)
 }
 func (f *Recorder) AppEnv(_ context.Context, name string) (map[string]string, error) {
 	return ret[map[string]string](f, "AppEnv", name)

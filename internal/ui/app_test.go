@@ -127,8 +127,10 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 			return nil
 		},
 		ComposeRestart: func(context.Context, string) error { return nil },
-		ContainerLogs:  func(context.Context, string) (string, error) { return "container iniciado\nouvindo conexoes", nil },
-		ComposeDown:    func(context.Context, string) error { return nil },
+		ContainerLogs: func(context.Context, string, docker.LogsOptions) (string, error) {
+			return "container iniciado\nouvindo conexoes", nil
+		},
+		ComposeDown: func(context.Context, string) error { return nil },
 		// toda stack instalada aparece com um container saudavel
 		ComposePS: func(_ context.Context, file string) ([]docker.Container, error) {
 			pss.Add(1)

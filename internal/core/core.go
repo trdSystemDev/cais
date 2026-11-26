@@ -57,7 +57,7 @@ type Deps struct {
 	// Parar e Reiniciar um servico ligado (Iniciar e o ComposeUp).
 	ComposeStop    func(ctx context.Context, file string) error
 	ComposeRestart func(ctx context.Context, file string) error
-	ContainerLogs  func(context.Context, string) (string, error)
+	ContainerLogs  func(context.Context, string, docker.LogsOptions) (string, error)
 	ComposePS      func(ctx context.Context, file string) ([]docker.Container, error)
 	// Backup: pastas do estado (o que entra no backup e onde ficam os
 	// temporarios), o OAuth do Google e o Drive, o login da Microsoft e o

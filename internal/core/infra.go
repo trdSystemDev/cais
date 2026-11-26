@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/trdSystemDev/cais/internal/config"
+	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/stacks"
 )
 
@@ -53,19 +54,24 @@ func (c *Core) inspectStacks(ctx context.Context) Infra {
 }
 
 // ContainerLogs so aceita containers pertencentes ao compose da stack pedida.
-func (c *Core) ContainerLogs(ctx context.Context, stack, container string) (string, error) {
+func (c *Core) ContainerLogs(ctx context.Context, stack, container string, opt docker.LogsOptions) (string, error) {
 	if _, ok := stacks.Get(stack); !ok {
 		return "", fmt.Errorf("stack desconhecida: %s", stack)
 	}
+	file := c.setupDeps().ComposeFile(stack)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	containers, err := c.deps.ComposePS(ctx, c.setupDeps().ComposeFile(stack))
+	containers, err := c.deps.ComposePS(ctx, file)
 	if err != nil {
+		// stack que o Setup nao subiu: o motivo, nao o erro do docker compose
+		if _, serr := os.Stat(file); errors.Is(serr, os.ErrNotExist) {
+			return "", fmt.Errorf("a stack %s nao esta instalada: ligue na aba Infra", stack)
+		}
 		return "", err
 	}
 	for _, item := range containers {
 		if item.Name == container {
-			return c.deps.ContainerLogs(ctx, container)
+			return c.deps.ContainerLogs(ctx, container, opt)
 		}
 	}
 	return "", fmt.Errorf("container %q nao pertence a stack %s", container, stack)

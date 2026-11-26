@@ -65,6 +65,9 @@ type Container struct {
 	Status string `json:"status"`
 	// ExitCode e o codigo de saida de um container parado.
 	ExitCode int `json:"exit_code,omitempty"`
+	// URLs sao os enderecos publicados pelo Traefik (Host das regras dos
+	// routers, com traefik.enable=true), ja com as variaveis resolvidas.
+	URLs []string `json:"urls,omitempty"`
 }
 
 // ComposePS lista os containers do projeto do arquivo, inclusive parados.
@@ -80,8 +83,8 @@ func ComposePS(ctx context.Context, file string) ([]Container, error) {
 // (versoes antigas).
 func parsePS(out string) ([]Container, error) {
 	type raw struct {
-		Name, Service, Image, State, Health, Status string
-		ExitCode                                    int
+		Name, Service, Image, State, Health, Status, Labels string
+		ExitCode                                            int
 	}
 	var rows []raw
 	out = strings.TrimSpace(out)
@@ -102,7 +105,8 @@ func parsePS(out string) ([]Container, error) {
 	}
 	cs := make([]Container, 0, len(rows))
 	for _, r := range rows {
-		cs = append(cs, Container(r))
+		cs = append(cs, Container{Name: r.Name, Service: r.Service, Image: r.Image, State: r.State,
+			Health: r.Health, Status: r.Status, ExitCode: r.ExitCode, URLs: traefikURLs(r.Labels)})
 	}
 	return cs, nil
 }

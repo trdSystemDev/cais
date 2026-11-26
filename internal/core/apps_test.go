@@ -106,7 +106,7 @@ func newAppsCore(t *testing.T) (*Core, *appDocker, *githubtest.Server) {
 		AppSettle:   -1,
 		GitHubURL:   gh.URL,
 		Hostname:    func() (string, error) { return "vps-teste", nil },
-		ContainerLogs: func(_ context.Context, name string) (string, error) {
+		ContainerLogs: func(_ context.Context, name string, _ docker.LogsOptions) (string, error) {
 			return "log de " + name, nil
 		},
 	})
@@ -234,10 +234,10 @@ func TestAppLogsSoDoProprioApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.ps = []docker.Container{{Name: "meu-app-web-1", State: "running"}}
-	if _, err := c.AppLogs(ctx, "meu-app", "postgres"); err == nil {
+	if _, err := c.AppLogs(ctx, "meu-app", "postgres", docker.LogsOptions{}); err == nil {
 		t.Error("leu log de container de fora do app")
 	}
-	out, err := c.AppLogs(ctx, "meu-app", "meu-app-web-1")
+	out, err := c.AppLogs(ctx, "meu-app", "meu-app-web-1", docker.LogsOptions{})
 	if err != nil || out != "log de meu-app-web-1" {
 		t.Errorf("%q %v", out, err)
 	}

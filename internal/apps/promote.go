@@ -53,7 +53,7 @@ func (m Manager) CheckPromotion(ctx context.Context, from string) (Promotion, er
 		return Promotion{}, err
 	}
 	if a.PromoteTo == "" {
-		return Promotion{}, fmt.Errorf("%s nao e homologacao de nenhum app", from)
+		return Promotion{}, fmt.Errorf("%s nao e homologacao de nenhum app (a homologacao e outro app, com promote_to apontando pra producao)", from)
 	}
 	prod, err := m.Get(a.PromoteTo)
 	if err != nil {

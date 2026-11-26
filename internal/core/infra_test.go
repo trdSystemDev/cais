@@ -85,22 +85,39 @@ func TestHealthyComHealthcheckSubindo(t *testing.T) {
 
 func TestContainerLogsValidaPertencimento(t *testing.T) {
 	var called string
+	root := t.TempDir()
+	stackDir := func(n string) string { return filepath.Join(root, n) }
+	os.MkdirAll(stackDir("proxy"), 0o755)
+	os.WriteFile(filepath.Join(stackDir("proxy"), "docker-compose.yml"), []byte("name: proxy\n"), 0o644)
 	c := New(Deps{
-		ComposePS: func(context.Context, string) ([]docker.Container, error) {
+		StackDir: stackDir,
+		// como o docker compose: sem o arquivo, erro
+		ComposePS: func(_ context.Context, file string) ([]docker.Container, error) {
+			if _, err := os.Stat(file); err != nil {
+				return nil, err
+			}
 			return []docker.Container{{Name: "proxy-traefik"}}, nil
 		},
-		ContainerLogs: func(_ context.Context, name string) (string, error) { called = name; return "traefik pronto", nil },
+		ContainerLogs: func(_ context.Context, name string, _ docker.LogsOptions) (string, error) {
+			called = name
+			return "traefik pronto", nil
+		},
 	})
-	if _, err := c.ContainerLogs(context.Background(), "inexistente", "proxy-traefik"); err == nil {
+	if _, err := c.ContainerLogs(context.Background(), "inexistente", "proxy-traefik", docker.LogsOptions{}); err == nil {
 		t.Fatal("aceitou stack desconhecida")
 	}
-	if _, err := c.ContainerLogs(context.Background(), "proxy", "mysql"); err == nil {
+	if _, err := c.ContainerLogs(context.Background(), "proxy", "mysql", docker.LogsOptions{}); err == nil {
 		t.Fatal("aceitou container de outra stack")
+	}
+	// stack que o Setup nao subiu: o motivo, nao o erro do docker compose
+	if _, err := c.ContainerLogs(context.Background(), "postgres", "postgres", docker.LogsOptions{}); err == nil ||
+		err.Error() != "a stack postgres nao esta instalada: ligue na aba Infra" {
+		t.Fatalf("stack nao instalada: %v", err)
 	}
 	if called != "" {
 		t.Fatal("leu logs antes de validar")
 	}
-	out, err := c.ContainerLogs(context.Background(), "proxy", "proxy-traefik")
+	out, err := c.ContainerLogs(context.Background(), "proxy", "proxy-traefik", docker.LogsOptions{})
 	if err != nil || out != "traefik pronto" || called != "proxy-traefik" {
 		t.Fatalf("%q, %v, %q", out, err, called)
 	}

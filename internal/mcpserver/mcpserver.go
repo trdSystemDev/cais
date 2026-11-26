@@ -69,6 +69,7 @@ func New(api core.API, version string) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "cais", Version: version}, &mcp.ServerOptions{Instructions: instructions})
 	t := tools{api}
 	t.register(s)
+	s.AddReceivingMiddleware(forAI)
 	return s
 }
 
@@ -103,10 +104,12 @@ type (
 	logsArgs struct {
 		App       string `json:"app" jsonschema:"nome do app"`
 		Container string `json:"container" jsonschema:"nome do container, como aparece em apps_list (ex: portal-web-1)"`
+		logFilter
 	}
 	infraLogsArgs struct {
 		Stack     string `json:"stack" jsonschema:"stack da infra: proxy, postgres, mysql ou garage"`
 		Container string `json:"container" jsonschema:"nome do container, como aparece em infra_status"`
+		logFilter
 	}
 	envSetArgs struct {
 		App   string            `json:"app" jsonschema:"nome do app"`
@@ -185,6 +188,7 @@ func (t tools) registerRead(s *mcp.Server) {
 			// o link de login do Tailscale poe a VPS na tailnet de quem
 			// abrir: nao sai daqui
 			st.Environment.Tailscale.AuthURL = ""
+			st.Environment.Security = withoutOKFixes(st.Environment.Security)
 			return nil, st, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "security_check", Annotations: readOnly(),
@@ -205,22 +209,36 @@ func (t tools) registerRead(s *mcp.Server) {
 			return nil, infra, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "infra_logs", Annotations: readOnly(),
-		Description: "Ultimas linhas do log de um container da infra."},
+		Description: "Ultimas linhas do log de um container da infra (" + logsHelp + ")."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in infraLogsArgs) (*mcp.CallToolResult, any, error) {
-			out, err := t.api.ContainerLogs(ctx, in.Stack, in.Container)
-			return text(out), nil, err
+			opt, err := in.options()
+			if err != nil {
+				return nil, nil, err
+			}
+			out, err := t.api.ContainerLogs(ctx, in.Stack, in.Container, opt)
+			if err != nil {
+				return nil, nil, err
+			}
+			return text(in.apply(out)), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "apps_list", Annotations: readOnly(),
-		Description: "Lista os apps: repositorio, branch, compose, commit no ar, ultimo deploy, containers (estado e saude), bancos e buckets ligados."},
+		Description: "Lista os apps: repositorio, branch, compose, commit no ar, ultimo deploy, containers (estado, saude e urls: os enderecos publicados pelo Traefik), bancos e buckets ligados."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, core.Apps, error) {
 			list, err := t.api.CheckApps(ctx)
 			return nil, list, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_logs", Annotations: readOnly(),
-		Description: "Ultimas linhas do log de um container do app (o nome do container sai de apps_list)."},
+		Description: "Ultimas linhas do log de um container do app (o nome do container sai de apps_list; " + logsHelp + ")."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in logsArgs) (*mcp.CallToolResult, any, error) {
-			out, err := t.api.AppLogs(ctx, in.App, in.Container)
-			return text(out), nil, err
+			opt, err := in.options()
+			if err != nil {
+				return nil, nil, err
+			}
+			out, err := t.api.AppLogs(ctx, in.App, in.Container, opt)
+			if err != nil {
+				return nil, nil, err
+			}
+			return text(in.apply(out)), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "app_guide", Annotations: readOnly(),
 		Description: "Modelo do compose de producao do app no formato do cais: labels do Traefik, redes da infra, o entrypoint com o cais run e os nomes das variaveis. Use antes de escrever ou corrigir o compose."},
@@ -245,12 +263,18 @@ func (t tools) registerRead(s *mcp.Server) {
 		Description: "Databases criados pelo cais no Postgres/MySQL da infra: host, variaveis que o app recebe, apps ligados e espaco ocupado (sem a senha)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, []core.DatabaseInfo, error) {
 			list, err := t.api.Databases(ctx)
+			if list == nil {
+				list = []core.DatabaseInfo{}
+			}
 			return nil, list, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "buckets_list", Annotations: readOnly(),
 		Description: "Buckets do Garage criados pelo cais: endpoint, variaveis que o app recebe, apps ligados e espaco ocupado (sem a chave)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, []core.BucketInfo, error) {
 			list, err := t.api.Buckets(ctx)
+			if list == nil {
+				list = []core.BucketInfo{}
+			}
 			return nil, list, err
 		})
 }
@@ -469,7 +493,7 @@ func newSecurityReport(env core.Environment, h core.Health) securityReport {
 		Version: h.Version, Latest: h.Latest, UpdateAvailable: h.UpdateAvailable(),
 		Where: "TUI do cais (ssh cais@<vps>): Setup > Seguranca, com o Corrigir de cada item, o Preparar VPS e o Tailscale; a atualizacao do cais no Dashboard (ou cais update)"}
 	r.Tailscale.AuthURL = ""
-	for _, it := range env.Security {
+	for _, it := range withoutOKFixes(env.Security) {
 		if it.OK {
 			r.OK = append(r.OK, it)
 		} else {
@@ -488,6 +512,18 @@ func newSecurityReport(env core.Environment, h core.Health) securityReport {
 		r.Summary += "; ha versao nova do cais (" + h.Latest + ")"
 	}
 	return r
+}
+
+// withoutOKFixes tira o conserto dos itens que ja estao certos: so ruido, e
+// levaria a IA a sugerir um conserto que nao precisa.
+func withoutOKFixes(items []host.Item) []host.Item {
+	out := slices.Clone(items)
+	for i := range out {
+		if out[i].OK {
+			out[i].Fix = ""
+		}
+	}
+	return out
 }
 
 // Instructions sao as instrucoes do MCP de uma VPS (o agregador soma as
