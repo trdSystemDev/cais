@@ -201,7 +201,7 @@ func (p *setupPage) viewSecurity(w int) string {
 			if !it.OK {
 				mark = t.fg(t.danger).Render("✗")
 			}
-			line := mark + " " + t.bold().Render(it.Title) + muted.Render("  "+it.Detail)
+			line := mark + " " + t.bold().Render(it.Title) + muted.Render("  "+shortDetail(it.Detail, 6))
 			switch {
 			case p.hard.Fixing == it.ID:
 				line += "  " + t.fg(t.warn).Render("corrigindo...")
@@ -396,4 +396,24 @@ func cmpOrUI(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// shortDetail encurta um detalhe que e uma lista ("prefixo: a, b, c, ..."),
+// como as portas abertas de uma VPS com dezenas de containers: so os n
+// primeiros e quantos faltam (a lista inteira fica no cais host check e no
+// security_check do MCP).
+func shortDetail(detail string, n int) string {
+	head, list, ok := strings.Cut(detail, ": ")
+	if !ok {
+		head, list = "", detail
+	}
+	items := strings.Split(list, ", ")
+	if len(items) <= n {
+		return detail
+	}
+	out := strings.Join(items[:n], ", ") + fmt.Sprintf(" e mais %d (cais host check lista todas)", len(items)-n)
+	if head != "" {
+		out = head + ": " + out
+	}
+	return out
 }

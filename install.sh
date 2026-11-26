@@ -1,8 +1,7 @@
 #!/bin/sh
 # Instala (ou atualiza) o cais nesta VPS, pelo release do GitHub:
 #
-#   curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
-#     sudo sh -s -- --ssh
+#   curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh | sudo sh -s -- --ssh
 #
 # O mesmo comando atualiza. Sem Docker (VPS nova com Ubuntu ou Debian),
 # instala o Docker pelo repositorio oficial. Baixa o binario desta

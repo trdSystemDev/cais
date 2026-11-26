@@ -23,8 +23,7 @@ binario do ultimo release do GitHub: sem clone, sem Go e sem compilar nada na
 VPS.
 
 ```sh
-curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
-  sudo sh -s -- --ssh
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh | sudo sh -s -- --ssh
 ```
 
 O mesmo comando atualiza: baixa o release mais novo, confere o SHA-256 e
@@ -68,8 +67,7 @@ Depois da instalacao, numa VPS nova: `cais host harden -user deploy`
 Linux ou macOS (Intel ou Apple Silicon; no Windows, pelo WSL), sem sudo:
 
 ```sh
-curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
-  sh -s -- --client
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh | sh -s -- --client
 ```
 
 Baixa o binario do seu sistema, confere o SHA-256 e poe em `~/.local/bin/cais`

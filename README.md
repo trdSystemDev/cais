@@ -40,8 +40,7 @@ proprio: o acesso e o seu SSH.
 Na VPS, com um usuario com sudo:
 
 ```sh
-curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
-  sudo sh -s -- --ssh
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh | sudo sh -s -- --ssh
 ```
 
 Instala o cais (e o Docker, se faltar), sobe o servico e cria o usuario `cais`
@@ -52,16 +51,14 @@ No seu computador, so se for administrar varias VPS (um MCP pra todas,
 `cais -r NOME`): so o binario, sem sudo nem servico, em Linux ou macOS:
 
 ```sh
-curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
-  sh -s -- --client
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh | sh -s -- --client
 ```
 
 VPS nova, so com o root (Hostinger e afins)? Instale e prepare de uma vez,
 como root:
 
 ```sh
-curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh |
-  sh -s -- --ssh --harden deploy
+curl -fsSL https://github.com/trdSystemDev/cais/releases/latest/download/install.sh | sh -s -- --ssh --harden deploy
 ```
 
 O `--harden deploy` cria o admin `deploy` com sudo e as chaves do root. Deixa
