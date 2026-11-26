@@ -208,7 +208,10 @@ func (p *setupPage) viewSecurity(w int) string {
 			case it.Fixable && !p.hard.Running:
 				line += "  " + focusMarked(focusID == "fix:"+it.ID, p.zones.Mark("fix:"+it.ID, t.chip("Corrigir", btnNormal, focusID == "fix:"+it.ID)))
 			}
-			rows = append(rows, line)
+			// quebrada aqui, na largura do painel: quebrada pelo terminal
+			// ela ocupa mais linhas do que a rolagem conta, e o fim do
+			// painel (o Preparar VPS) sai cortado
+			rows = append(rows, wrap.Render(line))
 			switch {
 			case it.OK:
 			case itemHints[it.ID] != "":
