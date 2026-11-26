@@ -177,7 +177,8 @@ Flags:
   --dns cloudflare|none   como o Let's Encrypt confere o dominio: none (padrao)
                           acessa o site pela porta 80; cloudflare cria um
                           registro TXT com o token da API (cais setup secret
-                          cloudflare_dns_token, permissao Zone > DNS > Edit).
+                          cloudflare_dns_token, permissoes DNS: Edit e Zone:
+                          Read na zona do dominio).
                           Pelo DNS sai certificado ate pra dominio que a
                           internet nao alcanca (IP do Tailscale); todo
                           dominio dos apps precisa estar na Cloudflare

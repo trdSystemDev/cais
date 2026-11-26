@@ -81,7 +81,8 @@ type Proxy struct {
 const DNSCloudflare = "cloudflare"
 
 // CloudflareTokenSecret e o secret com o token da API da Cloudflare
-// (permissao Zone > DNS > Edit).
+// (permissoes DNS: Edit e Zone: Read na zona do dominio: o lego acha o ID
+// da zona antes de criar o TXT).
 const CloudflareTokenSecret = "cloudflare_dns_token"
 
 // DNSChallenge diz se os certificados saem pela prova no DNS.

@@ -120,7 +120,9 @@ Traefik cria um registro TXT com um token da API e o Let's Encrypt confere
 o TXT, sem acessar a VPS.
 
 1. Na Cloudflare, **My Profile > API Tokens**: um token com
-   **Zone > DNS > Edit** na zona do dominio (o modelo "Edit zone DNS").
+   **DNS: Edit** e **Zone: Read**, em *Zone Resources* so a zona do dominio
+   (Include > Specific zone). Sem o Zone: Read, o Traefik nao acha o ID da
+   zona e o certificado nao sai.
 2. Na aba **Infra > proxy**, **Emissor: Let's Encrypt (DNS Cloudflare)**,
    cole o **Token** (vai pro secret `cloudflare_dns_token`, so leitura no
    container pelo `CF_DNS_API_TOKEN_FILE`; nunca no compose nem no `docker

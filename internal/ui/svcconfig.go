@@ -385,7 +385,7 @@ func (p *svcConfig) view(c config.Config, on bool, w int) string {
 	}
 	if p.dns && !p.local {
 		b.WriteString(field("cert-token", "Token", 30) + "\n")
-		b.WriteString(note("Da Cloudflare, com Zone > DNS > Edit. Serve ate pra IP do Tailscale; os dominios precisam estar na Cloudflare."))
+		b.WriteString(note("Da Cloudflare, com DNS: Edit e Zone: Read, so na zona do dominio. Serve ate pra IP do Tailscale; os dominios precisam estar na Cloudflare."))
 		b.WriteString(field("cert-wild", "Curingas", 30) + "\n")
 		b.WriteString(note("Opcional: dev.exemplo.com.br cobre *.dev.exemplo.com.br com um certificado so."))
 	}

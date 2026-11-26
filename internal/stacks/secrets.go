@@ -22,7 +22,7 @@ type Provided struct {
 var provided = map[string]string{
 	"github_app_key":             "Chave privada (.pem) do GitHub App do cais: baixa o codigo dos repositorios privados no deploy",
 	"brevo_api_key":              "Chave da API da Brevo (xkeysib-...): envia os e-mails de falha do deploy automatico e do backup",
-	config.CloudflareTokenSecret: "Token da API da Cloudflare (Zone > DNS > Edit): o Let's Encrypt prova pelo DNS (proxy, aba Infra)",
+	config.CloudflareTokenSecret: "Token da API da Cloudflare (DNS: Edit e Zone: Read): o Let's Encrypt prova pelo DNS (proxy, aba Infra)",
 }
 
 // companions sao gerados junto com um secret dos templates, sem aparecer
