@@ -44,8 +44,11 @@ func (c *Core) importDB(ctx context.Context, e databases.Engine, name string, sr
 			case <-t.C:
 				n := copied.Load()
 				c.update(func(s *State) {
+					// copia nova: as fotos ja entregues dividem o ponteiro
 					if s.Import != nil {
-						s.Import.Bytes = n
+						im := *s.Import
+						im.Bytes = n
+						s.Import = &im
 					}
 				})
 			}

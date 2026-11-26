@@ -158,7 +158,9 @@ func (c *Core) watchUpdate(version string, started time.Time, dir string) {
 		case <-ctx.Done():
 			c.update(func(s *State) {
 				if s.Update.Running() {
-					s.Update.Error = "a atualizacao nao terminou em " + updateLimit.String() + " (journalctl -u " + UpdateUnit + ")"
+					u := *s.Update
+					u.Error = "a atualizacao nao terminou em " + updateLimit.String() + " (journalctl -u " + UpdateUnit + ")"
+					s.Update = &u
 				}
 			})
 			return
@@ -171,11 +173,13 @@ func (c *Core) watchUpdate(version string, started time.Time, dir string) {
 			rate = int64(float64(p.Bytes-lastBytes) / dt)
 		}
 		lastBytes, lastAt = p.Bytes, now
+		// uma copia nova: as fotos ja entregues (Snapshot, Subscribe) dividem
+		// o ponteiro antigo e sao lidas sem o lock
 		c.update(func(s *State) {
-			u := s.Update
-			if u == nil || u.To != version {
+			if s.Update == nil || s.Update.To != version {
 				return
 			}
+			u := *s.Update
 			if n := len(p.Steps); n > 0 {
 				u.Step = p.Steps[n-1]
 			}
@@ -183,6 +187,7 @@ func (c *Core) watchUpdate(version string, started time.Time, dir string) {
 			if !p.Active {
 				u.Error = updateFailure(p.Last)
 			}
+			s.Update = &u
 		})
 		if !p.Active {
 			c.deps.Logger.Error("atualizacao do cais falhou", "pra", version, "erro", updateFailure(p.Last))
