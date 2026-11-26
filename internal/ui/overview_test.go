@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
@@ -267,5 +269,31 @@ func TestDashboardAtualizacaoFalha(t *testing.T) {
 	waitFor(t, m, "falhou (o cais segue na v0.2.0): falhou o download de cais-linux-amd64")
 	if !strings.Contains(screen(m), "Atualizar") {
 		t.Fatalf("sem o Atualizar depois da falha:\n%s", screen(m))
+	}
+}
+
+// a conexao caiu (o daemon reiniciou numa atualizacao): o Reconectar so
+// fecha a TUI pedindo a reabertura depois que o daemon responde
+func TestReconectarDepoisDaQueda(t *testing.T) {
+	var asked []string
+	m := open(t, updateCore(t, &asked, &probeFake{}))
+	waitFor(t, m, "Pronto.")
+	back := errors.New("connection refused")
+	m.ready = func() error { return back }
+	m.Update(closedMsg{})
+	if s := screen(m); !strings.Contains(s, "Reconectar") || !strings.Contains(s, "A conexao com o daemon do cais caiu") {
+		t.Fatalf("tela da queda:\n%s", s)
+	}
+	click(t, m, "reconnect")
+	if m.reconnect || !strings.Contains(screen(m), "O daemon ainda nao voltou") {
+		t.Fatalf("daemon fora do ar: reconnect=%v\n%s", m.reconnect, screen(m))
+	}
+	back = nil
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.reconnect || cmd == nil {
+		t.Fatal("enter com o daemon de volta nao pediu a reabertura")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("o Reconectar nao fechou a TUI")
 	}
 }

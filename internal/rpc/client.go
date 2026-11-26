@@ -27,7 +27,7 @@ import (
 //
 // Uma conexao serve todas as chamadas e inscricoes. Se ela cair, chamadas
 // pendentes e futuras devolvem ErrDisconnected e os canais de Subscribe
-// sao fechados.
+// sao fechados; com SetReconnect, as futuras abrem outra conexao.
 type Client struct {
 	path string // o socket: o shell abre uma conexao so pra ele
 	conn net.Conn
@@ -42,6 +42,7 @@ type Client struct {
 	last       *core.State // ultima foto recebida, entregue a novos inscritos
 	subscribed bool        // ja pediu state.subscribe ao daemon
 	closed     bool
+	reconnect  bool // chamada depois da queda abre outra conexao (SetReconnect)
 }
 
 var _ core.API = (*Client)(nil)
@@ -68,13 +69,42 @@ func Dial(ctx context.Context, path string) (*Client, error) {
 		pending: map[uint64]chan message{},
 		subs:    map[int]chan core.State{},
 	}
-	go c.readLoop()
+	go c.readLoop(conn)
 	return c, nil
 }
 
 // Close encerra a conexao. Inscricoes abertas tem o canal fechado.
 func (c *Client) Close() error {
-	return c.conn.Close()
+	c.mu.Lock()
+	c.reconnect = false
+	conn := c.conn
+	c.mu.Unlock()
+	return conn.Close()
+}
+
+// SetReconnect liga a reconexao: depois que a conexao cai (o daemon
+// reiniciou, numa atualizacao do cais), a chamada seguinte abre outra. A
+// que estava no ar quando caiu nao e repetida (a acao pode ter rodado) e
+// devolve ErrDisconnected. Pro MCP, que fica aberto entre as atualizacoes;
+// a TUI precisa saber da queda e nao usa.
+func (c *Client) SetReconnect(on bool) {
+	c.mu.Lock()
+	c.reconnect = on
+	c.mu.Unlock()
+}
+
+// redialLocked abre a conexao nova no lugar da que caiu (com c.mu).
+func (c *Client) redialLocked(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", c.path)
+	if err != nil {
+		return err
+	}
+	c.conn, c.enc, c.closed, c.subscribed, c.last = conn, json.NewEncoder(conn), false, false, nil
+	go c.readLoop(conn)
+	return nil
 }
 
 func (c *Client) Snapshot(ctx context.Context) (core.State, error) {
@@ -233,17 +263,24 @@ func (c *Client) call(ctx context.Context, method string, in, out any) error {
 
 	c.mu.Lock()
 	if c.closed {
-		c.mu.Unlock()
-		return ErrDisconnected
+		if !c.reconnect {
+			c.mu.Unlock()
+			return ErrDisconnected
+		}
+		if err := c.redialLocked(ctx); err != nil {
+			c.mu.Unlock()
+			return fmt.Errorf("%w e nao voltou (o daemon reiniciando, numa atualizacao? tente de novo em alguns segundos): %v", ErrDisconnected, err)
+		}
 	}
 	c.nextID++
 	id := c.nextID
 	reply := make(chan message, 1)
 	c.pending[id] = reply
+	enc := c.enc
 	c.mu.Unlock()
 
 	c.wmu.Lock()
-	err := c.enc.Encode(message{JSONRPC: "2.0", ID: id, Method: method, Params: params})
+	err := enc.Encode(message{JSONRPC: "2.0", ID: id, Method: method, Params: params})
 	c.wmu.Unlock()
 	if err != nil {
 		c.forget(id)
@@ -277,8 +314,10 @@ func (c *Client) forget(id uint64) {
 	c.mu.Unlock()
 }
 
-func (c *Client) readLoop() {
-	dec := json.NewDecoder(c.conn)
+// readLoop le a conexao conn ate ela cair. Se ja ha outra no lugar (a
+// reconexao), nao mexe no estado dela.
+func (c *Client) readLoop(conn net.Conn) {
+	dec := json.NewDecoder(conn)
 	for {
 		var m message
 		if err := dec.Decode(&m); err != nil {
@@ -303,17 +342,19 @@ func (c *Client) readLoop() {
 	}
 
 	c.mu.Lock()
-	c.closed = true
-	for id, reply := range c.pending {
-		close(reply)
-		delete(c.pending, id)
-	}
-	for id, ch := range c.subs {
-		close(ch)
-		delete(c.subs, id)
+	if c.conn == conn {
+		c.closed = true
+		for id, reply := range c.pending {
+			close(reply)
+			delete(c.pending, id)
+		}
+		for id, ch := range c.subs {
+			close(ch)
+			delete(c.subs, id)
+		}
 	}
 	c.mu.Unlock()
-	c.conn.Close()
+	conn.Close()
 }
 
 // publish entrega a foto a todos os inscritos locais, descartando a

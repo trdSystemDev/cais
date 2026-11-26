@@ -255,6 +255,11 @@ func (e *cli) runMCP(args []string) error {
 		return err
 	}
 	defer c.Close()
+	// o MCP fica aberto enquanto o cliente (Claude Code) roda: quando o daemon
+	// reinicia numa atualizacao, a chamada seguinte reconecta sozinha
+	if r, ok := c.(interface{ SetReconnect(bool) }); ok {
+		r.SetReconnect(true)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return mcpserver.New(c, version).Run(ctx, &mcp.StdioTransport{})
@@ -270,8 +275,35 @@ func (e *cli) runTUI(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
-	return ui.New(c).Run()
+	app := ui.New(c)
+	// o Reconectar da tela de conexao caida: o daemon voltou se o socket
+	// responde de novo
+	app.Ready = func() error {
+		c2, err := e.connect(*socket)
+		if err != nil {
+			return err
+		}
+		return c2.Close()
+	}
+	err = app.Run()
+	c.Close()
+	if errors.Is(err, ui.ErrReconnect) {
+		return reexec()
+	}
+	return err
+}
+
+// reexec troca este processo pelo binario do cais no disco, com os mesmos
+// argumentos: no mesmo terminal (e na mesma sessao ssh), a TUI abre de novo
+// ja na versao nova. Trocado por uma atualizacao, o /proc/self/exe diz
+// "(deleted)"; o caminho continua o mesmo.
+func reexec() error {
+	bin, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	bin = strings.TrimSuffix(bin, " (deleted)")
+	return syscall.Exec(bin, os.Args, os.Environ())
 }
 
 func (e *cli) runState(args []string) error {

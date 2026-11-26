@@ -42,7 +42,13 @@ func startDaemon(t *testing.T, check func(context.Context) docker.Status) *daemo
 // pelo teste (caminhos temporarios, docker falso).
 func startDaemonDeps(t *testing.T, deps core.Deps) *daemon {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "cais.sock")
+	return startDaemonAt(t, filepath.Join(t.TempDir(), "cais.sock"), deps)
+}
+
+// startDaemonAt sobe o daemon no socket path (o mesmo de um que caiu: o
+// reinicio de uma atualizacao).
+func startDaemonAt(t *testing.T, path string, deps core.Deps) *daemon {
+	t.Helper()
 	ln, err := Listen(path, "")
 	if err != nil {
 		t.Fatal(err)
@@ -543,5 +549,32 @@ func TestDesligarEsperaAAcaoEmAndamento(t *testing.T) {
 		d.done <- err // pro stop do Cleanup
 	case <-time.After(3 * time.Second):
 		t.Fatal("o Serve nao voltou depois da acao")
+	}
+}
+
+// o MCP fica aberto entre as atualizacoes do cais: com SetReconnect, a
+// chamada depois do reinicio do daemon abre outra conexao
+func TestReconectaDepoisQueODaemonReinicia(t *testing.T) {
+	d := startDaemon(t, okStatus)
+	c := dial(t, d.path)
+	c.SetReconnect(true)
+	if _, err := c.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	d.stop()
+	waitUntil(t, func() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.closed })
+	// o daemon ainda fora do ar: o erro diz pra tentar de novo
+	_, err := c.Snapshot(context.Background())
+	if !errors.Is(err, ErrDisconnected) || !strings.Contains(err.Error(), "tente de novo") {
+		t.Fatalf("daemon fora do ar: %v", err)
+	}
+
+	startDaemonAt(t, d.path, core.Deps{CheckDocker: okStatus})
+	if _, err := c.Snapshot(context.Background()); err != nil {
+		t.Fatalf("depois do reinicio: %v", err)
+	}
+	if _, err := c.CheckEnvironment(context.Background()); err != nil {
+		t.Fatalf("segunda chamada na conexao nova: %v", err)
 	}
 }

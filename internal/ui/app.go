@@ -5,6 +5,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -37,7 +38,15 @@ var helps = map[int]string{
 // App e a TUI inteira. Nada e desenhado ate Run ser chamado.
 type App struct {
 	api core.API
+	// Ready diz se o daemon voltou (nil: o Reconectar nao aparece). Quem
+	// abre a TUI pelo socket passa uma conexao de teste.
+	Ready func() error
 }
+
+// ErrReconnect e o fim do Run quando o usuario pediu o Reconectar e o
+// daemon ja respondeu: quem chamou abre a TUI de novo (o cais se reabre no
+// binario do disco, a versao nova depois de uma atualizacao).
+var ErrReconnect = errors.New("reconectar")
 
 // New monta a interface sobre qualquer core.API (local ou rpc.Client).
 func New(api core.API) *App { return &App{api: api} }
@@ -52,20 +61,31 @@ func (a *App) Run() error {
 	defer unsubscribe()
 
 	m := newModel(a.api, states)
+	m.ready = a.Ready
 	m.splashUntil = time.Now().Add(splashFor)
 	defer m.zones.Close()
-	_, err = tea.NewProgram(m).Run()
-	return err
+	if _, err = tea.NewProgram(m).Run(); err != nil {
+		return err
+	}
+	if m.reconnect {
+		return ErrReconnect
+	}
+	return nil
 }
 
 type model struct {
-	api    core.API
-	zones  *zone.Manager
-	th     theme
-	w, h   int
-	tab    int
-	state  core.State
-	states <-chan core.State
+	// ready e o Reconectar (App.Ready); reconnect, o pedido aceito, e
+	// reconnectErr, o daemon que ainda nao voltou
+	ready        func() error
+	reconnect    bool
+	reconnectErr string
+	api          core.API
+	zones        *zone.Manager
+	th           theme
+	w, h         int
+	tab          int
+	state        core.State
+	states       <-chan core.State
 	// a conexao com o daemon caiu: nada na tela e confiavel, so sair
 	disconnected bool
 	// Atualizar do dashboard: armado (falta confirmar), a versao pedida
@@ -419,6 +439,9 @@ func (m *model) click(msg tea.MouseMsg) tea.Cmd {
 		return tea.Quit
 	}
 	if m.disconnected {
+		if m.zones.Get("reconnect").InBounds(msg) {
+			return m.tryReconnect()
+		}
 		return nil
 	}
 	for i, t := range tabs {
@@ -445,7 +468,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 	}
 	if m.disconnected {
-		if k == "enter" || k == "q" {
+		switch {
+		case (k == "enter" || k == "r") && m.ready != nil:
+			return m.tryReconnect()
+		case k == "enter" || k == "q":
 			return tea.Quit
 		}
 		return nil
@@ -577,22 +603,42 @@ func (m *model) viewVersion() string {
 }
 
 // viewDisconnected troca a tela inteira por um aviso: sem o daemon nada do
-// que estava na tela e confiavel, entao nao deixa o usuario seguir.
+// que estava na tela e confiavel, entao nao deixa o usuario seguir. O
+// Reconectar abre a TUI de novo quando o daemon voltar.
 func (m *model) viewDisconnected() string {
+	color, title, body := m.th.danger, "A conexao com o daemon do cais caiu.", "Veja: systemctl status cais"
 	if m.updateTo != "" {
-		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.th.ok).
-			Padding(1, 4).Align(lipgloss.Center).Render(
-			m.th.fg(m.th.ok).Bold(true).Render("Atualizando o cais pra "+m.updateTo+".") + "\n\n" +
-				"O daemon reiniciou na versao nova (os apps continuam no ar).\nAbra o cais de novo em alguns segundos: ssh cais@vps\n\n" +
-				m.zones.Mark("quit", m.th.dangerPill().Render("Sair")))
-		return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, box)
+		color, title, body = m.th.ok, "Atualizando o cais pra "+m.updateTo+".",
+			"O daemon reiniciou na versao nova (os apps continuam no ar)."
 	}
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.th.danger).
+	buttons := m.zones.Mark("quit", m.th.dangerPill().Render("Sair"))
+	if m.ready != nil {
+		body += "\nReconecte quando ele voltar: a tela abre de novo, ja na versao do disco."
+		buttons = m.zones.Mark("reconnect", m.th.button("Reconectar", btnNormal, true)) + "   " + buttons
+	} else {
+		body += "\nAbra o cais de novo em alguns segundos: ssh cais@vps"
+	}
+	if m.reconnectErr != "" {
+		body += "\n\n" + m.th.fg(m.th.warn).Render(m.reconnectErr)
+	}
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).
 		Padding(1, 4).Align(lipgloss.Center).Render(
-		m.th.fg(m.th.danger).Bold(true).Render("A conexao com o daemon do cais caiu.") + "\n\n" +
-			"Veja: systemctl status cais\ne abra o cais de novo.\n\n" +
-			m.zones.Mark("quit", m.th.dangerPill().Render("Sair")))
+		m.th.fg(color).Bold(true).Render(title) + "\n\n" + body + "\n\n" + buttons)
 	return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, box)
+}
+
+// tryReconnect confere se o daemon voltou: se sim, fecha a TUI pedindo a
+// reabertura (ErrReconnect); se nao, diz pra esperar.
+func (m *model) tryReconnect() tea.Cmd {
+	if m.ready == nil {
+		return nil
+	}
+	if err := m.ready(); err != nil {
+		m.reconnectErr = "O daemon ainda nao voltou (reiniciando): tente de novo em alguns segundos."
+		return nil
+	}
+	m.reconnect = true
+	return tea.Quit
 }
 
 func firstLine(s string) string {
