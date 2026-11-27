@@ -24,6 +24,9 @@ type SSHKey struct {
 	Type        string `json:"type"`
 	Comment     string `json:"comment,omitempty"`
 	Fingerprint string `json:"fingerprint"` // SHA256:..., como o ssh-keygen -l
+	// Key e a linha da chave publica (sem as opcoes do authorized_keys):
+	// publica, serve pra dar outro acesso a mesma chave.
+	Key string `json:"key,omitempty"`
 	// Users sao as contas com a chave (root, os admins, cais).
 	Users []string `json:"users"`
 }
@@ -59,6 +62,9 @@ var keyTypes = []string{"ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-
 // devolve a linha limpa e a chave.
 func ParseKey(s string) (string, SSHKey, error) {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", SSHKey{}, errors.New("cole a chave publica da pessoa (a linha do ~/.ssh/id_ed25519.pub)")
+	}
 	if strings.Contains(s, "PRIVATE KEY") {
 		return "", SSHKey{}, errors.New("isso e a chave PRIVADA: nunca passe ela pra ninguem. Peca a publica (o arquivo .pub, ex: ~/.ssh/id_ed25519.pub)")
 	}
@@ -74,9 +80,10 @@ func ParseKey(s string) (string, SSHKey, error) {
 		return "", SSHKey{}, errors.New("chave publica incompleta ou quebrada: copie a linha inteira do .pub")
 	}
 	sum := sha256.Sum256(blob)
+	line := strings.Join(f, " ")
 	k := SSHKey{Type: f[0], Comment: strings.Join(f[2:], " "),
-		Fingerprint: "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])}
-	return strings.Join(f, " "), k, nil
+		Fingerprint: "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]), Key: line}
+	return line, k, nil
 }
 
 // accessUsers sao as contas cujas chaves entram (ou sao copiadas): root, os

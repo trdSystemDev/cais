@@ -662,6 +662,20 @@ func TestSetupAcessos(t *testing.T) {
 		t.Fatalf("tui: %+v, campo %q", testVPS.added, m.setup.acc.key.Value())
 	}
 
+	// o campo vazio pede a chave; o Usar poe a do joao no campo (pra dar
+	// admin a quem ja entra na TUI) e leva pro Admin
+	m.setup.acc.user.SetValue("joao")
+	click(t, m, "accAddAdmin")
+	waitFor(t, m, "cole a chave publica da pessoa")
+	_, kj, _ := host.ParseKey(joao)
+	click(t, m, "akuse:"+kj.Fingerprint)
+	waitFor(t, m, "Chave de joao@pc no campo")
+	if m.setup.acc.key.Value() != joao || m.setup.items[m.setup.focus].id != "accUser" {
+		t.Fatalf("usar: %q, foco %q", m.setup.acc.key.Value(), m.setup.items[m.setup.focus].id)
+	}
+	m.setup.acc.key.SetValue("")
+	m.setup.acc.user.SetValue("")
+
 	// admin: senhas diferentes nao vao
 	const maria = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHnD6ePWgnF2tO2Tu7NfQ8cFTaPhrYm2pXkF0hm8iEh3 maria@pc"
 	m.setup.acc.key.SetValue(maria)

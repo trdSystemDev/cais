@@ -128,3 +128,12 @@ func TestAcessos(t *testing.T) {
 		t.Errorf("tirou o ultimo admin: %v", err)
 	}
 }
+
+func TestParseKeyVazia(t *testing.T) {
+	if _, _, err := ParseKey("  "); err == nil || !strings.Contains(err.Error(), "cole a chave publica") {
+		t.Errorf("%v", err)
+	}
+	if _, k, _ := ParseKey(keyMaria + "  "); k.Key != keyMaria {
+		t.Errorf("Key: %q", k.Key)
+	}
+}

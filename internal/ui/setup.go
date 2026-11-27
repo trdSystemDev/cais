@@ -690,7 +690,7 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		}
 	case it.id == "sshClose":
 		return p.sshClose()
-	case strings.HasPrefix(it.id, "akrm:") || strings.HasPrefix(it.id, "adrm:") || it.id == "accAddTUI" || it.id == "accAddAdmin":
+	case strings.HasPrefix(it.id, "akrm:") || strings.HasPrefix(it.id, "akuse:") || strings.HasPrefix(it.id, "adrm:") || it.id == "accAddTUI" || it.id == "accAddAdmin":
 		return p.accessActivate(it.id, accArmed)
 	case it.id == "rbOnce" || it.id == "rbAuto" || it.id == "rbAutoOff" || it.id == "rbCancel":
 		return p.reboot(it.id)

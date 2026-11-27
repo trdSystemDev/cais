@@ -25,6 +25,7 @@ type (
 	}
 	accessDoneMsg struct {
 		detail string
+		added  bool // foi um Dar acesso
 		err    error
 	}
 )
@@ -65,6 +66,9 @@ func (p *setupPage) accessItems() []*item {
 		items = append(items, &item{id: id, label: label, kind: kind, input: input, section: secAcessos})
 	}
 	for _, k := range p.acc.a.Keys {
+		if k.Key != "" {
+			add("akuse:"+k.Fingerprint, "Usar", kindButton, nil)
+		}
 		add("akrm:"+k.Fingerprint, "Remover", kindButton, nil)
 	}
 	for _, ad := range p.acc.a.Admins {
@@ -98,6 +102,12 @@ func (p *setupPage) accessUpdate(msg tea.Msg) tea.Cmd {
 			p.acc.msgC, p.acc.msg = "danger", "Nao deu: "+firstLine(msg.err.Error())
 			return nil
 		}
+		// a chave sai do campo so quando deu certo (com erro, corrige e
+		// manda de novo)
+		if msg.added {
+			p.acc.key.SetValue("")
+			p.acc.user.SetValue("")
+		}
 		p.acc.msgC, p.acc.msg = "ok", msg.detail
 		return p.loadAccess()
 	}
@@ -108,12 +118,23 @@ func (p *setupPage) accessUpdate(msg tea.Msg) tea.Cmd {
 func (p *setupPage) accessActivate(id string, armed bool) tea.Cmd {
 	api := p.api
 	done := func(fn func(context.Context) (string, error)) tea.Cmd {
+		added := id == "accAddTUI" || id == "accAddAdmin"
 		return func() tea.Msg {
 			d, err := fn(context.Background())
-			return accessDoneMsg{d, err}
+			return accessDoneMsg{d, added, err}
 		}
 	}
 	switch {
+	case strings.HasPrefix(id, "akuse:"):
+		fp := strings.TrimPrefix(id, "akuse:")
+		for _, k := range p.acc.a.Keys {
+			if k.Fingerprint == fp {
+				p.acc.key.SetValue(k.Key)
+				p.acc.msgC, p.acc.msg = "ok", "Chave de "+cmpOrUI(k.Comment, k.Fingerprint)+" no campo: pra admin, preencha o Admin e a senha do sudo e clique em Dar acesso de admin."
+				return p.focusAt(p.index("accUser"))
+			}
+		}
+		return nil
 	case strings.HasPrefix(id, "akrm:") || strings.HasPrefix(id, "adrm:"):
 		if !armed {
 			p.acc.arm = id
@@ -148,8 +169,7 @@ func (p *setupPage) accessActivate(id string, armed bool) tea.Cmd {
 				return p.focusAt(p.index("accPass2"))
 			}
 		}
-		// a chave e a senha saem dos campos na hora
-		p.acc.key.SetValue("")
+		// a senha sai dos campos na hora; a chave, quando der certo
 		p.acc.pass.SetValue("")
 		p.acc.pass2.SetValue("")
 		p.acc.msgC, p.acc.msg = "warn", "Dando acesso..."
@@ -214,7 +234,11 @@ func (p *setupPage) viewAccess(w int) string {
 				fp = fp[:19] + "…"
 			}
 			line := "  " + t.bold().Render(cmpOrUI(k.Comment, "(sem nome)")) + muted.Render("  "+k.Type+"  "+fp+"  ") +
-				whereLabel(k.Users) + "  " + chip("akrm:"+k.Fingerprint, "Remover")
+				whereLabel(k.Users) + "  "
+			if k.Key != "" {
+				line += chip("akuse:"+k.Fingerprint, "Usar") + " "
+			}
+			line += chip("akrm:"+k.Fingerprint, "Remover")
 			rows = append(rows, wrap.Render(line))
 		}
 		rows = append(rows, "", t.bold().Render("Admins")+muted.Render("  usuario proprio com shell e sudo; entram tambem na TUI"))
