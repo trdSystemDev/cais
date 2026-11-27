@@ -457,6 +457,17 @@ func dockerLogsLimited(cfg map[string]any) bool {
 	return opts["max-size"] != nil
 }
 
+// poolDetail abre o detalhe do item do Docker quando falta o pool de redes:
+// o Corrigir entao reinicia o Docker (FixRestartsDocker).
+const poolDetail = "pool de redes"
+
+// FixRestartsDocker diz que o Corrigir do item reinicia o Docker (o pool de
+// redes so vale assim): os containers ficam no ar com o live-restore, mas
+// um build em andamento cai.
+func FixRestartsDocker(it Item) bool {
+	return it.ID == "docker-logs" && strings.HasPrefix(it.Detail, poolDetail)
+}
+
 func checkDockerLogs(ctx context.Context, sys System) Item {
 	it := Item{ID: "docker-logs", Title: "Docker (logs, atualizacao e redes)", Fix: HardenFix}
 	if _, err := sys.Run(ctx, "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
@@ -477,10 +488,10 @@ func checkDockerLogs(ctx context.Context, sys System) Item {
 	}
 	switch {
 	case cfg["default-address-pools"] == nil:
-		it.Detail = "pool de redes padrao do Docker: cabem ~31 redes e cada app cria a dele; com uns 25 apps nao sobe mais nada " +
+		it.Detail = poolDetail + " padrao do Docker: cabem ~31 redes e cada app cria a dele; com uns 25 apps nao sobe mais nada " +
 			"(\"could not find an available, non-overlapping IPv4 address pool\")"
 	case !addressPoolsOn(ctx, sys):
-		it.Detail = "pool de redes maior no daemon.json, mas o Docker ainda nao reiniciou com ele"
+		it.Detail = poolDetail + " maior no daemon.json, mas o Docker ainda nao reiniciou com ele"
 	case dockerSwarm(ctx, sys):
 		it.OK, it.Detail = true, "logs com rotacao; redes pra ate 512 apps (sem o live-restore: o swarm esta ligado)"
 	case !liveRestoreOn(ctx, sys):

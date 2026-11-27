@@ -92,6 +92,8 @@ Cada passo confere antes e so muda o que falta: rodar de novo e seguro.
      do provedor (10.x) e do Tailscale. Um pool ja configurado fica. So vale
      reiniciando o Docker: com o `live-restore` no ar o passo reinicia (os
      containers ficam); sem ele (swarm) fica gravado pro proximo reinicio.
+     O Corrigir do item Docker (Setup > Seguranca) faz o mesmo e, quando vai
+     reiniciar o Docker, pergunta antes: um deploy em build naquela hora cai.
 2. **Sistema atualizado**: `apt-get update` e `full-upgrade`; instala `sudo`,
    `ufw`, `fail2ban` e `unattended-upgrades`. A TUI mostra quantos pacotes
    ja foram instalados e avisa quando o Docker esta na lista.

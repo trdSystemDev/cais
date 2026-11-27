@@ -694,9 +694,9 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		return p.accessActivate(it.id, accArmed)
 	case it.id == "rbOnce" || it.id == "rbAuto" || it.id == "rbAutoOff" || it.id == "rbCancel":
 		return p.reboot(it.id)
-	case confirmFix[it.id] != "" && !armed:
+	case p.confirmFixText(it.id) != "" && !armed:
 		p.fixArm = it.id
-		p.setStatus("warn", confirmFix[it.id])
+		p.setStatus("warn", p.confirmFixText(it.id))
 		return nil
 	case it.id == "save":
 		return p.save()
@@ -1187,6 +1187,22 @@ func (p *setupPage) scrolled(content string, h int) string {
 		visible[len(visible)-1] = muted.Render("  ↓ mais abaixo")
 	}
 	return head + "\n" + strings.Join(visible, "\n")
+}
+
+// confirmFixText e a pergunta antes do Corrigir, ou vazio se ele nao
+// pergunta. O do Docker so pergunta quando vai reiniciar o Docker (pool de
+// redes): um build em andamento cai.
+func (p *setupPage) confirmFixText(id string) string {
+	if t := confirmFix[id]; t != "" {
+		return t
+	}
+	for _, it := range p.env.Security {
+		if "fix:"+it.ID == id && host.FixRestartsDocker(it) {
+			return "Aumentar as redes do Docker? Ele reinicia: os containers ficam no ar (live-restore), mas um deploy em build agora falha. " +
+				"Aperte Corrigir de novo pra aplicar."
+		}
+	}
+	return ""
 }
 
 // confirmFix sao os Corrigir que perguntam antes (o que o segundo aperto

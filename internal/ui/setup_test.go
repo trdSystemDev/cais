@@ -710,3 +710,20 @@ func TestSetupAcessos(t *testing.T) {
 		t.Errorf("tirados: %q", testVPS.removed)
 	}
 }
+
+// O Corrigir do Docker so pergunta quando vai reiniciar o Docker (pool de
+// redes): so o limite dos logs nao derruba nada e corrige direto.
+func TestCorrigirDockerPerguntaAntesDeReiniciar(t *testing.T) {
+	p := &setupPage{}
+	p.env.Security = []host.Item{{ID: "docker-logs", Detail: "logs sem limite: um container falando muito enche o disco"}}
+	if got := p.confirmFixText("fix:docker-logs"); got != "" {
+		t.Errorf("so os logs perguntou: %q", got)
+	}
+	p.env.Security[0].Detail = "pool de redes padrao do Docker: cabem ~31 redes"
+	if got := p.confirmFixText("fix:docker-logs"); !strings.Contains(got, "Ele reinicia") {
+		t.Errorf("pool sem pergunta: %q", got)
+	}
+	if got := p.confirmFixText("fix:firewall"); got != "" {
+		t.Errorf("firewall perguntou: %q", got)
+	}
+}
