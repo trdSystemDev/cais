@@ -153,6 +153,10 @@ func readUFW(ctx context.Context, sys System) ufwStatus {
 	if err != nil {
 		return ufwStatus{Unavailable: firstLine(err)}
 	}
+	return parseUFW(out)
+}
+
+func parseUFW(out string) ufwStatus {
 	var s ufwStatus
 	rules := false
 	for _, l := range strings.Split(out, "\n") {
@@ -169,7 +173,13 @@ func readUFW(ctx context.Context, sys System) ufwStatus {
 			if i < 0 {
 				continue
 			}
-			to := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(l[:i]), "(v6)"))
+			// o verbose mostra o perfil de app junto das portas
+			// ("80,443/tcp (Nginx Full)", "80,443/tcp (Nginx Full (v6))") e
+			// o (v6) no meio nas regras de interface ("22/tcp (v6) on tailscale0")
+			to := strings.Join(strings.Fields(strings.ReplaceAll(l[:i], "(v6)", "")), " ")
+			if j := strings.Index(to, " ("); j > 0 && strings.Contains(to[:j], "/") && strings.HasSuffix(to, ")") {
+				to = to[:j]
+			}
 			if !slices.Contains(s.Allowed, to) {
 				s.Allowed = append(s.Allowed, to)
 			}

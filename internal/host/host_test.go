@@ -457,6 +457,28 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+// o verbose de uma VPS com o perfil do nginx: o nome do perfil nao e porta
+func TestUFWPerfilDeApp(t *testing.T) {
+	s := parseUFW(`Status: active
+Default: deny (incoming), allow (outgoing), disabled (routed)
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW IN    Anywhere
+80,443/tcp (Nginx Full)    ALLOW IN    Anywhere
+22/tcp on tailscale0       ALLOW IN    Anywhere
+22/tcp (v6)                ALLOW IN    Anywhere (v6)
+80,443/tcp (Nginx Full (v6)) ALLOW IN    Anywhere (v6)
+22/tcp (v6) on tailscale0  ALLOW IN    Anywhere (v6)
+`)
+	if want := []string{"22/tcp", "80,443/tcp", "22/tcp on tailscale0"}; !slices.Equal(s.Allowed, want) {
+		t.Errorf("%q", s.Allowed)
+	}
+	if extra := s.extraRules(); len(extra) > 0 {
+		t.Errorf("%v", extra)
+	}
+}
+
 func TestUFWRegrasExtras(t *testing.T) {
 	s := ufwStatus{Allowed: []string{"OpenSSH", "22", "80/tcp", "443", "443/udp", "8080/tcp", "80,443/tcp", "3000:3010/tcp"}}
 	if got := s.extraRules(); !slices.Equal(got, []string{"8080/tcp", "3000:3010/tcp"}) {
