@@ -343,7 +343,7 @@ func TestSetupSubAbasPeloTeclado(t *testing.T) {
 	key := func(code rune) { m.Update(tea.KeyPressMsg{Code: code}) }
 	// o GitHub App fica no Geral; avisos e backups nas sub-abas deles
 	waitFor(t, m, "GitHub App")
-	if s := screen(m); strings.Contains(s, "Chave da Brevo") || strings.Contains(s, "OAuth client") || strings.Contains(s, "Acesso") {
+	if s := screen(m); strings.Contains(s, "Chave da Brevo") || strings.Contains(s, "OAuth client") || strings.Contains(s, "Dar acesso") {
 		t.Fatalf("a sub-aba Geral mostra outras secoes:\n%s", s)
 	}
 	key(tea.KeyRight)
@@ -370,6 +370,8 @@ func TestSetupSubAbasPeloTeclado(t *testing.T) {
 	waitFor(t, m, "1 · Google Drive")
 	key(tea.KeyRight)
 	waitFor(t, m, "Checar de novo")
+	key(tea.KeyRight)
+	waitFor(t, m, "Dar acesso de admin")
 	key(tea.KeyRight)
 	waitFor(t, m, "GitHub App")
 	press(t, m, "1")
@@ -631,5 +633,62 @@ func TestSetupPrepararLinhaDoTempo(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("falta %q:\n%s", want, got)
 		}
+	}
+}
+
+// os Acessos: lista quem entra, da acesso so a TUI ou como admin (a senha
+// confere e sai do campo) e tira com dois apertos
+func TestSetupAcessos(t *testing.T) {
+	m, _ := openSetup(t)
+	click(t, m, "setup-sec:Acessos")
+	waitFor(t, m, "patrick@note")
+	s := screen(m)
+	for _, want := range []string{"root · admin deploy · TUI", "deploy  1 chave(s)", "Dar acesso a TUI", "Dar acesso de admin"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("falta %q:\n%s", want, s)
+		}
+	}
+
+	// chave privada nao vai
+	m.setup.acc.key.SetValue("-----BEGIN OPENSSH PRIVATE KEY-----")
+	click(t, m, "accAddTUI")
+	waitFor(t, m, "isso e a chave PRIVADA")
+	const joao = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBk4wXnWdS7nV8jYqE3cT2oK9pL5mR1hU6aZ0xF4gQ7e joao@pc"
+	m.setup.acc.key.SetValue(joao)
+	click(t, m, "accAddTUI")
+	waitFor(t, m, "joao@pc")
+	waitFor(t, m, "acesso dado")
+	if len(testVPS.added) != 1 || testVPS.added[0].Admin != "" || m.setup.acc.key.Value() != "" {
+		t.Fatalf("tui: %+v, campo %q", testVPS.added, m.setup.acc.key.Value())
+	}
+
+	// admin: senhas diferentes nao vao
+	const maria = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHnD6ePWgnF2tO2Tu7NfQ8cFTaPhrYm2pXkF0hm8iEh3 maria@pc"
+	m.setup.acc.key.SetValue(maria)
+	m.setup.acc.user.SetValue("maria")
+	m.setup.acc.pass.SetValue("s3nha-forte")
+	m.setup.acc.pass2.SetValue("outra")
+	click(t, m, "accAddAdmin")
+	waitFor(t, m, "As senhas nao conferem.")
+	m.setup.acc.pass2.SetValue("s3nha-forte")
+	click(t, m, "accAddAdmin")
+	waitFor(t, m, "maria  1 chave(s)")
+	if r := testVPS.added[1]; r.Admin != "maria" || r.Password != "s3nha-forte" || m.setup.acc.pass.Value() != "" {
+		t.Fatalf("admin: %+v", r)
+	}
+
+	// tirar: o primeiro aperto so pergunta
+	click(t, m, "akrm:SHA256:patrick")
+	waitFor(t, m, "Aperte de novo pra confirmar")
+	if len(testVPS.removed) > 0 {
+		t.Fatal("tirou no primeiro aperto")
+	}
+	click(t, m, "akrm:SHA256:patrick")
+	waitFor(t, m, "chave tirada")
+	click(t, m, "adrm:maria")
+	click(t, m, "adrm:maria")
+	waitFor(t, m, "admin tirado")
+	if !slices.Equal(testVPS.removed, []string{"SHA256:patrick", "admin:maria"}) {
+		t.Errorf("tirados: %q", testVPS.removed)
 	}
 }

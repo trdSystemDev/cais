@@ -43,6 +43,12 @@ type Deps struct {
 	SSHTailnetOnly   func() bool
 	// Reinicio da VPS: o pendente e o agendado, agendar (no lugar do que
 	// houver), desfazer e o horario automatico (vazio desliga)
+	// Acessos por SSH: quem entra, dar acesso a uma chave, tirar uma chave
+	// de todo lugar e tirar um admin
+	ListAccess       func(context.Context) (host.Access, error)
+	AddAccess        func(context.Context, host.AccessRequest) (string, error)
+	RemoveKey        func(ctx context.Context, fingerprint string) (string, error)
+	RemoveAdmin      func(ctx context.Context, user string) (string, error)
 	RebootStatus     func(context.Context) host.Reboot
 	ScheduleReboot   func(context.Context, time.Time) error
 	CancelReboot     func(context.Context) error
@@ -238,6 +244,20 @@ func New(d Deps) *Core {
 	}
 	if d.SSHTailnetOnly == nil {
 		d.SSHTailnetOnly = func() bool { return host.SSHTailnetOnly(context.Background(), host.Local()) }
+	}
+	if d.ListAccess == nil {
+		d.ListAccess = func(ctx context.Context) (host.Access, error) { return host.ListAccess(ctx, host.Local()) }
+	}
+	if d.AddAccess == nil {
+		d.AddAccess = func(ctx context.Context, r host.AccessRequest) (string, error) {
+			return host.AddAccess(ctx, host.Local(), r)
+		}
+	}
+	if d.RemoveKey == nil {
+		d.RemoveKey = func(ctx context.Context, fp string) (string, error) { return host.RemoveKey(ctx, host.Local(), fp) }
+	}
+	if d.RemoveAdmin == nil {
+		d.RemoveAdmin = func(ctx context.Context, u string) (string, error) { return host.RemoveAdmin(ctx, host.Local(), u) }
 	}
 	if d.RebootStatus == nil {
 		d.RebootStatus = func(ctx context.Context) host.Reboot { return host.RebootStatus(ctx, host.Local()) }

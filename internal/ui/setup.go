@@ -40,6 +40,7 @@ var setupSections = []struct{ title, hint string }{
 	{"Backups", ""},
 	{"Seguranca", "SSH, firewall, fail2ban, atualizacoes e portas abertas desta VPS; o daemon confere de hora em hora. " +
 		"Numa VPS nova, o Preparar VPS (abaixo) arruma tudo de uma vez."},
+	{"Acessos", "Quem entra nesta VPS pelo SSH (so por chave): de acesso a cada pessoa com a chave dela e tire quando ela sair."},
 }
 
 const (
@@ -47,6 +48,7 @@ const (
 	secAvisos
 	secBackups
 	secSeguranca
+	secAcessos
 )
 
 const (
@@ -111,6 +113,7 @@ type setupPage struct {
 	secSig      string // o que muda os itens da Seguranca
 	// Reinicio: o horario (agendar uma vez ou o automatico) e a mensagem
 	// da secao
+	acc    accessState // a sub-aba Acessos
 	rbTime *textinput.Model
 	rbMsg  string
 	rbMsgC string
@@ -215,6 +218,7 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	p.hUser = newInput("ex: deploy", false)
 	p.hPass = newInput("pelo menos 8 caracteres", true)
 	p.hPass2 = newInput("a mesma senha", true)
+	p.newAccessInputs(newInput)
 	p.rbTime = newInput("01:00", false)
 	p.rbTime.SetWidth(8)
 	p.rbTime.SetValue("01:00")
@@ -251,7 +255,7 @@ func (p *setupPage) rebuild() {
 	}
 	items = append(items, &item{id: "to-add", label: "+ Novo e-mail", kind: kindButton, section: secAvisos})
 	items = append(items, p.tail...)
-	p.items = append(items, p.securityItems()...)
+	p.items = append(append(items, p.securityItems()...), p.accessItems()...)
 	p.focus = 0
 	for i, it := range p.items {
 		if it.id == cur {
@@ -276,7 +280,7 @@ func (p *setupPage) get(id string) *item {
 
 func (p *setupPage) setTheme(th theme) {
 	p.th = th
-	for _, ti := range []*textinput.Model{p.hUser, p.hPass, p.hPass2, p.rbTime} {
+	for _, ti := range []*textinput.Model{p.hUser, p.hPass, p.hPass2, p.rbTime, p.acc.key, p.acc.user, p.acc.pass, p.acc.pass2} {
 		if ti != nil {
 			th.styleInput(ti)
 		}
@@ -397,6 +401,8 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		}
 	case rebootMsg:
 		p.rebootDone(msg)
+	case accessLoadedMsg, accessDoneMsg:
+		return p.accessUpdate(msg)
 	case sshCloseMsg:
 		if msg.err != nil {
 			p.tsMsgC, p.tsMsg = "danger", "Nao fechou: "+firstLine(msg.err.Error())
@@ -664,6 +670,8 @@ func (p *setupPage) move(d int) tea.Cmd {
 func (p *setupPage) activate(it *item) tea.Cmd {
 	armed := p.fixArm == it.id
 	p.fixArm = ""
+	accArmed := p.acc.arm == it.id
+	p.acc.arm = ""
 	if it.id != "sshClose" && p.sshCloseArm {
 		p.sshCloseArm = false
 		p.tsMsg = ""
@@ -682,6 +690,8 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		}
 	case it.id == "sshClose":
 		return p.sshClose()
+	case strings.HasPrefix(it.id, "akrm:") || strings.HasPrefix(it.id, "adrm:") || it.id == "accAddTUI" || it.id == "accAddAdmin":
+		return p.accessActivate(it.id, accArmed)
 	case it.id == "rbOnce" || it.id == "rbAuto" || it.id == "rbAutoOff" || it.id == "rbCancel":
 		return p.reboot(it.id)
 	case confirmFix[it.id] != "" && !armed:
@@ -783,6 +793,9 @@ func (m *model) setSetupSec(i int) tea.Cmd {
 	if i == secBackups {
 		m.bk.fill(m.state.Backup)
 		return m.backupRefreshCmd()
+	}
+	if i == secAcessos {
+		return m.setup.loadAccess()
 	}
 	return nil
 }
@@ -902,9 +915,12 @@ func (p *setupPage) view(w, h int, pills string) string {
 	wrap := lipgloss.NewStyle().Width(inner)
 	var b strings.Builder
 	b.WriteString(pills + "\n\n" + wrap.Inherit(t.fg(t.muted)).Render(setupSections[p.sec].hint) + "\n")
-	if p.sec == secSeguranca {
+	switch p.sec {
+	case secSeguranca:
 		b.WriteString(p.viewSecurity(inner))
-	} else {
+	case secAcessos:
+		b.WriteString(p.viewAccess(inner))
+	default:
 		b.WriteString("\n" + p.viewForm(inner))
 	}
 	// o status fica no rodape do painel, fora da rolagem: sempre a vista

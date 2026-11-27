@@ -161,6 +161,20 @@ func (c *Client) FixHostItem(ctx context.Context, id string) (string, error) {
 	return r.Text, err
 }
 
+func (c *Client) HostAccess(ctx context.Context) (host.Access, error) {
+	return result[host.Access](c, ctx, MethodAccess, nil)
+}
+
+func (c *Client) AddAccess(ctx context.Context, req host.AccessRequest) (string, error) {
+	r, err := result[textResult](c, ctx, MethodAccessAdd, req)
+	return r.Text, err
+}
+
+func (c *Client) RemoveAccess(ctx context.Context, req core.RemoveAccessRequest) (string, error) {
+	r, err := result[textResult](c, ctx, MethodAccessRemove, req)
+	return r.Text, err
+}
+
 func (c *Client) ScheduleReboot(ctx context.Context, at string) error {
 	return c.call(ctx, MethodRebootSchedule, rebootParams{Time: at}, nil)
 }

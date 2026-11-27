@@ -28,6 +28,8 @@ type fakeSys struct {
 	ufwDeny  bool
 	ufwRules []string
 	docker   bool
+	// contas expiradas (admin removido)
+	expired map[string]bool
 	// o Docker rodando com o live-restore; num swarm
 	liveRestore, swarm bool
 	ss                 string
@@ -142,6 +144,13 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 		f.users[last] = true
 	case cmd == "id -nG "+last:
 		return strings.Join(append([]string{last}, f.groups[last]...), " "), nil
+	case name == "gpasswd" && len(args) == 3:
+		f.groups[args[1]] = slices.DeleteFunc(f.groups[args[1]], func(g string) bool { return g == "sudo" })
+	case name == "usermod" && args[0] == "--expiredate":
+		if f.expired == nil {
+			f.expired = map[string]bool{}
+		}
+		f.expired[last] = args[1] == "1"
 	case strings.HasPrefix(cmd, "usermod -aG sudo"):
 		f.groups[last] = append(f.groups[last], "sudo")
 	case name == "passwd":

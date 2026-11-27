@@ -91,6 +91,31 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 			defer mu.Unlock()
 			return vps.sshTailnet
 		},
+		// os acessos: o deploy com a chave do patrick, nunca o
+		// authorized_keys de verdade
+		ListAccess: func(context.Context) (host.Access, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return vps.access(), nil
+		},
+		AddAccess: func(_ context.Context, r host.AccessRequest) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.added = append(vps.added, r)
+			return "acesso dado", nil
+		},
+		RemoveKey: func(_ context.Context, fp string) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.removed = append(vps.removed, fp)
+			return "chave tirada", nil
+		},
+		RemoveAdmin: func(_ context.Context, u string) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.removed = append(vps.removed, "admin:"+u)
+			return "admin tirado", nil
+		},
 		// o reinicio agendado, nunca o timer de verdade
 		RebootStatus: func(context.Context) host.Reboot {
 			mu.Lock()
@@ -818,6 +843,25 @@ type fakeVPS struct {
 	tsAuth                               string
 	user, pass                           string
 	terminal                             []string // o ultimo console aberto: container e comando
+	// acessos dados (AddAccess) e tirados (fingerprint ou admin:nome)
+	added   []host.AccessRequest
+	removed []string
+}
+
+// access sao os acessos que a aba Acessos ve: o deploy e o que foi dado.
+func (v *fakeVPS) access() host.Access {
+	a := host.Access{TUI: true, Admins: []host.Admin{{Name: "deploy", Keys: 1}},
+		Keys: []host.SSHKey{{Type: "ssh-ed25519", Comment: "patrick@note", Fingerprint: "SHA256:patrick", Users: []string{"root", "deploy", "cais"}}}}
+	for _, r := range v.added {
+		_, k, _ := host.ParseKey(r.Key)
+		k.Users = []string{"cais"}
+		if r.Admin != "" {
+			k.Users = []string{r.Admin, "cais"}
+			a.Admins = append(a.Admins, host.Admin{Name: r.Admin, Keys: 1})
+		}
+		a.Keys = append(a.Keys, k)
+	}
+	return a
 }
 
 var testVPS = &fakeVPS{}

@@ -69,6 +69,14 @@ type API interface {
 	UpdateCais(ctx context.Context, version string) (UpdateResult, error)
 	// FixHostItem corrige so um item da checagem de seguranca (os Fixable).
 	FixHostItem(ctx context.Context, id string) (string, error)
+	// HostAccess le quem entra pelo SSH (as chaves e os admins).
+	HostAccess(ctx context.Context) (host.Access, error)
+	// AddAccess da acesso a uma chave: so a TUI (ssh cais@vps) ou como
+	// admin (usuario proprio com sudo, criado se faltar).
+	AddAccess(ctx context.Context, req host.AccessRequest) (string, error)
+	// RemoveAccess tira uma chave de todo lugar ou um admin (sai do sudo e
+	// a conta expira); recusa se ninguem ficar com chave pra administrar.
+	RemoveAccess(ctx context.Context, req RemoveAccessRequest) (string, error)
 	// ScheduleReboot agenda o reinicio da VPS pra proxima vez do horario
 	// (HH:MM); vazio desfaz o agendamento.
 	ScheduleReboot(ctx context.Context, at string) error

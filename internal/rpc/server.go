@@ -15,6 +15,7 @@ import (
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/github"
+	"github.com/trdSystemDev/cais/internal/host"
 	"github.com/trdSystemDev/cais/internal/inflight"
 )
 
@@ -252,6 +253,15 @@ var handlers = map[string]handler{
 	MethodHostHarden: do(core.API.HardenHost),
 	MethodHostFix: call(func(a core.API, ctx context.Context, p hostFixParams) (textResult, error) {
 		text, err := a.FixHostItem(ctx, p.ID)
+		return textResult{Text: text}, err
+	}),
+	MethodAccess: get(core.API.HostAccess),
+	MethodAccessAdd: call(func(a core.API, ctx context.Context, p host.AccessRequest) (textResult, error) {
+		text, err := a.AddAccess(ctx, p)
+		return textResult{Text: text}, err
+	}),
+	MethodAccessRemove: call(func(a core.API, ctx context.Context, p core.RemoveAccessRequest) (textResult, error) {
+		text, err := a.RemoveAccess(ctx, p)
 		return textResult{Text: text}, err
 	}),
 	MethodRebootSchedule: do(func(a core.API, ctx context.Context, p rebootParams) error {

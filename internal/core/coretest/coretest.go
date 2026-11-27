@@ -149,6 +149,15 @@ func (f *Recorder) UpdateCais(_ context.Context, version string) (core.UpdateRes
 func (f *Recorder) FixHostItem(_ context.Context, id string) (string, error) {
 	return ret[string](f, "FixHostItem", id)
 }
+func (f *Recorder) HostAccess(context.Context) (host.Access, error) {
+	return ret[host.Access](f, "HostAccess")
+}
+func (f *Recorder) AddAccess(_ context.Context, req host.AccessRequest) (string, error) {
+	return ret[string](f, "AddAccess", req)
+}
+func (f *Recorder) RemoveAccess(_ context.Context, req core.RemoveAccessRequest) (string, error) {
+	return ret[string](f, "RemoveAccess", req)
+}
 func (f *Recorder) ScheduleReboot(_ context.Context, at string) error {
 	return only(f, "ScheduleReboot", at)
 }

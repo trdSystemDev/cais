@@ -37,6 +37,8 @@ func (e *cli) runHost(args []string) error {
 		return e.hostConfirm(args)
 	case "reboot":
 		return e.hostReboot(args)
+	case "access":
+		return e.hostAccess(args)
 	default:
 		return groupError("host", sub)
 	}
@@ -112,9 +114,9 @@ func (e *cli) hostHarden(args []string) error {
 		admin = "criar o admin " + opts.User
 	}
 	for _, l := range []string{
+		"Docker: limite nos logs e o live-restore (atualizar o Docker nao derruba os containers)",
 		"atualizar o sistema; instalar ufw, fail2ban e unattended-upgrades",
 		"atualizacoes de seguranca automaticas (sem reiniciar sozinho)",
-		"limite nos logs dos containers",
 		fmt.Sprintf("%s com sudo e %d chave(s) SSH (as do root entram)", admin, len(plan.Keys)),
 		"firewall: entram so 22 (SSH), 80 e 443 (proxy)",
 		"fail2ban no SSH",
@@ -314,4 +316,108 @@ func (e *cli) printReboot(ctx context.Context, sys host.System) {
 	} else {
 		fmt.Fprintln(e.out, "Horario automatico: desligado (ligue com sudo cais host reboot auto 01:00).")
 	}
+}
+
+// hostAccess e o cais host access: sem argumento lista quem entra; add da
+// acesso a uma chave (do arquivo, ou - pra ler da entrada), so a TUI ou
+// como admin (-admin NOME); remove tira uma chave de todo lugar (pela
+// impressao digital) ou um admin (-admin NOME).
+func (e *cli) hostAccess(args []string) error {
+	sub, args := subcommand(args)
+	fs, _ := e.newFlags("host access")
+	admin := fs.String("admin", "", "o admin (usuario proprio com sudo): add cria se faltar, remove tira")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	ctx, sys, pos := context.Background(), hostSystem(), fs.Args()
+	if sys.Geteuid() != 0 {
+		return errors.New("rode com sudo (sudo cais host access ...)")
+	}
+	usage := &usageError{errors.New("uso: cais host access [add [-admin NOME] arquivo.pub|- | remove SHA256:...|-admin NOME]")}
+	switch sub {
+	case "", "list":
+	case "add":
+		if len(pos) != 1 {
+			return usage
+		}
+		var b []byte
+		var err error
+		if pos[0] == "-" {
+			b, err = io.ReadAll(e.in)
+		} else {
+			b, err = os.ReadFile(pos[0])
+		}
+		if err != nil {
+			return err
+		}
+		req := host.AccessRequest{Key: strings.TrimSpace(string(b)), Admin: *admin}
+		if _, _, err := host.ParseKey(req.Key); err != nil {
+			return err
+		}
+		if req.Admin != "" && host.AdminNeedsPassword(ctx, sys, req.Admin) {
+			if req.Password, err = e.readNewPassword(req.Admin); err != nil {
+				return err
+			}
+		}
+		detail, err := host.AddAccess(ctx, sys, req)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(e.out, detail)
+	case "remove":
+		var detail string
+		var err error
+		switch {
+		case *admin != "" && len(pos) == 0:
+			detail, err = host.RemoveAdmin(ctx, sys, *admin)
+		case *admin == "" && len(pos) == 1:
+			detail, err = host.RemoveKey(ctx, sys, pos[0])
+		default:
+			return usage
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(e.out, detail)
+	default:
+		return groupError("host access", sub)
+	}
+	a, err := host.ListAccess(ctx, sys)
+	if err != nil {
+		return err
+	}
+	e.printAccess(a)
+	return nil
+}
+
+func (e *cli) printAccess(a host.Access) {
+	w := tabwriter.NewWriter(e.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "\nCHAVE\tIMPRESSAO DIGITAL\tENTRA COMO")
+	for _, k := range a.Keys {
+		var where []string
+		for _, u := range k.Users {
+			switch u {
+			case host.CaisUser:
+				where = append(where, "TUI (ssh cais@)")
+			case "root":
+				where = append(where, "root")
+			default:
+				where = append(where, "admin "+u)
+			}
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", cmpOrCLI(k.Comment, k.Type), k.Fingerprint, strings.Join(where, ", "))
+	}
+	w.Flush()
+	var admins []string
+	for _, ad := range a.Admins {
+		admins = append(admins, fmt.Sprintf("%s (%d chave(s))", ad.Name, ad.Keys))
+	}
+	fmt.Fprintln(e.out, "\nAdmins: "+cmpOrCLI(strings.Join(admins, ", "), "nenhum"))
+}
+
+func cmpOrCLI(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

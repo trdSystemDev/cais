@@ -160,6 +160,23 @@ O mesmo pela TUI: Setup > Seguranca > Preparar VPS. Ou ja na instalacao:
 		{name: "host confirm", usage: "host confirm", short: "do login novo do admin: mantem o SSH do harden (senao\nvolta sozinho em 5 min)", long: `
 Rode de um login novo (ssh NOME@vps, depois sudo cais host confirm): e ele
 que prova que a chave funciona. Da sessao do root, recusa.`},
+		{name: "host access", usage: "host access [add [-admin NOME] arquivo.pub|- | remove SHA256:...|-admin NOME]", short: "quem entra pelo SSH; da acesso a uma chave (so a TUI ou\nadmin) e tira", long: `
+O SSH so entra por chave: cada pessoa com a propria, e tire quando ela sair.
+  cais host access                      lista as chaves (e onde entram) e os admins
+  cais host access add joao.pub         so a TUI: ssh cais@vps (deploy, logs,
+                                        apps; sem shell)
+  cais host access add -admin maria maria.pub
+                                        admin: usuario proprio com shell e sudo
+                                        (criado se faltar; pede a senha do sudo)
+  cais host access remove SHA256:...    tira a chave de todo lugar (admins, TUI
+                                        e root)
+  cais host access remove -admin maria  tira o admin: sai do sudo, a conta
+                                        expira e as chaves so dele saem
+A chave e a PUBLICA (o .pub); "-" le da entrada (echo 'ssh-ed25519 ...' |
+sudo cais host access add -). Recusa tirar a ultima chave de admin: todo
+mundo ficaria trancado fora. Com o SSH so pela tailnet, a pessoa tambem
+precisa da VPS no Tailscale dela (Share da maquina no painel do Tailscale).
+O mesmo na TUI: Setup > Acessos.`},
 		{name: "host reboot", usage: "host reboot [HH:MM | cancel | auto HH:MM|off]", short: "agenda o reinicio da VPS (uma vez, ou sempre que uma\natualizacao pedir, num horario fixo)", long: `
 Uma atualizacao de kernel ou biblioteca so vale depois de reiniciar, e os
 apps ficam fora 1 a 2 minutos. Em vez de reiniciar na hora:

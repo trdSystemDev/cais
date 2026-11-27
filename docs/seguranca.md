@@ -167,6 +167,49 @@ proprio reinicio. Como no Corrigir, o reinicio espera os deploys e backups
 em andamento; os containers e o daemon voltam sozinhos. Evite o mesmo
 horario do backup: ele atrasa o reinicio ate terminar.
 
+## Acessos: dar e tirar o SSH de alguem
+
+Com o SSH so por chave, o `ssh-copy-id` nao funciona mais (ele entra por
+senha): quem ja e admin cadastra a chave da pessoa. Em **Setup > Acessos**:
+
+- **Chaves**: cada chave publica (pelo comentario, ex: `maria@pc`, e a
+  impressao digital) e onde ela entra: `admin <nome>`, `TUI` (o `ssh
+  cais@vps`) e `root` (que nao entra pelo SSH depois do harden, mas o harden
+  copia as chaves dele). **Remover** (dois apertos) tira a chave de todo
+  lugar, senao o proximo harden ou Corrigir a traria de volta.
+- **Admins**: os usuarios do grupo `sudo`. **Remover admin** tira do `sudo`,
+  expira a conta (o SSH recusa ate com chave) e tira as chaves so dele, dele e
+  do `cais`. A pasta `/home/<nome>` fica.
+- **Dar acesso**: cole a chave PUBLICA da pessoa (a linha do
+  `~/.ssh/id_ed25519.pub`; sem uma: `ssh-keygen -t ed25519`) e escolha:
+  - **Dar acesso a TUI**: so o `ssh cais@vps` (deploy, logs, apps; sem shell).
+    A TUI controla a VPS inteira, entao e pra quem administra os apps.
+  - **Dar acesso de admin**: um usuario proprio com shell e `sudo` (`ssh
+    maria@vps`), criado se faltar, com a senha do `sudo` (duas vezes; o SSH
+    continua so por chave). A chave entra tambem no `cais`, como a dos outros
+    admins. Um usuario por pessoa: nao compartilhe o `deploy`.
+
+O cais recusa tirar a ultima chave de admin (ou do root, se o SSH ainda
+deixa ele entrar): todo mundo ficaria trancado fora.
+
+**Com o SSH so pela tailnet**, a chave nao basta: a pessoa precisa da VPS no
+Tailscale dela. No painel do Tailscale (login.tailscale.com/admin/machines),
+menu **...** da VPS > **Share** (so esta maquina, pra quem e de fora), ou
+**Users > Invite** (a tailnet inteira, pra equipe).
+
+Pelo terminal, na VPS:
+
+```sh
+sudo cais host access                              # chaves e admins
+sudo cais host access add joao.pub                 # so a TUI
+sudo cais host access add -admin maria maria.pub   # admin (pede a senha do sudo)
+echo 'ssh-ed25519 AAAA... joao@pc' | sudo cais host access add -
+sudo cais host access remove SHA256:...            # a chave, de todo lugar
+sudo cais host access remove -admin maria          # o admin
+```
+
+Fora do MCP: a IA nao da nem tira acesso.
+
 ## Tailscale: SSH so pela VPN
 
 Com o Tailscale, o SSH (a TUI, o MCP e o admin) entra so pela sua tailnet, e

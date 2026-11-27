@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -154,5 +155,26 @@ func TestHostReboot(t *testing.T) {
 	}
 	if !strings.Contains(c.out.String(), "Horario automatico: 02:00") {
 		t.Errorf("saida: %s", c.out.String())
+	}
+}
+
+// o cais host access le a chave do arquivo (ou da entrada), recusa a
+// privada e lista o que ficou
+func TestHostAccess(t *testing.T) {
+	withVPS(t)
+	dir := t.TempDir()
+	priv := filepath.Join(dir, "id_ed25519")
+	os.WriteFile(priv, []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n"), 0o600)
+	c := newTestCLI(nil)
+	if code := c.run([]string{"host", "access", "add", priv}); code == 0 || !strings.Contains(c.errb.String(), "PRIVADA") {
+		t.Fatalf("privada: %d %s", code, c.errb.String())
+	}
+	c = newTestCLI(nil)
+	if code := c.run([]string{"host", "access", "remove"}); code != 2 {
+		t.Errorf("remove sem nada: %d %s", code, c.errb.String())
+	}
+	c = newTestCLI(nil)
+	if code := c.run([]string{"host", "access"}); code != 0 || !strings.Contains(c.out.String(), "IMPRESSAO DIGITAL") {
+		t.Errorf("lista: %d %s %s", code, c.out.String(), c.errb.String())
 	}
 }
