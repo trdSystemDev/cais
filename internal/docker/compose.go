@@ -69,7 +69,16 @@ type Container struct {
 	// URLs sao os enderecos publicados pelo Traefik (Host das regras dos
 	// routers, com traefik.enable=true), ja com as variaveis resolvidas.
 	URLs []string `json:"urls,omitempty"`
+	// Job: outro service espera este terminar (depends_on com
+	// service_completed_successfully), ou seja, e tarefa e nao servico.
+	Job bool `json:"job,omitempty"`
 }
+
+// Done diz que o container e uma tarefa que ja terminou bem (migracao,
+// download inicial): outro service do projeto espera ele com
+// service_completed_successfully e ele saiu com 0. Nao conta como fora do
+// ar. Saida 0 sozinha nao basta: um app parado pelo Parar tambem sai com 0.
+func (c Container) Done() bool { return c.Job && c.State == "exited" && c.ExitCode == 0 }
 
 // ComposePS lista os containers do projeto do arquivo, inclusive parados.
 func ComposePS(ctx context.Context, file string) ([]Container, error) {
@@ -104,10 +113,20 @@ func parsePS(out string) ([]Container, error) {
 			rows = append(rows, r)
 		}
 	}
+	// tarefas: os services que outro espera com service_completed_successfully
+	// (a label do compose: "svc:condicao:restart,svc:condicao:restart")
+	jobs := map[string]bool{}
+	for _, r := range rows {
+		for _, dep := range strings.Split(parseLabels(r.Labels)["com.docker.compose.depends_on"], ",") {
+			if svc, rest, ok := strings.Cut(dep, ":"); ok && strings.HasPrefix(rest, "service_completed_successfully") {
+				jobs[svc] = true
+			}
+		}
+	}
 	cs := make([]Container, 0, len(rows))
 	for _, r := range rows {
 		cs = append(cs, Container{Name: r.Name, Service: r.Service, Image: r.Image, State: r.State,
-			Health: r.Health, Status: r.Status, ExitCode: r.ExitCode, URLs: traefikURLs(r.Labels)})
+			Health: r.Health, Status: r.Status, ExitCode: r.ExitCode, URLs: traefikURLs(r.Labels), Job: jobs[r.Service]})
 	}
 	return cs, nil
 }

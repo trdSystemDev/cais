@@ -84,6 +84,14 @@ Cada passo confere antes e so muda o que falta: rodar de novo e seguro.
      `systemctl reload docker`, sem parar nada. Num salto grande de versao
      do Docker os containers ainda podem reiniciar; com o swarm ligado ele
      nao vale e fica de fora.
+   - **pool de redes maior** (`default-address-pools`: `172.17.0.0/12` em
+     /20 e `192.168.0.0/16` em /24, 512 redes). O padrao do Docker da ~31
+     redes e cada app cria a dele (a `default` do compose), entao com uns 25
+     apps nada mais sobe: `could not find an available, non-overlapping
+     IPv4 address pool`. As faixas sao as do padrao, longe da rede privada
+     do provedor (10.x) e do Tailscale. Um pool ja configurado fica. So vale
+     reiniciando o Docker: com o `live-restore` no ar o passo reinicia (os
+     containers ficam); sem ele (swarm) fica gravado pro proximo reinicio.
 2. **Sistema atualizado**: `apt-get update` e `full-upgrade`; instala `sudo`,
    `ufw`, `fail2ban` e `unattended-upgrades`. A TUI mostra quantos pacotes
    ja foram instalados e avisa quando o Docker esta na lista.

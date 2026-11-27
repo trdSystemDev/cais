@@ -458,7 +458,7 @@ func dockerLogsLimited(cfg map[string]any) bool {
 }
 
 func checkDockerLogs(ctx context.Context, sys System) Item {
-	it := Item{ID: "docker-logs", Title: "Docker (logs e atualizacao)", Fix: HardenFix}
+	it := Item{ID: "docker-logs", Title: "Docker (logs, atualizacao e redes)", Fix: HardenFix}
 	if _, err := sys.Run(ctx, "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
 		it.Detail = "Docker nao responde"
 		it.Fix = "instale com o install.sh do cais (instala o Docker no Ubuntu e no Debian)"
@@ -476,12 +476,17 @@ func checkDockerLogs(ctx context.Context, sys System) Item {
 		return it
 	}
 	switch {
+	case cfg["default-address-pools"] == nil:
+		it.Detail = "pool de redes padrao do Docker: cabem ~31 redes e cada app cria a dele; com uns 25 apps nao sobe mais nada " +
+			"(\"could not find an available, non-overlapping IPv4 address pool\")"
+	case !addressPoolsOn(ctx, sys):
+		it.Detail = "pool de redes maior no daemon.json, mas o Docker ainda nao reiniciou com ele"
 	case dockerSwarm(ctx, sys):
-		it.OK, it.Detail = true, "logs com rotacao (sem o live-restore: o swarm esta ligado)"
+		it.OK, it.Detail = true, "logs com rotacao; redes pra ate 512 apps (sem o live-restore: o swarm esta ligado)"
 	case !liveRestoreOn(ctx, sys):
 		it.Detail = "logs com rotacao, mas sem o live-restore: atualizar o Docker (apt) derruba e reinicia todos os containers"
 	default:
-		it.OK, it.Detail = true, "logs com rotacao; live-restore (atualizar o Docker nao derruba os containers)"
+		it.OK, it.Detail = true, "logs com rotacao; live-restore (atualizar o Docker nao derruba os containers); redes pra ate 512 apps"
 	}
 	return it
 }

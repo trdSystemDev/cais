@@ -32,8 +32,10 @@ type fakeSys struct {
 	expired map[string]bool
 	// o Docker rodando com o live-restore; num swarm
 	liveRestore, swarm bool
-	ss                 string
-	ps                 string
+	// o Docker rodando com o pool de redes do daemon.json
+	pools bool
+	ss    string
+	ps    string
 	// tsState e o BackendState do Tailscale ("" = nao instalado); tsAuth, o
 	// link de login enquanto espera
 	tsState  string
@@ -232,6 +234,14 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 		return map[bool]string{true: "true", false: "false"}[f.liveRestore], nil
 	case cmd == "docker info --format {{.Swarm.LocalNodeState}}":
 		return map[bool]string{true: "active", false: "inactive"}[f.swarm], nil
+	case cmd == "docker info --format {{json .DefaultAddressPools}}":
+		if f.pools {
+			return `[{"Base":"172.17.0.0/12","Size":20}]`, nil
+		}
+		return "null", nil
+	case cmd == "systemctl restart docker":
+		f.pools = strings.Contains(f.files[dockerDaemonPath], "default-address-pools")
+		f.liveRestore = strings.Contains(f.files[dockerDaemonPath], `"live-restore": true`)
 	case cmd == "systemctl reload docker":
 		// o reload le o live-restore do daemon.json
 		f.liveRestore = strings.Contains(f.files[dockerDaemonPath], `"live-restore": true`)
@@ -867,7 +877,8 @@ func TestHardenAndamento(t *testing.T) {
 func TestHardenDockerLiveRestore(t *testing.T) {
 	ctx := context.Background()
 	f := newFake()
-	f.files[dockerDaemonPath] = `{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}`
+	f.files[dockerDaemonPath] = `{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"},"default-address-pools":[{"base":"10.9.0.0/16","size":24}]}`
+	f.pools = true
 	h := &hardener{sys: f}
 	if it := checkDockerLogs(ctx, f); it.OK || !strings.Contains(it.Detail, "sem o live-restore") {
 		t.Fatalf("antes: %+v", it)
@@ -891,11 +902,56 @@ func TestHardenDockerLiveRestore(t *testing.T) {
 
 	g := newFake()
 	g.swarm = true
+	g.files[dockerDaemonPath] = `{"default-address-pools":[{"base":"10.9.0.0/16","size":24}]}`
+	g.pools = true
 	if _, _, err := (&hardener{sys: g}).dockerLogs(ctx); err != nil || strings.Contains(g.files[dockerDaemonPath], "live-restore") {
 		t.Errorf("swarm: %v %s", err, g.files[dockerDaemonPath])
 	}
 	if it := checkDockerLogs(ctx, g); !it.OK {
 		t.Errorf("swarm: %+v", it)
+	}
+}
+
+// o pool de redes padrao (~31) acaba com uns 25 apps: o passo do Docker
+// grava um maior (mantendo um pool ja configurado) e reinicia o Docker so
+// com o live-restore no ar; sem ele, fica pro proximo reinicio
+func TestHardenDockerPoolDeRedes(t *testing.T) {
+	ctx := context.Background()
+	f := newFake()
+	f.files[dockerDaemonPath] = `{"log-driver":"local","live-restore":true}`
+	f.liveRestore = true
+	if it := checkDockerLogs(ctx, f); it.OK || !strings.Contains(it.Detail, "pool de redes padrao") {
+		t.Fatalf("antes: %+v", it)
+	}
+	h := &hardener{sys: f}
+	detail, changed, err := h.dockerLogs(ctx)
+	if err != nil || !changed || !strings.Contains(detail, "512") {
+		t.Fatalf("%q %v %v", detail, changed, err)
+	}
+	if !f.pools || !strings.Contains(f.files[dockerDaemonPath], `"base": "172.17.0.0/12"`) {
+		t.Errorf("daemon.json: %s (pools %v)", f.files[dockerDaemonPath], f.pools)
+	}
+	if it := checkDockerLogs(ctx, f); !it.OK {
+		t.Errorf("depois: %+v", it)
+	}
+	f.calls = nil
+	if _, changed, _ := h.dockerLogs(ctx); changed || slices.ContainsFunc(f.calls, func(c string) bool { return strings.Contains(c, "restart") }) {
+		t.Errorf("segunda rodada mudou: %q", f.calls)
+	}
+
+	// sem o live-restore (swarm): grava, nao reinicia, e a checagem avisa
+	g := newFake()
+	g.swarm = true
+	g.files[dockerDaemonPath] = `{"log-driver":"local"}`
+	detail, _, err = (&hardener{sys: g}).dockerLogs(ctx)
+	if err != nil || g.pools || !strings.Contains(detail, "quando o Docker reiniciar") {
+		t.Fatalf("swarm: %q %v (pools %v)", detail, err, g.pools)
+	}
+	if slices.ContainsFunc(g.calls, func(c string) bool { return strings.Contains(c, "restart docker") }) {
+		t.Error("swarm: reiniciou o Docker")
+	}
+	if it := checkDockerLogs(ctx, g); it.OK || !strings.Contains(it.Detail, "ainda nao reiniciou") {
+		t.Errorf("swarm depois: %+v", it)
 	}
 }
 

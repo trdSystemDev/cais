@@ -31,6 +31,18 @@ func TestErroGuardaOCodigoDeSaida(t *testing.T) {
 	}
 }
 
+// A ultima linha (o erro do docker) vem primeiro; o progresso de antes
+// fica depois, na ordem.
+func TestTailPoeOErroNaFrente(t *testing.T) {
+	_, err := execRunner(context.Background(), "sh", "-c",
+		"echo ' Network rede  Creating' >&2; echo ' Network rede  Error' >&2; echo 'Error response from daemon: sem pool' >&2; exit 1")
+	err = fmt.Errorf("docker compose up (x): %w", tail(err, 15))
+	want := "docker compose up (x): Error response from daemon: sem pool\nNetwork rede  Creating\n Network rede  Error"
+	if got := err.Error(); got != want {
+		t.Fatalf("mensagem %q; esperado %q", got, want)
+	}
+}
+
 // Prazo estourado e reconhecivel com errors.Is, sem olhar o texto.
 func TestErroDePrazoReconhecivel(t *testing.T) {
 	withGrace(t, time.Second)

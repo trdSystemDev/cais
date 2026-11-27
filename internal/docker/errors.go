@@ -25,7 +25,9 @@ func (e *CmdError) Error() string {
 func (e *CmdError) Unwrap() error { return e.Err }
 
 // tailError mostra so as ultimas linhas da mensagem de outro erro, sem
-// tira-lo da cadeia.
+// tira-lo da cadeia. A ultima linha vem primeiro: e nela que o docker diz o
+// erro, e quem mostra so a primeira linha (a TUI) ve o motivo e nao o
+// progresso ("Network x Creating"). As de antes vem depois, na ordem.
 type tailError struct {
 	err error
 	n   int
@@ -36,7 +38,8 @@ func (e *tailError) Error() string {
 	if len(lines) > e.n {
 		lines = lines[len(lines)-e.n:]
 	}
-	return strings.Join(lines, "\n")
+	last := len(lines) - 1
+	return strings.Join(append([]string{lines[last]}, lines[:last]...), "\n")
 }
 
 func (e *tailError) Unwrap() error { return e.err }

@@ -147,6 +147,10 @@ func appStatus(a core.AppStatus, t theme) (string, string, color.Color) {
 	running, total := 0, len(a.Containers)
 	healthy, restarting := true, false
 	for _, c := range a.Containers {
+		if c.Done() {
+			total-- // tarefa que terminou bem: nao e servico pra ficar no ar
+			continue
+		}
 		if c.State == "running" {
 			running++
 		}
@@ -503,6 +507,9 @@ func (p *appsPage) viewGeneral(b *strings.Builder, a core.AppStatus, w int) {
 		b.WriteString("\n" + t.rule(w) + "\n" + t.bold().Render("Containers") + "\n")
 		for _, c := range a.Containers {
 			state := c.State
+			if c.Done() {
+				state = "terminou (ok)"
+			}
 			if c.Health != "" {
 				state += " (" + c.Health + ")"
 			}

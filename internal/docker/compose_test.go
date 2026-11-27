@@ -27,3 +27,26 @@ func TestParsePS(t *testing.T) {
 		t.Fatal("aceitou saida invalida")
 	}
 }
+
+// A tarefa que outro service espera terminar (service_completed_successfully)
+// e que saiu com 0 nao e servico fora do ar; o service parado (Parar, saida
+// 0) continua sendo.
+func TestParsePSTarefa(t *testing.T) {
+	out := `{"Name":"r-grade-1","Service":"grade","State":"exited","Status":"Exited (0) 2 minutes ago","ExitCode":0,"Labels":"com.docker.compose.project=r"}
+{"Name":"r-meteo-1","Service":"meteo","State":"running","Status":"Up","Labels":"com.docker.compose.depends_on=grade:service_completed_successfully:false,web:service_healthy:false,com.docker.compose.project=r"}
+{"Name":"r-web-1","Service":"web","State":"exited","Status":"Exited (0) 1 minute ago","ExitCode":0,"Labels":"com.docker.compose.project=r"}`
+	cs, err := parsePS(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cs[0].Job || !cs[0].Done() {
+		t.Errorf("grade: %+v", cs[0])
+	}
+	if cs[1].Job || cs[1].Done() || cs[2].Job || cs[2].Done() {
+		t.Errorf("meteo/web viraram tarefa: %+v %+v", cs[1], cs[2])
+	}
+	cs[0].ExitCode = 1
+	if cs[0].Done() {
+		t.Error("tarefa com erro contou como terminada")
+	}
+}

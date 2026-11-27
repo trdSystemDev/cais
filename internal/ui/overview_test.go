@@ -297,3 +297,22 @@ func TestReconectarDepoisDaQueda(t *testing.T) {
 		t.Fatal("o Reconectar nao fechou a TUI")
 	}
 }
+
+// A tarefa que terminou bem (download inicial que outro service espera) nao
+// deixa o app vermelho nem conta no "x/y no ar".
+func TestAppComTarefaTerminada(t *testing.T) {
+	a := core.AppStatus{App: apps.App{Commit: "abc"}, Containers: []docker.Container{
+		{Service: "web", State: "running", Health: "healthy"},
+		{Service: "grade", State: "exited", ExitCode: 0, Job: true},
+	}}
+	if _, text, _ := appStatus(a, newTheme(true)); text != "1/1 no ar" {
+		t.Errorf("status %q", text)
+	}
+	if sev, text := appHealth(a); sev != sevOK {
+		t.Errorf("painel %v %q", sev, text)
+	}
+	a.Containers[1].ExitCode = 1
+	if _, text, _ := appStatus(a, newTheme(true)); text != "1/2 no ar" {
+		t.Errorf("tarefa com erro: %q", text)
+	}
+}

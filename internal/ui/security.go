@@ -324,8 +324,8 @@ func (p *setupPage) viewSecurity(w int) string {
 			rows = append(rows, t.fg(t.ok).Render("SSH confirmado: entra so com chave, sem o root."), "")
 		}
 		rows = append(rows, muted.Width(w).Render(
-			"Pra VPS nova (Ubuntu ou Debian): limita os logs dos containers e liga o live-restore do Docker (atualizar o "+
-				"Docker nao derruba os containers); atualiza o sistema; liga as atualizacoes de seguranca; cria o admin com sudo e as chaves SSH do root; firewall so com 22, 80 e 443; fail2ban; e o SSH "+
+			"Pra VPS nova (Ubuntu ou Debian): limita os logs dos containers, liga o live-restore do Docker (atualizar o "+
+				"Docker nao derruba os containers) e aumenta as redes do Docker (o padrao acaba com uns 25 apps); atualiza o sistema; liga as atualizacoes de seguranca; cria o admin com sudo e as chaves SSH do root; firewall so com 22, 80 e 443; fail2ban; e o SSH "+
 				"sem o root e sem senha. Rodar de novo so completa o que falta."))
 		if p.hardenForm {
 			rows = append(rows, "")

@@ -80,6 +80,8 @@ func appHealth(a core.AppStatus) (severity, string) {
 	}
 	for _, c := range a.Containers {
 		switch {
+		case c.Done():
+			// tarefa que terminou bem (migracao, download inicial)
 		case c.State == "restarting":
 			return sevDanger, c.Service + " reiniciando sem parar"
 		case c.State != "running":

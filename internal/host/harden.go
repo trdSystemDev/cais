@@ -312,7 +312,7 @@ func (h *hardener) updates(ctx context.Context) (string, bool, error) {
 	return "so as de seguranca, sem reiniciar sozinho", changed, nil
 }
 
-const dockerStepDesc = "Docker: limite nos logs e containers no ar quando ele atualiza"
+const dockerStepDesc = "Docker: limite nos logs, containers no ar quando ele atualiza e redes pra muitos apps"
 
 // dockerLogs acerta o daemon.json: limite nos logs (so pros containers
 // criados depois: o restart do Docker derrubaria os que estao no ar) e o
@@ -320,6 +320,13 @@ const dockerStepDesc = "Docker: limite nos logs e containers no ar quando ele at
 // (a atualizacao do docker-ce e do containerd.io reinicia ele). O
 // live-restore entra pelo reload, sem parar nada; com o swarm ligado ele
 // nao vale (o Docker nem sobe), e fica de fora.
+//
+// E o pool de redes maior (dockerAddressPools): o padrao do Docker da ~31
+// redes, e cada app cria a dele (a default do compose), entao a VPS para de
+// subir app ou servico com uns 25 apps ("could not find an available,
+// non-overlapping IPv4 address pool"). O pool so muda reiniciando o Docker:
+// com o live-restore ligado os containers ficam no ar; sem ele (swarm) fica
+// gravado pro proximo reinicio.
 func (h *hardener) dockerLogs(ctx context.Context) (string, bool, error) {
 	if _, err := h.sys.Run(ctx, "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
 		return "Docker nao responde: pulado (o install.sh do cais instala)", false, nil
@@ -349,7 +356,15 @@ func (h *hardener) dockerLogs(ctx context.Context) (string, bool, error) {
 	if live {
 		cfg["live-restore"] = true
 	}
-	if !logs && !live {
+	pools := cfg["default-address-pools"] == nil
+	if pools {
+		cfg["default-address-pools"] = dockerAddressPools
+	}
+	if !logs && !live && !pools {
+		if !addressPoolsOn(ctx, h.sys) {
+			// no arquivo, mas o Docker ainda nao reiniciou com ele
+			return h.restartForPools(ctx)
+		}
 		if swarm {
 			return "sem o live-restore (o swarm esta ligado): atualizar o Docker reinicia os containers", false, nil
 		}
@@ -377,7 +392,45 @@ func (h *hardener) dockerLogs(ctx context.Context) (string, bool, error) {
 		}
 		notes = append([]string{"live-restore ligado (sem reiniciar nada): atualizar o Docker nao derruba os containers"}, notes...)
 	}
+	if pools {
+		note, _, err := h.restartForPools(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		notes = append(notes, note)
+	}
 	return strings.Join(notes, "; "), true, nil
+}
+
+// dockerAddressPools da 512 redes (256 de /20 e 256 de /24), nas mesmas
+// faixas do padrao do Docker: nada novo colide com a rede privada do
+// provedor (10.x) nem com o Tailscale.
+var dockerAddressPools = []any{
+	map[string]any{"base": "172.17.0.0/12", "size": 20},
+	map[string]any{"base": "192.168.0.0/16", "size": 24},
+}
+
+// restartForPools reinicia o Docker pra ele ler o pool de redes do
+// daemon.json, so com o live-restore ligado (os containers ficam no ar).
+func (h *hardener) restartForPools(ctx context.Context) (string, bool, error) {
+	if !liveRestoreOn(ctx, h.sys) {
+		return "pool de redes maior gravado: vale quando o Docker reiniciar (sem o live-restore, reiniciar derruba os containers)", false, nil
+	}
+	if _, err := h.sys.Run(ctx, "systemctl", "restart", "docker"); err != nil {
+		return "", false, errors.New("reiniciar o Docker: " + firstLine(err))
+	}
+	return "redes pra ate 512 apps e servicos (o Docker reiniciou com os containers no ar)", true, nil
+}
+
+// addressPoolsOn diz se o Docker rodando tem um pool de redes configurado.
+// Docker antigo, sem o campo no info, conta como sim (nao da pra saber).
+func addressPoolsOn(ctx context.Context, sys System) bool {
+	out, err := sys.Run(ctx, "docker", "info", "--format", "{{json .DefaultAddressPools}}")
+	if err != nil {
+		return true
+	}
+	out = strings.TrimSpace(out)
+	return out != "" && out != "null" && out != "[]"
 }
 
 // dockerSwarm diz se o Docker esta num swarm (o live-restore nao vale).
