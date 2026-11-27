@@ -122,6 +122,9 @@ type Environment struct {
 	Security []host.Item `json:"security,omitempty"`
 	// Tailscale e a VPN da VPS (o link de login enquanto espera).
 	Tailscale host.Tailscale `json:"tailscale"`
+	// Reboot e o reinicio da VPS: pendente (uma atualizacao espera) e
+	// agendado.
+	Reboot host.Reboot `json:"reboot"`
 }
 
 // Checked diz se ja houve ao menos uma checagem concluida.

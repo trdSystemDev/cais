@@ -41,6 +41,12 @@ type Deps struct {
 	ConnectTailscale func(context.Context) (host.Tailscale, error)
 	CloseSSH         func(context.Context) (host.Result, error)
 	SSHTailnetOnly   func() bool
+	// Reinicio da VPS: o pendente e o agendado, agendar (no lugar do que
+	// houver), desfazer e o horario automatico (vazio desliga)
+	RebootStatus     func(context.Context) host.Reboot
+	ScheduleReboot   func(context.Context, time.Time) error
+	CancelReboot     func(context.Context) error
+	EnsureAutoReboot func(ctx context.Context, clock string, now time.Time) error
 	// RollbackDelay e em quanto o SSH volta sozinho sem a confirmacao
 	// (padrao host.RollbackDelay, o mesmo do timer do systemd).
 	RollbackDelay time.Duration
@@ -232,6 +238,23 @@ func New(d Deps) *Core {
 	}
 	if d.SSHTailnetOnly == nil {
 		d.SSHTailnetOnly = func() bool { return host.SSHTailnetOnly(context.Background(), host.Local()) }
+	}
+	if d.RebootStatus == nil {
+		d.RebootStatus = func(ctx context.Context) host.Reboot { return host.RebootStatus(ctx, host.Local()) }
+	}
+	if d.ScheduleReboot == nil {
+		d.ScheduleReboot = func(ctx context.Context, at time.Time) error {
+			return host.ScheduleReboot(ctx, host.Local(), at, false)
+		}
+	}
+	if d.CancelReboot == nil {
+		d.CancelReboot = func(ctx context.Context) error { return host.CancelReboot(ctx, host.Local()) }
+	}
+	if d.EnsureAutoReboot == nil {
+		d.EnsureAutoReboot = func(ctx context.Context, clock string, now time.Time) error {
+			_, err := host.EnsureAutoReboot(ctx, host.Local(), clock, now)
+			return err
+		}
 	}
 	if d.RollbackDelay == 0 {
 		d.RollbackDelay = host.RollbackDelay

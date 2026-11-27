@@ -109,6 +109,11 @@ type setupPage struct {
 	tsMsg       string
 	tsMsgC      string
 	secSig      string // o que muda os itens da Seguranca
+	// Reinicio: o horario (agendar uma vez ou o automatico) e a mensagem
+	// da secao
+	rbTime *textinput.Model
+	rbMsg  string
+	rbMsgC string
 }
 
 // Respostas das chamadas ao core (feitas fora do Update).
@@ -141,7 +146,11 @@ type (
 		err error
 	}
 	sshCloseMsg struct{ err error }
-	tsCheckMsg  struct {
+	rebootMsg   struct {
+		kind, at string // once, auto ou cancel; o horario pedido
+		err      error
+	}
+	tsCheckMsg struct {
 		env core.Environment
 		err error
 	}
@@ -206,6 +215,9 @@ func newSetupPage(api core.API, zones *zone.Manager, th theme) *setupPage {
 	p.hUser = newInput("ex: deploy", false)
 	p.hPass = newInput("pelo menos 8 caracteres", true)
 	p.hPass2 = newInput("a mesma senha", true)
+	p.rbTime = newInput("01:00", false)
+	p.rbTime.SetWidth(8)
+	p.rbTime.SetValue("01:00")
 	p.started = time.Now()
 	p.th = th
 	p.rebuild()
@@ -264,7 +276,7 @@ func (p *setupPage) get(id string) *item {
 
 func (p *setupPage) setTheme(th theme) {
 	p.th = th
-	for _, ti := range []*textinput.Model{p.hUser, p.hPass, p.hPass2} {
+	for _, ti := range []*textinput.Model{p.hUser, p.hPass, p.hPass2, p.rbTime} {
 		if ti != nil {
 			th.styleInput(ti)
 		}
@@ -383,6 +395,8 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 		if i := p.index("tsCopy"); i >= 0 {
 			return p.focusAt(i)
 		}
+	case rebootMsg:
+		p.rebootDone(msg)
 	case sshCloseMsg:
 		if msg.err != nil {
 			p.tsMsgC, p.tsMsg = "danger", "Nao fechou: "+firstLine(msg.err.Error())
@@ -441,8 +455,8 @@ func (p *setupPage) update(msg tea.Msg) tea.Cmd {
 			p.setStatus("ok", "SSH confirmado: so chave, sem o root.")
 		}
 	case hostTick:
-		if p.hard.Pending() {
-			return hostTickCmd()
+		if p.hard.Pending() || p.hard.Running {
+			return p.hostTickCmd()
 		}
 		p.ticking = false
 	case hostCheckMsg:
@@ -468,6 +482,9 @@ func (p *setupPage) fill(c config.Config) {
 		p.get("ghAppID").input.SetValue(strconv.FormatInt(c.GitHub.AppID, 10))
 	}
 	p.get("notifyFrom").input.SetValue(c.Notify.From)
+	if c.RebootTime != "" {
+		p.rbTime.SetValue(c.RebootTime)
+	}
 	p.to = nil
 	for _, addr := range c.Notify.To {
 		p.to = append(p.to, p.newTo(addr))
@@ -665,6 +682,8 @@ func (p *setupPage) activate(it *item) tea.Cmd {
 		}
 	case it.id == "sshClose":
 		return p.sshClose()
+	case it.id == "rbOnce" || it.id == "rbAuto" || it.id == "rbAutoOff" || it.id == "rbCancel":
+		return p.reboot(it.id)
 	case confirmFix[it.id] != "" && !armed:
 		p.fixArm = it.id
 		p.setStatus("warn", confirmFix[it.id])
@@ -1157,7 +1176,8 @@ func (p *setupPage) scrolled(content string, h int) string {
 // confirmFix sao os Corrigir que perguntam antes (o que o segundo aperto
 // faz pode derrubar algo).
 var confirmFix = map[string]string{
-	"fix:reboot": "Reiniciar a VPS? Os apps ficam fora 1 a 2 minutos e esta sessao cai (entre de novo depois). Aperte Corrigir de novo pra reiniciar.",
-	"fix:upgrades": "Atualizar os pacotes do sistema? Leva alguns minutos; se o Docker atualizar, os apps reiniciam por alguns segundos. " +
+	"fix:reboot": "Reiniciar a VPS agora? Os apps ficam fora 1 a 2 minutos e esta sessao cai (entre de novo depois). " +
+		"Pra reiniciar de madrugada, agende no Reinicio (abaixo). Aperte Corrigir de novo pra reiniciar agora.",
+	"fix:upgrades": "Atualizar os pacotes do sistema? Leva alguns minutos; se o Docker atualizar sem o live-restore (item Docker), os containers reiniciam. " +
 		"Aperte Corrigir de novo pra atualizar.",
 }

@@ -69,6 +69,12 @@ type API interface {
 	UpdateCais(ctx context.Context, version string) (UpdateResult, error)
 	// FixHostItem corrige so um item da checagem de seguranca (os Fixable).
 	FixHostItem(ctx context.Context, id string) (string, error)
+	// ScheduleReboot agenda o reinicio da VPS pra proxima vez do horario
+	// (HH:MM); vazio desfaz o agendamento.
+	ScheduleReboot(ctx context.Context, at string) error
+	// SetAutoReboot troca o horario (HH:MM; vazio desliga) em que a VPS
+	// reinicia sozinha quando uma atualizacao pede.
+	SetAutoReboot(ctx context.Context, at string) error
 	// ConnectTailscale instala o Tailscale se faltar e devolve o link de
 	// login (ou o status, ja conectado).
 	ConnectTailscale(ctx context.Context) (host.Tailscale, error)

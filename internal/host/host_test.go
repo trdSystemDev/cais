@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -27,14 +28,20 @@ type fakeSys struct {
 	ufwDeny  bool
 	ufwRules []string
 	docker   bool
-	ss       string
-	ps       string
+	// o Docker rodando com o live-restore; num swarm
+	liveRestore, swarm bool
+	ss                 string
+	ps                 string
 	// tsState e o BackendState do Tailscale ("" = nao instalado); tsAuth, o
 	// link de login enquanto espera
 	tsState  string
 	tsAuth   string
 	tsExpiry string // KeyExpiry da VPS (vazio: nao vence)
 	aptSim   string // a saida do apt-get -s full-upgrade
+	// dpkgLines vao pro dpkg.log durante o full-upgrade, um a cada
+	// dpkgEvery (o andamento le o log noutra goroutine: mu)
+	dpkgLines []string
+	mu        sync.Mutex
 	// fail devolve erro pro comando com esse prefixo
 	fail   map[string]string
 	calls  []string
@@ -76,6 +83,13 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 		last = args[len(args)-1]
 	}
 	switch {
+	case strings.HasSuffix(cmd, " full-upgrade") && strings.HasPrefix(cmd, "env ") && len(f.dpkgLines) > 0:
+		for _, l := range f.dpkgLines {
+			f.mu.Lock()
+			f.files[dpkgLog] += l + "\n"
+			f.mu.Unlock()
+			time.Sleep(3 * dpkgEvery)
+		}
 	case strings.HasPrefix(cmd, "apt-get -s"):
 		return f.aptSim, nil
 	case cmd == "tailscale version":
@@ -176,6 +190,10 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 		return "inactive", errors.New("exit status 3")
 	case cmd == "systemctl restart fail2ban":
 		f.active["fail2ban"] = true
+	case name == "systemd-run" && slices.Contains(args, "--unit="+RebootAtUnit):
+		f.active[RebootAtUnit+".timer"] = true
+	case cmd == "systemctl stop "+RebootAtUnit+".timer":
+		f.active[RebootAtUnit+".timer"] = false
 	case name == "systemd-run":
 		f.active[RollbackUnit+".timer"] = true
 	case cmd == "systemctl stop "+RollbackUnit+".timer":
@@ -189,6 +207,13 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 			return "", errors.New("Cannot connect to the Docker daemon")
 		}
 		return "27.3.1", nil
+	case cmd == "docker info --format {{.LiveRestoreEnabled}}":
+		return map[bool]string{true: "true", false: "false"}[f.liveRestore], nil
+	case cmd == "docker info --format {{.Swarm.LocalNodeState}}":
+		return map[bool]string{true: "active", false: "inactive"}[f.swarm], nil
+	case cmd == "systemctl reload docker":
+		// o reload le o live-restore do daemon.json
+		f.liveRestore = strings.Contains(f.files[dockerDaemonPath], `"live-restore": true`)
 	case name == "docker" && args[0] == "ps":
 		return f.ps, nil
 	case name == "ss":
@@ -203,6 +228,8 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 }
 
 func (f *fakeSys) ReadFile(path string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if s, ok := f.files[path]; ok {
 		return []byte(s), nil
 	}
@@ -768,6 +795,102 @@ func TestPacotesDoSistema(t *testing.T) {
 		f.files["/var/log/apt/history.log"] = ""
 		if it := checkByID(Check(ctx, f))["upgrades"]; it.OK || !it.Fixable {
 			t.Errorf("na checagem: %+v", it)
+		}
+	}
+}
+
+// o Preparar VPS conta tudo de cara (todos os passos pendentes) e o
+// andamento da atualizacao: a fase com o total e quantos o dpkg ja instalou
+func TestHardenAndamento(t *testing.T) {
+	old := dpkgEvery
+	dpkgEvery = 5 * time.Millisecond
+	t.Cleanup(func() { dpkgEvery = old })
+	f := newFake()
+	f.aptSim = "Inst libc6 [2.39-0] (2.39-1 Ubuntu:24.04/noble-updates [amd64])\nInst openssl [3.0.13-0] (3.0.13-1 Ubuntu:24.04/noble-updates [amd64])\n"
+	f.files[dpkgLog] = "2026-10-01 10:00:00 upgrade velho:amd64 1 2\n"
+	f.dpkgLines = []string{"2026-11-27 12:40:01 upgrade libc6:amd64 2.39-0 2.39-1", "2026-11-27 12:40:02 status installed libc6:amd64 2.39-1",
+		"2026-11-27 12:40:03 upgrade openssl:amd64 3.0.13-0 3.0.13-1"}
+	var steps []Step
+	_, err := Harden(context.Background(), f, Options{User: "deploy", Password: "12345678"}, func(s Step) { steps = append(steps, s) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 8 {
+		if steps[i].Status != StepPending {
+			t.Fatalf("passo %d nao comecou pendente: %+v", i, steps[i])
+		}
+	}
+	var progress []string
+	phase := false
+	for _, s := range steps {
+		if s.ID == "packages" && s.Status == StepRunning {
+			phase = phase || strings.Contains(s.Detail, "atualizando 2 pacotes")
+			if s.Progress != "" && (len(progress) == 0 || progress[len(progress)-1] != s.Progress) {
+				progress = append(progress, s.Progress)
+			}
+			if s.Started.IsZero() {
+				t.Error("rodando sem a hora do comeco")
+			}
+		}
+		if s.ID == "packages" && s.Status == StepChanged && s.Detail != "2 pacotes atualizados" {
+			t.Errorf("fim: %+v", s)
+		}
+	}
+	if !phase || !slices.Equal(progress, []string{"baixando", "1 de 2 instalados", "2 de 2 instalados"}) {
+		t.Errorf("fase %v, andamento %q", phase, progress)
+	}
+}
+
+// o passo do Docker liga o live-restore pelo reload (sem restart), mantem
+// o que ja estava no daemon.json e fica de fora num swarm
+func TestHardenDockerLiveRestore(t *testing.T) {
+	ctx := context.Background()
+	f := newFake()
+	f.files[dockerDaemonPath] = `{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}`
+	h := &hardener{sys: f}
+	if it := checkDockerLogs(ctx, f); it.OK || !strings.Contains(it.Detail, "sem o live-restore") {
+		t.Fatalf("antes: %+v", it)
+	}
+	detail, changed, err := h.dockerLogs(ctx)
+	if err != nil || !changed || !strings.Contains(detail, "live-restore ligado") {
+		t.Fatalf("%q %v %v", detail, changed, err)
+	}
+	if !strings.Contains(f.files[dockerDaemonPath], `"log-driver": "json-file"`) || !f.liveRestore {
+		t.Errorf("daemon.json: %s (live %v)", f.files[dockerDaemonPath], f.liveRestore)
+	}
+	if slices.ContainsFunc(f.calls, func(c string) bool { return strings.Contains(c, "restart docker") }) {
+		t.Error("reiniciou o Docker")
+	}
+	if it := checkDockerLogs(ctx, f); !it.OK {
+		t.Errorf("depois: %+v", it)
+	}
+	if _, changed, _ := h.dockerLogs(ctx); changed {
+		t.Error("segunda rodada mudou")
+	}
+
+	g := newFake()
+	g.swarm = true
+	if _, _, err := (&hardener{sys: g}).dockerLogs(ctx); err != nil || strings.Contains(g.files[dockerDaemonPath], "live-restore") {
+		t.Errorf("swarm: %v %s", err, g.files[dockerDaemonPath])
+	}
+	if it := checkDockerLogs(ctx, g); !it.OK {
+		t.Errorf("swarm: %+v", it)
+	}
+}
+
+// a atualizacao avisa quando inclui o Docker (e se os containers caem)
+func TestUpgradeAvisaDoDocker(t *testing.T) {
+	for live, want := range map[bool]string{true: "inclui o Docker (os containers ficam no ar)", false: "inclui o Docker: os containers reiniciam junto"} {
+		f := newFake()
+		f.liveRestore = live
+		f.aptSim = "Inst docker-ce [5:29.0.1-1] (5:29.1.5-1 Docker CE:noble [amd64])\nInst libc6 [2.39-0] (2.39-1 Ubuntu:24.04/noble-updates [amd64])\n"
+		var phases []string
+		h := &hardener{sys: f, note: func(d, _ string) { phases = append(phases, d) }}
+		if n, err := h.fullUpgrade(context.Background()); err != nil || n != 2 {
+			t.Fatalf("%d %v", n, err)
+		}
+		if !slices.ContainsFunc(phases, func(p string) bool { return strings.Contains(p, want) }) {
+			t.Errorf("live=%v: %q", live, phases)
 		}
 	}
 }

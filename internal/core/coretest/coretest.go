@@ -149,6 +149,12 @@ func (f *Recorder) UpdateCais(_ context.Context, version string) (core.UpdateRes
 func (f *Recorder) FixHostItem(_ context.Context, id string) (string, error) {
 	return ret[string](f, "FixHostItem", id)
 }
+func (f *Recorder) ScheduleReboot(_ context.Context, at string) error {
+	return only(f, "ScheduleReboot", at)
+}
+func (f *Recorder) SetAutoReboot(_ context.Context, at string) error {
+	return only(f, "SetAutoReboot", at)
+}
 func (f *Recorder) ConnectTailscale(context.Context) (host.Tailscale, error) {
 	return ret[host.Tailscale](f, "ConnectTailscale")
 }

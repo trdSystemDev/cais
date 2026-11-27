@@ -126,16 +126,19 @@ Depois:
 So le. Confere: sistema (Ubuntu/Debian), login do root e senha no SSH,
 firewall (ufw), fail2ban, atualizacoes de seguranca automaticas, portas
 abertas pra internet (inclusive as publicadas por containers, que passam
-por cima do firewall), limite nos logs dos containers e reinicio pendente.
+por cima do firewall), Docker (limite nos logs e live-restore) e reinicio
+pendente.
 Sai com 1 se algum item precisa de correcao. O mesmo aparece na TUI, em
 Setup > Seguranca, com o Corrigir de cada item e o Preparar VPS.`},
 		{name: "host harden", usage: "host harden -user NOME [-key arquivo] [-yes]", short: "prepara uma VPS nova: admin com sudo e so chave, SSH sem\nroot e sem senha, firewall, fail2ban, atualizacoes", long: `
 Pra VPS recem-criada (Ubuntu ou Debian), logo depois do install.sh, como
 root. Mostra o que vai fazer e pede "sim". Passos (rodar de novo so
 completa o que falta):
-  1. atualiza o sistema; instala ufw, fail2ban e unattended-upgrades
-  2. atualizacoes de seguranca automaticas, sem reiniciar sozinho
-  3. limite nos logs dos containers (/etc/docker/daemon.json)
+  1. Docker (/etc/docker/daemon.json): limite nos logs dos containers e o
+     live-restore (atualizar o Docker nao derruba os containers), antes
+     da atualizacao
+  2. atualiza o sistema; instala ufw, fail2ban e unattended-upgrades
+  3. atualizacoes de seguranca automaticas, sem reiniciar sozinho
   4. o admin NOME: criado se faltar, no grupo sudo, com as chaves SSH do
      root (e as do -key); pede a senha do sudo dele
   5. firewall: entram so 22 (SSH), 80 e 443 (proxy)
@@ -157,6 +160,18 @@ O mesmo pela TUI: Setup > Seguranca > Preparar VPS. Ou ja na instalacao:
 		{name: "host confirm", usage: "host confirm", short: "do login novo do admin: mantem o SSH do harden (senao\nvolta sozinho em 5 min)", long: `
 Rode de um login novo (ssh NOME@vps, depois sudo cais host confirm): e ele
 que prova que a chave funciona. Da sessao do root, recusa.`},
+		{name: "host reboot", usage: "host reboot [HH:MM | cancel | auto HH:MM|off]", short: "agenda o reinicio da VPS (uma vez, ou sempre que uma\natualizacao pedir, num horario fixo)", long: `
+Uma atualizacao de kernel ou biblioteca so vale depois de reiniciar, e os
+apps ficam fora 1 a 2 minutos. Em vez de reiniciar na hora:
+  cais host reboot             mostra o reinicio pendente e o agendado
+  cais host reboot 01:00       reinicia uma vez, na proxima 01:00
+  cais host reboot cancel      desfaz o agendado
+  cais host reboot auto 01:00  sempre que uma atualizacao pedir, reinicia
+                               sozinha na proxima 01:00 (o daemon confere
+                               de hora em hora)
+  cais host reboot auto off    desliga o automatico
+O reinicio espera os deploys e backups em andamento; os containers e o
+daemon voltam sozinhos. O mesmo na TUI: Setup > Seguranca > Reinicio.`},
 	}},
 	{title: "Setup da VPS (so configura; os servicos ligam com cais service):", group: "setup", cmds: []command{
 		{name: "setup plan", usage: "setup", short: "mostra a config, o que falta e o que aplicar", long: `

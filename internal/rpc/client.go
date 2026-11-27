@@ -161,6 +161,14 @@ func (c *Client) FixHostItem(ctx context.Context, id string) (string, error) {
 	return r.Text, err
 }
 
+func (c *Client) ScheduleReboot(ctx context.Context, at string) error {
+	return c.call(ctx, MethodRebootSchedule, rebootParams{Time: at}, nil)
+}
+
+func (c *Client) SetAutoReboot(ctx context.Context, at string) error {
+	return c.call(ctx, MethodRebootAuto, rebootParams{Time: at}, nil)
+}
+
 func (c *Client) GitHubConnectLink(ctx context.Context, org string) (string, error) {
 	r, err := result[textResult](c, ctx, MethodGitHubLink, githubLinkParams{Org: org})
 	return r.Text, err

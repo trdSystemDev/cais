@@ -303,3 +303,25 @@ func TestValidaDNSECuringas(t *testing.T) {
 		}
 	}
 }
+
+func TestNextClock(t *testing.T) {
+	now := time.Date(2026, 11, 27, 14, 30, 0, 0, time.UTC)
+	for clock, want := range map[string]time.Time{
+		"01:00": time.Date(2026, 11, 28, 1, 0, 0, 0, time.UTC),
+		"23:59": time.Date(2026, 11, 27, 23, 59, 0, 0, time.UTC),
+		"14:30": time.Date(2026, 11, 28, 14, 30, 0, 0, time.UTC),
+	} {
+		if got, ok := NextClock(now, clock); !ok || !got.Equal(want) {
+			t.Errorf("%s: %v %v, queria %v", clock, got, ok, want)
+		}
+	}
+	if _, ok := NextClock(now, "1:00"); ok {
+		t.Error("aceitou 1:00")
+	}
+	c := Default()
+	c.Email = "a@b.com"
+	c.RebootTime = "25:00"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "reboot_time") {
+		t.Errorf("reboot_time invalido: %v", err)
+	}
+}

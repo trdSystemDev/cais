@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/host"
 )
@@ -24,6 +25,7 @@ import (
 var itemHints = map[string]string{
 	"ssh-root": "corrige no Preparar VPS, abaixo", "ssh-password": "corrige no Preparar VPS, abaixo",
 	"tailscale": "conecta no Tailscale, abaixo", "ssh-tailnet": "fecha no Tailscale, abaixo",
+	"reboot": "Corrigir reinicia agora; pra reiniciar de madrugada, agende no Reinicio, abaixo",
 }
 
 // tsLinkShown e o link de login do Tailscale a mostrar: o da ultima
@@ -93,6 +95,16 @@ func (p *setupPage) securityItems() []*item {
 	default:
 		add("harden-open", "Preparar VPS", kindButton, nil)
 	}
+	// o Reinicio: o horario, agendar uma vez e o automatico
+	add("rbTime", "Horario", kindInput, p.rbTime)
+	add("rbOnce", "Agendar uma vez", kindButton, nil)
+	add("rbAuto", "Sempre neste horario", kindButton, nil)
+	if p.cfg.RebootTime != "" {
+		add("rbAutoOff", "Desligar o automatico", kindButton, nil)
+	}
+	if r := p.env.Reboot; r.Scheduled() && !r.Auto {
+		add("rbCancel", "Cancelar o agendado", kindButton, nil)
+	}
 	add("hostCheck", "Checar de novo", kindButton, nil)
 	return items
 }
@@ -108,9 +120,10 @@ func (p *setupPage) setState(s core.State) tea.Cmd {
 			p.enter(false)
 		}
 	}
-	if p.hard.Pending() && !p.ticking {
+	// a contagem do SSH pendente e o spinner do passo rodando
+	if (p.hard.Pending() || p.hard.Running) && !p.ticking {
 		p.ticking = true
-		return hostTickCmd()
+		return p.hostTickCmd()
 	}
 	return nil
 }
@@ -124,11 +137,66 @@ func (p *setupPage) securitySig() string {
 	}
 	fmt.Fprintf(&b, "|%v|%v|%v|%v|%s", p.hard.Running, p.hard.Pending(), p.canConfirm(), p.hardenForm, p.hard.Fixing)
 	fmt.Fprintf(&b, "|%v|%v|%v", p.env.Tailscale.Connected(), p.tsLinkShown() != "", p.sshPublic())
+	fmt.Fprintf(&b, "|%s|%v", p.cfg.RebootTime, p.env.Reboot.Scheduled() && !p.env.Reboot.Auto)
 	return b.String()
 }
 
-func hostTickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return hostTick{} })
+// hostTickCmd: rapido com o Preparar VPS rodando (o spinner), de segundo
+// em segundo na contagem do SSH.
+func (p *setupPage) hostTickCmd() tea.Cmd {
+	every := time.Second
+	if p.hard.Running {
+		every = 120 * time.Millisecond
+	}
+	return tea.Tick(every, func(time.Time) tea.Msg { return hostTick{} })
+}
+
+var spinner = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// viewSteps e a linha do tempo do Preparar VPS: os que faltam apagados, o
+// que esta rodando com o spinner, o tempo e a fase, os feitos em verde.
+func (p *setupPage) viewSteps(w int) []string {
+	t := p.th
+	muted := t.fg(t.muted)
+	var rows []string
+	for _, st := range p.hard.Steps {
+		var mark, title string
+		var notes []string
+		switch st.Status {
+		case host.StepPending:
+			mark, title = muted.Render("○"), muted.Render(st.Desc)
+		case host.StepRunning:
+			frame := spinner[int(time.Now().UnixMilli()/120)%len(spinner)]
+			mark, title = t.fg(t.warn).Bold(true).Render(frame), t.fg(t.warn).Bold(true).Render(st.Desc)
+			if !st.Started.IsZero() {
+				d := time.Since(st.Started).Round(time.Second)
+				title += muted.Render(fmt.Sprintf("  %d:%02d", int(d.Minutes()), int(d.Seconds())%60))
+			}
+			for _, n := range []string{st.Detail, st.Progress} {
+				if n != "" {
+					notes = append(notes, n)
+				}
+			}
+		case host.StepChanged:
+			mark, title = t.fg(t.ok).Render("✓"), st.Desc
+			if st.Detail != "" {
+				notes = append(notes, st.Detail)
+			}
+		case host.StepOK:
+			mark, title = t.fg(t.ok).Render("✓"), st.Desc+muted.Render("  ja estava")
+		case host.StepFailed:
+			mark, title = t.fg(t.danger).Bold(true).Render("✗"), t.fg(t.danger).Render(st.Desc)
+		}
+		rows = append(rows, lipgloss.NewStyle().Width(w).Render(mark+" "+title))
+		if len(notes) > 0 {
+			c := t.muted
+			if st.Status == host.StepRunning {
+				c = t.text
+			}
+			rows = append(rows, lipgloss.NewStyle().Width(w).PaddingLeft(2).Foreground(c).Render(strings.Join(notes, " · ")))
+		}
+	}
+	return rows
 }
 
 func (p *setupPage) closeHardenForm() {
@@ -160,10 +228,6 @@ func (p *setupPage) hardenApply() tea.Cmd {
 	return func() tea.Msg {
 		return hardenMsg{p.api.HardenHost(context.Background(), core.HardenRequest{User: user, Password: pw})}
 	}
-}
-
-var stepMarks = map[string]string{
-	host.StepRunning: "..", host.StepChanged: "ok", host.StepOK: "--", host.StepFailed: "!!",
 }
 
 // viewSecurity desenha a Seguranca: os itens da checagem e o Preparar VPS.
@@ -229,20 +293,7 @@ func (p *setupPage) viewSecurity(w int) string {
 	h := p.hard
 	tailnetPending := h.Pending() && h.Kind == core.KindSSHTailnet
 	if len(h.Steps) > 0 && (h.Running || h.Pending() || h.Error != "") {
-		for _, st := range h.Steps {
-			line := fmt.Sprintf("[%s] %s", stepMarks[st.Status], st.Desc)
-			if st.Detail != "" && st.Status != host.StepFailed {
-				line += muted.Render(" -- " + st.Detail)
-			}
-			c := t.text
-			switch st.Status {
-			case host.StepFailed:
-				c = t.danger
-			case host.StepRunning:
-				c = t.warn
-			}
-			rows = append(rows, wrap.Foreground(c).Render(line))
-		}
+		rows = append(rows, p.viewSteps(w)...)
 		rows = append(rows, "")
 	}
 	switch {
@@ -273,8 +324,8 @@ func (p *setupPage) viewSecurity(w int) string {
 			rows = append(rows, t.fg(t.ok).Render("SSH confirmado: entra so com chave, sem o root."), "")
 		}
 		rows = append(rows, muted.Width(w).Render(
-			"Pra VPS nova (Ubuntu ou Debian): atualiza o sistema; liga as atualizacoes de seguranca; limita os logs dos "+
-				"containers; cria o admin com sudo e as chaves SSH do root; firewall so com 22, 80 e 443; fail2ban; e o SSH "+
+			"Pra VPS nova (Ubuntu ou Debian): limita os logs dos containers e liga o live-restore do Docker (atualizar o "+
+				"Docker nao derruba os containers); atualiza o sistema; liga as atualizacoes de seguranca; cria o admin com sudo e as chaves SSH do root; firewall so com 22, 80 e 443; fail2ban; e o SSH "+
 				"sem o root e sem senha. Rodar de novo so completa o que falta."))
 		if p.hardenForm {
 			rows = append(rows, "")
@@ -296,6 +347,8 @@ func (p *setupPage) viewSecurity(w int) string {
 			rows = append(rows, "", "  "+button("harden-open", "Preparar VPS", btnNormal))
 		}
 	}
+	// o Reinicio depois do Preparar VPS: o Confirmar do SSH nao desce
+	rows = append(rows, p.viewReboot(w, focusID, button)...)
 	rows = append(rows, "", "  "+button("hostCheck", "Checar de novo", btnInfo))
 	return "\n" + strings.Join(rows, "\n")
 }
@@ -419,4 +472,109 @@ func shortDetail(detail string, n int) string {
 		out = head + ": " + out
 	}
 	return out
+}
+
+// viewReboot e a secao do Reinicio: o pendente e o agendado, o horario,
+// agendar uma vez e o automatico (reinicia sozinha quando uma atualizacao
+// pede).
+func (p *setupPage) viewReboot(w int, focusID string, button func(id, label string, k btnKind) string) []string {
+	t, r := p.th, p.env.Reboot
+	muted := t.fg(t.muted)
+	wrap := lipgloss.NewStyle().Width(w)
+	rows := []string{"", t.rule(w), wrap.Render(t.bold().Render("Reinicio") +
+		muted.Render("  pra atualizacao de kernel ou biblioteca valer; espera deploy e backup, e os apps voltam em 1 a 2 minutos"))}
+	when := ""
+	if r.Scheduled() {
+		when = host.When(r.At, time.Now())
+		if r.Auto {
+			when += " (automatico)"
+		}
+	}
+	var line string
+	switch {
+	case r.Pending && r.Scheduled():
+		line = t.fg(t.warn).Render("Pendente: reinicia " + when + ".")
+	case r.Pending:
+		line = t.fg(t.danger).Render("Pendente, sem horario.")
+	case r.Scheduled():
+		line = t.fg(t.warn).Render("Nada pendente, mas reinicia " + when + ".")
+	default:
+		line = muted.Render("Nada pendente.")
+	}
+	if c := p.cfg.RebootTime; c != "" {
+		line += " Automatico as " + c + ": quando uma atualizacao pedir, reinicia sozinha nesse horario."
+	} else {
+		line += muted.Render(" Automatico desligado.")
+	}
+	rows = append(rows, wrap.Render(line))
+	marker, label := "  ", t.fg(t.text).Render("Horario ")
+	if focusID == "rbTime" {
+		marker = t.fg(t.accent).Bold(true).Render("› ")
+		label = t.fg(t.accent).Bold(true).Render("Horario ")
+	}
+	btns := button("rbOnce", "Agendar uma vez", btnNormal) + " " + button("rbAuto", "Sempre neste horario", btnNormal)
+	if p.cfg.RebootTime != "" {
+		btns += " " + button("rbAutoOff", "Desligar o automatico", btnInfo)
+	}
+	if r.Scheduled() && !r.Auto {
+		btns += " " + button("rbCancel", "Cancelar o agendado", btnWarn)
+	}
+	rows = append(rows, focusMarked(focusID == "rbTime", p.zones.Mark("rbTime", marker+label+t.input(p.rbTime, 8)))+
+		muted.Render("  HH:MM, no fuso da VPS"), "  "+btns)
+	if p.rbMsg != "" {
+		c := map[string]color.Color{"ok": t.ok, "warn": t.warn, "danger": t.danger}[p.rbMsgC]
+		rows = append(rows, wrap.Foreground(c).Render(p.rbMsg))
+	}
+	return rows
+}
+
+// reboot manda pro daemon o botao do Reinicio.
+func (p *setupPage) reboot(id string) tea.Cmd {
+	at := strings.TrimSpace(p.rbTime.Value())
+	if (id == "rbOnce" || id == "rbAuto") && !validClock(at) {
+		p.rbMsgC, p.rbMsg = "danger", "Horario invalido: use HH:MM (ex: 01:00)."
+		return p.focusAt(p.index("rbTime"))
+	}
+	p.rbMsgC, p.rbMsg = "warn", "Agendando..."
+	api := p.api
+	return func() tea.Msg {
+		ctx := context.Background()
+		switch id {
+		case "rbOnce":
+			return rebootMsg{"once", at, api.ScheduleReboot(ctx, at)}
+		case "rbCancel":
+			return rebootMsg{"cancel", "", api.ScheduleReboot(ctx, "")}
+		case "rbAutoOff":
+			return rebootMsg{"auto", "", api.SetAutoReboot(ctx, "")}
+		}
+		return rebootMsg{"auto", at, api.SetAutoReboot(ctx, at)}
+	}
+}
+
+func (p *setupPage) rebootDone(msg rebootMsg) {
+	if msg.err != nil {
+		p.rbMsgC, p.rbMsg = "danger", "Nao deu: "+firstLine(msg.err.Error())
+		return
+	}
+	switch {
+	case msg.kind == "once":
+		p.rbMsgC, p.rbMsg = "ok", "Agendado: a VPS reinicia uma vez, na proxima "+msg.at+"."
+	case msg.kind == "cancel":
+		p.rbMsgC, p.rbMsg = "ok", "Agendamento desfeito."
+	case msg.at == "":
+		p.cfg.RebootTime = ""
+		p.rbMsgC, p.rbMsg = "ok", "Automatico desligado."
+	default:
+		p.cfg.RebootTime = msg.at
+		p.rbMsgC, p.rbMsg = "ok", "Automatico ligado: quando uma atualizacao pedir, a VPS reinicia sozinha as "+msg.at+"."
+	}
+	// o Desligar o automatico aparece ou some
+	p.secSig = p.securitySig()
+	p.rebuild()
+}
+
+// validClock confere o HH:MM antes de mandar (o daemon confere de novo).
+func validClock(s string) bool {
+	_, ok := config.NextClock(time.Now(), s)
+	return ok
 }

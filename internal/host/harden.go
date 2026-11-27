@@ -161,6 +161,7 @@ func mergeKeys(a, b []string) []string {
 
 // Status de um passo do harden.
 const (
+	StepPending = "pending" // ainda nao comecou
 	StepRunning = "running"
 	StepChanged = "changed" // mudou algo
 	StepOK      = "ok"      // ja estava certo
@@ -170,6 +171,11 @@ const (
 // Step e um passo do harden, pro progresso.
 type Step struct {
 	ID, Desc, Status, Detail string
+	// Progress e o andamento do passo rodando (ex: "37 de 146 pacotes"),
+	// que muda a cada poucos segundos; o Detail, a fase (o CLI so mostra
+	// ele).
+	Progress string    `json:",omitempty"`
+	Started  time.Time `json:",omitzero"`
 }
 
 // Result e o fim do harden.
@@ -184,6 +190,15 @@ type hardener struct {
 	opts   Options
 	plan   Plan
 	result Result
+	// note conta a fase e o andamento do passo rodando (nil: ninguem ve)
+	note func(detail, progress string)
+}
+
+// say conta a fase e o andamento do passo rodando.
+func (h *hardener) say(detail, progress string) {
+	if h.note != nil {
+		h.note(detail, progress)
+	}
 }
 
 type stepFunc func(ctx context.Context) (detail string, changed bool, err error)
@@ -214,27 +229,40 @@ func Harden(ctx context.Context, sys System, opts Options, progress func(Step)) 
 		id, desc string
 		run      stepFunc
 	}{
+		// o Docker antes da atualizacao: com o live-restore, atualizar o
+		// Docker nao derruba os containers
+		{"docker-logs", dockerStepDesc, h.dockerLogs},
 		{"packages", "Atualizar o sistema e instalar ufw, fail2ban e unattended-upgrades", h.packages},
 		{"updates", "Atualizacoes de seguranca automaticas", h.updates},
-		{"docker-logs", "Limite nos logs dos containers", h.dockerLogs},
 		{"admin", "Usuario admin " + opts.User + " (sudo, entra so com chave)", h.admin},
 		{"ssh-cais", "Chaves do usuario cais (ssh cais@vps abre a TUI)", h.caisKeys},
 		{"firewall", "Firewall: entram so 22, 80 e 443", h.firewall},
 		{"fail2ban", "fail2ban no SSH", h.fail2ban},
 		{"ssh", "SSH sem root e sem senha", h.ssh},
 	}
+	// todos os passos de cara: quem acompanha ve o que falta
 	for _, s := range steps {
-		progress(Step{ID: s.id, Desc: s.desc, Status: StepRunning})
+		progress(Step{ID: s.id, Desc: s.desc, Status: StepPending})
+	}
+	for _, s := range steps {
+		started := time.Now()
+		progress(Step{ID: s.id, Desc: s.desc, Status: StepRunning, Started: started})
+		// o fullUpgrade le o dpkg.log noutra goroutine, mas espera ela
+		// acabar antes de voltar: o note nunca roda junto com o passo
+		h.note = func(detail, prog string) {
+			progress(Step{ID: s.id, Desc: s.desc, Status: StepRunning, Started: started, Detail: detail, Progress: prog})
+		}
 		detail, changed, err := s.run(ctx)
+		h.note = nil
 		if err != nil {
-			progress(Step{ID: s.id, Desc: s.desc, Status: StepFailed, Detail: err.Error()})
+			progress(Step{ID: s.id, Desc: s.desc, Status: StepFailed, Detail: err.Error(), Started: started})
 			return h.result, errors.New(s.desc + ": " + err.Error())
 		}
 		st := StepOK
 		if changed {
 			st = StepChanged
 		}
-		progress(Step{ID: s.id, Desc: s.desc, Status: st, Detail: detail})
+		progress(Step{ID: s.id, Desc: s.desc, Status: st, Detail: detail, Started: started})
 	}
 	return h.result, nil
 }
@@ -251,16 +279,18 @@ func (h *hardener) apt(ctx context.Context, args ...string) error {
 }
 
 func (h *hardener) packages(ctx context.Context) (string, bool, error) {
-	if err := h.apt(ctx, "update"); err != nil {
+	n, err := h.fullUpgrade(ctx)
+	if err != nil {
 		return "", false, err
 	}
-	if err := h.apt(ctx, "full-upgrade"); err != nil {
-		return "", false, err
-	}
+	h.say("instalando ufw, fail2ban e unattended-upgrades", "")
 	if err := h.apt(ctx, "install", "sudo", "ufw", "fail2ban", "python3-systemd", "unattended-upgrades"); err != nil {
 		return "", false, err
 	}
-	return "", true, nil
+	if n == 0 {
+		return "sistema ja estava em dia", true, nil
+	}
+	return fmt.Sprintf("%d pacotes atualizados", n), true, nil
 }
 
 // writeIfChanged grava o arquivo se o conteudo for outro; diz se mudou.
@@ -282,6 +312,14 @@ func (h *hardener) updates(ctx context.Context) (string, bool, error) {
 	return "so as de seguranca, sem reiniciar sozinho", changed, nil
 }
 
+const dockerStepDesc = "Docker: limite nos logs e containers no ar quando ele atualiza"
+
+// dockerLogs acerta o daemon.json: limite nos logs (so pros containers
+// criados depois: o restart do Docker derrubaria os que estao no ar) e o
+// live-restore, que mantem os containers rodando quando o Docker reinicia
+// (a atualizacao do docker-ce e do containerd.io reinicia ele). O
+// live-restore entra pelo reload, sem parar nada; com o swarm ligado ele
+// nao vale (o Docker nem sobe), e fica de fora.
 func (h *hardener) dockerLogs(ctx context.Context) (string, bool, error) {
 	if _, err := h.sys.Run(ctx, "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
 		return "Docker nao responde: pulado (o install.sh do cais instala)", false, nil
@@ -292,18 +330,38 @@ func (h *hardener) dockerLogs(ctx context.Context) (string, bool, error) {
 			return "", false, errors.New(dockerDaemonPath + " invalido: " + err.Error())
 		}
 	}
-	if dockerLogsLimited(cfg) {
+	var notes []string
+	logs := !dockerLogsLimited(cfg)
+	if logs {
+		if _, ok := cfg["log-driver"]; !ok {
+			cfg["log-driver"] = "local"
+		}
+		opts, _ := cfg["log-opts"].(map[string]any)
+		if opts == nil {
+			opts = map[string]any{}
+		}
+		opts["max-size"], opts["max-file"] = "10m", "3"
+		cfg["log-opts"] = opts
+		notes = append(notes, "limite nos logs vale pros containers criados daqui pra frente (proximo deploy)")
+	}
+	swarm := dockerSwarm(ctx, h.sys)
+	live := !swarm && cfg["live-restore"] != true
+	if live {
+		cfg["live-restore"] = true
+	}
+	if !logs && !live {
+		if swarm {
+			return "sem o live-restore (o swarm esta ligado): atualizar o Docker reinicia os containers", false, nil
+		}
+		if !liveRestoreOn(ctx, h.sys) {
+			// no arquivo, mas o Docker ainda nao leu
+			if _, err := h.sys.Run(ctx, "systemctl", "reload", "docker"); err != nil {
+				return "", false, errors.New("recarregar o Docker: " + firstLine(err))
+			}
+			return "live-restore ligado (sem reiniciar nada)", true, nil
+		}
 		return "", false, nil
 	}
-	if _, ok := cfg["log-driver"]; !ok {
-		cfg["log-driver"] = "local"
-	}
-	opts, _ := cfg["log-opts"].(map[string]any)
-	if opts == nil {
-		opts = map[string]any{}
-	}
-	opts["max-size"], opts["max-file"] = "10m", "3"
-	cfg["log-opts"] = opts
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return "", false, err
@@ -311,9 +369,27 @@ func (h *hardener) dockerLogs(ctx context.Context) (string, bool, error) {
 	if err := h.sys.WriteFile(dockerDaemonPath, append(b, '\n'), 0o644); err != nil {
 		return "", false, err
 	}
-	// so os containers criados depois pegam; o restart do docker para os
-	// que estao no ar, entao fica pro proximo deploy
-	return "vale pros containers criados daqui pra frente (proximo deploy); reinicie o Docker num horario calmo pra valer ja", true, nil
+	// o reload (SIGHUP) le o live-restore sem parar os containers; o
+	// limite dos logs nao recarrega, fica pros proximos containers
+	if live {
+		if _, err := h.sys.Run(ctx, "systemctl", "reload", "docker"); err != nil {
+			return "", false, errors.New("recarregar o Docker: " + firstLine(err))
+		}
+		notes = append([]string{"live-restore ligado (sem reiniciar nada): atualizar o Docker nao derruba os containers"}, notes...)
+	}
+	return strings.Join(notes, "; "), true, nil
+}
+
+// dockerSwarm diz se o Docker esta num swarm (o live-restore nao vale).
+func dockerSwarm(ctx context.Context, sys System) bool {
+	out, _ := sys.Run(ctx, "docker", "info", "--format", "{{.Swarm.LocalNodeState}}")
+	return strings.TrimSpace(out) == "active"
+}
+
+// liveRestoreOn diz se o Docker rodando esta com o live-restore.
+func liveRestoreOn(ctx context.Context, sys System) bool {
+	out, _ := sys.Run(ctx, "docker", "info", "--format", "{{.LiveRestoreEnabled}}")
+	return strings.TrimSpace(out) == "true"
 }
 
 func (h *hardener) admin(ctx context.Context) (string, bool, error) {

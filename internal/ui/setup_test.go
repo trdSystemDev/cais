@@ -10,12 +10,14 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/trdSystemDev/cais/internal/apps"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/docker"
 	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/github/githubtest"
+	"github.com/trdSystemDev/cais/internal/host"
 )
 
 // openSetup abre a TUI ja na aba Setup.
@@ -425,7 +427,7 @@ func TestSetupSeguranca(t *testing.T) {
 
 	// reiniciar: o primeiro Corrigir so pergunta
 	click(t, m, "fix:reboot")
-	waitFor(t, m, "Reiniciar a VPS? Os apps ficam fora")
+	waitFor(t, m, "Reiniciar a VPS agora? Os apps ficam fora")
 	if testVPS.rebooted {
 		t.Fatal("reiniciou no primeiro aperto")
 	}
@@ -452,7 +454,7 @@ func TestSetupSeguranca(t *testing.T) {
 	click(t, m, "harden-apply")
 	waitFor(t, m, "O SSH mudou: confirme em")
 	s = screen(m)
-	if !strings.Contains(s, "[ok] SSH sem root e sem senha") || !strings.Contains(s, "ssh deploy@<ip-da-vps>") ||
+	if !strings.Contains(s, "✓ SSH sem root e sem senha") || !strings.Contains(s, "ssh deploy@<ip-da-vps>") ||
 		!strings.Contains(s, "Esta janela foi aberta antes da mudanca") {
 		t.Errorf("pendente:\n%s", s)
 	}
@@ -469,6 +471,55 @@ func TestSetupSeguranca(t *testing.T) {
 	click(t, m, "hostConfirm")
 	waitFor(t, m, "SSH confirmado: so chave, sem o root.")
 	waitFor(t, m, "SSH confirmado: entra so com chave")
+}
+
+// o Reinicio: agendar uma vez, cancelar e o automatico (fica na config)
+func TestSetupReinicio(t *testing.T) {
+	m, _ := openSetup(t)
+	click(t, m, "setup-sec:Seguranca")
+	waitFor(t, m, "4 de 4 itens pra corrigir")
+	if all := ansi.Strip(m.setup.viewSecurity(120)); !strings.Contains(all, "Pendente, sem horario.") || !strings.Contains(all, "Automatico desligado") {
+		t.Fatalf("sem agendar:\n%s", all)
+	}
+	for range 10 {
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	}
+	m.setup.rbTime.SetValue("1:00")
+	click(t, m, "rbOnce")
+	waitFor(t, m, "Horario invalido")
+	m.setup.rbTime.SetValue("03:00")
+	click(t, m, "rbOnce")
+	waitFor(t, m, "Agendado: a VPS reinicia uma vez, na proxima 03:00.")
+	waitFor(t, m, "Cancelar o agendado")
+	if testVPS.rebootAt.Format("15:04") != "03:00" || testVPS.rebootAuto {
+		t.Fatalf("agendar: %v %v", testVPS.rebootAt, testVPS.rebootAuto)
+	}
+	click(t, m, "rbCancel")
+	waitFor(t, m, "Agendamento desfeito.")
+	if !testVPS.rebootAt.IsZero() {
+		t.Fatal("nao cancelou")
+	}
+
+	m.setup.rbTime.SetValue("01:00")
+	click(t, m, "rbAuto")
+	waitFor(t, m, "Automatico ligado: quando uma atualizacao pedir")
+	waitFor(t, m, "Desligar o automatico")
+	if testVPS.autoClock != "01:00" || !testVPS.rebootAuto {
+		t.Fatalf("automatico: %q %v", testVPS.autoClock, testVPS.rebootAuto)
+	}
+	if info, err := m.setup.api.LoadConfig(context.Background()); err != nil || info.Config.RebootTime != "01:00" {
+		t.Fatalf("config: %q %v", info.Config.RebootTime, err)
+	}
+	// agendado pelo automatico: sem o Cancelar (quem desfaz e o Desligar)
+	waitFor(t, m, "(automatico)")
+	if all := ansi.Strip(m.setup.viewSecurity(120)); !strings.Contains(all, "(automatico)") || strings.Contains(all, "Cancelar o agendado") {
+		t.Errorf("automatico agendado:\n%s", all)
+	}
+	click(t, m, "rbAutoOff")
+	waitFor(t, m, "Automatico desligado.")
+	if testVPS.autoClock != "" || testVPS.rebootAuto {
+		t.Errorf("desligar: %q %v", testVPS.autoClock, testVPS.rebootAuto)
+	}
 }
 
 // o Conectar ao GitHub: o link cria o app pelo manifest (na pagina do
@@ -551,8 +602,9 @@ func TestSetupTailscale(t *testing.T) {
 	if !testVPS.sshTailnet || m.setup.index("hostConfirm") >= 0 {
 		t.Fatalf("fechar: tailnet=%v, a sessao antiga confirma=%v", testVPS.sshTailnet, m.setup.index("hostConfirm") >= 0)
 	}
-	if !strings.Contains(screen(m), "Esperando a confirmacao do SSH pela tailnet") {
-		t.Errorf("o Preparar VPS nao aponta pro Tailscale:\n%s", screen(m))
+	// o painel inteiro: o Preparar VPS fica abaixo da rolagem
+	if all := m.setup.viewSecurity(120); !strings.Contains(all, "Esperando a confirmacao do SSH pela tailnet") {
+		t.Errorf("o Preparar VPS nao aponta pro Tailscale:\n%s", all)
 	}
 
 	// a sessao nova (pela tailnet) confirma
@@ -560,4 +612,24 @@ func TestSetupTailscale(t *testing.T) {
 	m.setup.setState(m.state)
 	click(t, m, "hostConfirm")
 	waitFor(t, m, "SSH confirmado: so pela tailnet")
+}
+
+// a linha do tempo do Preparar VPS: feitos com ✓, o rodando com o tempo, a
+// fase e o andamento, os que faltam com ○
+func TestSetupPrepararLinhaDoTempo(t *testing.T) {
+	m, _ := openSetup(t)
+	m.setup.hard = core.Hardening{Running: true, Steps: []host.Step{
+		{ID: "packages", Desc: "Atualizar o sistema", Status: host.StepChanged, Detail: "146 pacotes atualizados"},
+		{ID: "updates", Desc: "Atualizacoes de seguranca automaticas", Status: host.StepOK},
+		{ID: "docker-logs", Desc: "Limite nos logs", Status: host.StepRunning, Started: time.Now().Add(-75 * time.Second),
+			Detail: "atualizando 146 pacotes", Progress: "37 de 146 instalados"},
+		{ID: "ssh", Desc: "SSH sem root e sem senha", Status: host.StepPending},
+	}}
+	got := ansi.Strip(strings.Join(m.setup.viewSteps(120), "\n"))
+	for _, want := range []string{"✓ Atualizar o sistema", "146 pacotes atualizados", "✓ Atualizacoes de seguranca automaticas  ja estava",
+		"Limite nos logs  1:15", "atualizando 146 pacotes · 37 de 146 instalados", "○ SSH sem root e sem senha"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("falta %q:\n%s", want, got)
+		}
+	}
 }

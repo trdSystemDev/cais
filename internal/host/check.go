@@ -66,7 +66,7 @@ func Check(ctx context.Context, sys System) []Item {
 		checkUpgrades(ctx, sys),
 		checkPorts(ctx, sys),
 		checkDockerLogs(ctx, sys),
-		checkReboot(sys),
+		checkReboot(ctx, sys),
 	)
 	for i := range items {
 		_, fixable := fixers[items[i].ID]
@@ -458,7 +458,7 @@ func dockerLogsLimited(cfg map[string]any) bool {
 }
 
 func checkDockerLogs(ctx context.Context, sys System) Item {
-	it := Item{ID: "docker-logs", Title: "Logs dos containers com limite", Fix: HardenFix}
+	it := Item{ID: "docker-logs", Title: "Docker (logs e atualizacao)", Fix: HardenFix}
 	if _, err := sys.Run(ctx, "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
 		it.Detail = "Docker nao responde"
 		it.Fix = "instale com o install.sh do cais (instala o Docker no Ubuntu e no Debian)"
@@ -472,23 +472,45 @@ func checkDockerLogs(ctx context.Context, sys System) Item {
 		}
 	}
 	if !dockerLogsLimited(cfg) {
-		it.Detail = "sem limite: um container falando muito enche o disco"
+		it.Detail = "logs sem limite: um container falando muito enche o disco"
 		return it
 	}
-	it.OK, it.Detail = true, "com rotacao"
+	switch {
+	case dockerSwarm(ctx, sys):
+		it.OK, it.Detail = true, "logs com rotacao (sem o live-restore: o swarm esta ligado)"
+	case !liveRestoreOn(ctx, sys):
+		it.Detail = "logs com rotacao, mas sem o live-restore: atualizar o Docker (apt) derruba e reinicia todos os containers"
+	default:
+		it.OK, it.Detail = true, "logs com rotacao; live-restore (atualizar o Docker nao derruba os containers)"
+	}
 	return it
 }
 
 const rebootRequiredPath = "/var/run/reboot-required"
 
-func checkReboot(sys System) Item {
+// checkReboot: o reinicio pendente ja agendado conta como resolvido (sai
+// sozinho na hora marcada).
+func checkReboot(ctx context.Context, sys System) Item {
 	it := Item{ID: "reboot", Title: "Reinicio pendente"}
-	if sys.Exists(rebootRequiredPath) {
-		it.Detail = "uma atualizacao (kernel ou biblioteca) so vale depois de reiniciar"
-		it.Fix = "sudo reboot (ou o Corrigir da TUI), num horario calmo: os containers voltam sozinhos"
-		return it
+	r := RebootStatus(ctx, sys)
+	when := ""
+	if r.Scheduled() {
+		when = "reinicia " + When(r.At, time.Now())
+		if r.Auto {
+			when += " (horario automatico)"
+		}
 	}
-	it.OK, it.Detail = true, "nenhum"
+	switch {
+	case r.Pending && r.Scheduled():
+		it.OK, it.Detail = true, "uma atualizacao espera o reinicio: "+when
+	case sys.Exists(rebootRequiredPath):
+		it.Detail = "uma atualizacao (kernel ou biblioteca) so vale depois de reiniciar"
+		it.Fix = "sudo reboot (ou o Corrigir da TUI) num horario calmo, ou agende: sudo cais host reboot 01:00 (sempre que pedir: sudo cais host reboot auto 01:00)"
+	case r.Scheduled():
+		it.OK, it.Detail = true, "nenhum; "+when
+	default:
+		it.OK, it.Detail = true, "nenhum"
+	}
 	return it
 }
 

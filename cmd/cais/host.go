@@ -8,15 +8,21 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"golang.org/x/term"
 
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/host"
 )
 
 // hostSystem e a maquina que o cais host confere e prepara (trocada nos
 // testes).
 var hostSystem = host.Local
+
+// hostConfigFile e a config que guarda o horario automatico do reinicio
+// (trocada nos testes).
+var hostConfigFile = config.ConfigFile
 
 // runHost e o cais host: roda direto na VPS, como root, sem o daemon (o
 // harden prepara a maquina antes de ter algo do cais configurado).
@@ -29,6 +35,8 @@ func (e *cli) runHost(args []string) error {
 		return e.hostHarden(args)
 	case "confirm":
 		return e.hostConfirm(args)
+	case "reboot":
+		return e.hostReboot(args)
 	default:
 		return groupError("host", sub)
 	}
@@ -132,7 +140,19 @@ func (e *cli) hostHarden(args []string) error {
 	}
 
 	fmt.Fprintln(e.out)
+	lastPhase := ""
 	res, err := host.Harden(ctx, sys, opts, func(s host.Step) {
+		switch {
+		case s.Status == host.StepPending:
+			return
+		case s.Status == host.StepRunning && s.Detail != "":
+			// a fase do passo (o andamento, que muda a cada segundo, so na TUI)
+			if s.Detail != lastPhase {
+				lastPhase = s.Detail
+				fmt.Fprintln(e.out, "     "+s.Detail)
+			}
+			return
+		}
 		line := fmt.Sprintf("[%s] %s", hostStepMark[s.Status], s.Desc)
 		if s.Status == host.StepOK {
 			line += " -- ja estava"
@@ -206,4 +226,92 @@ func (e *cli) hostConfirm(args []string) error {
 	}
 	fmt.Fprintln(e.out, "Confirmado: o SSH fica so com chave e sem o root.")
 	return nil
+}
+
+// hostReboot e o cais host reboot: sem argumento mostra o pendente e o
+// agendado; HH:MM agenda uma vez (hoje ou amanha), cancel desfaz e auto
+// HH:MM|off e o horario em que a VPS reinicia sozinha quando uma
+// atualizacao pede (na config; o daemon confere de hora em hora).
+func (e *cli) hostReboot(args []string) error {
+	fs, _ := e.newFlags("host reboot")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	ctx, sys, pos := context.Background(), hostSystem(), fs.Args()
+	if sys.Geteuid() != 0 {
+		return errors.New("rode com sudo (sudo cais host reboot ...)")
+	}
+	usage := errors.New("uso: cais host reboot [HH:MM | cancel | auto HH:MM|off]")
+	switch {
+	case len(pos) == 0:
+	case len(pos) == 1 && pos[0] == "cancel":
+		if err := host.CancelReboot(ctx, sys); err != nil {
+			return err
+		}
+		// com o automatico ligado e o reinicio pendente, ele agenda de novo
+		if cfg, err := config.Load(hostConfigFile()); err == nil {
+			if _, err := host.EnsureAutoReboot(ctx, sys, cfg.RebootTime, time.Now()); err != nil {
+				return err
+			}
+		}
+	case len(pos) == 1:
+		at, ok := config.NextClock(time.Now(), pos[0])
+		if !ok {
+			return fmt.Errorf("horario %q invalido (use HH:MM, ex: 01:00)", pos[0])
+		}
+		if err := host.ScheduleReboot(ctx, sys, at, false); err != nil {
+			return err
+		}
+	case len(pos) == 2 && pos[0] == "auto":
+		clock := pos[1]
+		if clock == "off" {
+			clock = ""
+		}
+		cfg, err := config.Load(hostConfigFile())
+		if errors.Is(err, config.ErrNotFound) {
+			cfg, err = config.Default(), nil
+		}
+		if err != nil {
+			return err
+		}
+		cfg.RebootTime = clock
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		if err := config.Save(hostConfigFile(), cfg); err != nil {
+			return err
+		}
+		if _, err := host.EnsureAutoReboot(ctx, sys, clock, time.Now()); err != nil {
+			return err
+		}
+	default:
+		return &usageError{usage}
+	}
+	e.printReboot(ctx, sys)
+	return nil
+}
+
+func (e *cli) printReboot(ctx context.Context, sys host.System) {
+	r := host.RebootStatus(ctx, sys)
+	switch {
+	case r.Pending:
+		fmt.Fprintln(e.out, "Reinicio pendente: uma atualizacao (kernel ou biblioteca) so vale depois de reiniciar.")
+	default:
+		fmt.Fprintln(e.out, "Nenhum reinicio pendente.")
+	}
+	switch {
+	case r.Scheduled() && r.Auto:
+		fmt.Fprintln(e.out, "Agendado: "+host.When(r.At, time.Now())+" (horario automatico).")
+	case r.Scheduled():
+		fmt.Fprintln(e.out, "Agendado: "+host.When(r.At, time.Now())+" (cancele com sudo cais host reboot cancel).")
+	}
+	clock := ""
+	if cfg, err := config.Load(hostConfigFile()); err == nil {
+		clock = cfg.RebootTime
+	}
+	if clock != "" {
+		fmt.Fprintln(e.out, "Horario automatico: "+clock+" (quando uma atualizacao pede, a VPS reinicia sozinha nesse horario).")
+	} else {
+		fmt.Fprintln(e.out, "Horario automatico: desligado (ligue com sudo cais host reboot auto 01:00).")
+	}
 }

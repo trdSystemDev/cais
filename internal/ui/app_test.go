@@ -91,6 +91,35 @@ func testCore(t *testing.T, check func(context.Context) docker.Status) (*core.Co
 			defer mu.Unlock()
 			return vps.sshTailnet
 		},
+		// o reinicio agendado, nunca o timer de verdade
+		RebootStatus: func(context.Context) host.Reboot {
+			mu.Lock()
+			defer mu.Unlock()
+			return host.Reboot{Pending: !vps.rebooted, At: vps.rebootAt, Auto: vps.rebootAuto}
+		},
+		ScheduleReboot: func(_ context.Context, at time.Time) error {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.rebootAt, vps.rebootAuto = at, false
+			return nil
+		},
+		CancelReboot: func(context.Context) error {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.rebootAt, vps.rebootAuto = time.Time{}, false
+			return nil
+		},
+		EnsureAutoReboot: func(_ context.Context, clock string, now time.Time) error {
+			mu.Lock()
+			defer mu.Unlock()
+			vps.autoClock = clock
+			if clock != "" && (vps.rebootAt.IsZero() || vps.rebootAuto) {
+				vps.rebootAt, vps.rebootAuto = now.Add(time.Hour), true
+			} else if clock == "" && vps.rebootAuto {
+				vps.rebootAt, vps.rebootAuto = time.Time{}, false
+			}
+			return nil
+		},
 		FixHost: func(_ context.Context, id string) (string, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -780,6 +809,10 @@ func TestInfraImportarBanco(t *testing.T) {
 type fakeVPS struct {
 	ssh, firewall bool
 	rebooted      bool
+	// o reinicio agendado (zero: nada) e o horario automatico aplicado
+	rebootAt   time.Time
+	rebootAuto bool
+	autoClock  string
 	// Tailscale: instalado, o link de login, conectado e o SSH so pela tailnet
 	tsInstalled, tsConnected, sshTailnet bool
 	tsAuth                               string

@@ -45,6 +45,10 @@ type Config struct {
 	GitHub GitHub   `yaml:"github,omitempty" json:"github"`
 	Backup Backup   `yaml:"backup,omitempty" json:"backup"`
 	Notify Notify   `yaml:"notify,omitempty" json:"notify"`
+	// RebootTime e o horario (HH:MM, no fuso da VPS) em que a VPS reinicia
+	// sozinha quando uma atualizacao pede (kernel ou biblioteca); vazio, so
+	// reinicia quando alguem manda.
+	RebootTime string `yaml:"reboot_time,omitempty" json:"reboot_time,omitempty"`
 	// Versions e a versao (tag da imagem) escolhida dos bancos e do Garage
 	// (postgres, mysql, garage); sem ela, a padrao do cais. O formato de
 	// cada uma e conferido no pacote stacks.
@@ -192,6 +196,20 @@ func (b Backup) At(t time.Time) (time.Time, bool) {
 	return time.Date(t.Year(), t.Month(), t.Day(), h, m, 0, 0, t.Location()), true
 }
 
+// NextClock e a proxima vez (depois de now, no fuso de now) do horario
+// HH:MM; ok falso com o horario invalido.
+func NextClock(now time.Time, clock string) (time.Time, bool) {
+	h, m, ok := parseHHMM(clock)
+	if !ok {
+		return time.Time{}, false
+	}
+	t := time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, now.Location())
+	if !t.After(now) {
+		t = time.Date(now.Year(), now.Month(), now.Day()+1, h, m, 0, 0, now.Location())
+	}
+	return t, true
+}
+
 var hhmm = regexp.MustCompile(`^([01][0-9]|2[0-3]):([0-5][0-9])$`)
 
 func parseHHMM(s string) (h, m int, ok bool) {
@@ -306,6 +324,11 @@ func (c Config) Validate() error {
 	if b := c.Backup; b.Time != "" {
 		if _, _, ok := parseHHMM(b.Time); !ok {
 			errs = append(errs, fmt.Errorf("backup.time: %q invalido (use HH:MM, ex: 03:00)", b.Time))
+		}
+	}
+	if t := c.RebootTime; t != "" {
+		if _, _, ok := parseHHMM(t); !ok {
+			errs = append(errs, fmt.Errorf("reboot_time: %q invalido (use HH:MM, ex: 01:00)", t))
 		}
 	}
 	if p := c.Backup.Provider; p != "" && p != "google" && p != "onedrive" {

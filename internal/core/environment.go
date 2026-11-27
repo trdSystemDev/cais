@@ -23,8 +23,12 @@ func (c *Core) CheckEnvironment(ctx context.Context) (Environment, error) {
 
 	status := c.deps.CheckDocker(ctx)
 	host := currentHost()
+	// o horario automatico antes da checagem: o reinicio pendente agendado
+	// ja sai resolvido nela
+	c.autoReboot(ctx)
 	security := c.deps.CheckHost(ctx)
 	ts := c.deps.TailscaleStatus(ctx)
+	reboot := c.deps.RebootStatus(ctx)
 
 	s := c.update(func(s *State) {
 		c.checks--
@@ -34,6 +38,7 @@ func (c *Core) CheckEnvironment(ctx context.Context) (Environment, error) {
 		s.Environment.Docker = dockerFromStatus(status)
 		s.Environment.Security = security
 		s.Environment.Tailscale = ts
+		s.Environment.Reboot = reboot
 	})
 	return s.Environment, nil
 }

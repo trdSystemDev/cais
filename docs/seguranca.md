@@ -63,7 +63,7 @@ firewall.
    senha voltam a entrar e voce nao fica trancado fora se a chave nao
    funcionar. Depois e so rodar o harden de novo.
 5. `sudo cais host check` deve mostrar tudo `[ok]`. Se mostrar "Reinicio
-   pendente", reinicie quando puder (`sudo reboot`).
+   pendente", reinicie quando puder ou agende (veja [Reinicio](#reinicio)).
 
 Dali pra frente, entre como `deploy` (com `sudo`) ou pelo `ssh cais@vps`
 (TUI). O root nao entra mais pelo SSH; o console do painel da Hostinger
@@ -73,15 +73,24 @@ continua funcionando como acesso de emergencia.
 
 Cada passo confere antes e so muda o que falta: rodar de novo e seguro.
 
-1. **Sistema atualizado**: `apt-get update` e `full-upgrade`; instala `sudo`,
-   `ufw`, `fail2ban` e `unattended-upgrades`.
-2. **Atualizacoes de seguranca automaticas**
+1. **Docker** (`/etc/docker/daemon.json`; as outras chaves do arquivo
+   ficam), antes da atualizacao do sistema:
+   - **logs dos containers com limite** (driver `local`, 10 MB x 3
+     arquivos). Vale pros containers criados depois (o proximo deploy).
+   - **`live-restore`**: os containers continuam rodando quando o Docker
+     reinicia. A atualizacao do `docker-ce` e do `containerd.io` (no passo
+     seguinte, ou no Corrigir dos Pacotes do sistema) reinicia o Docker, e
+     sem ele todos os containers caem e sobem de novo. Entra pelo
+     `systemctl reload docker`, sem parar nada. Num salto grande de versao
+     do Docker os containers ainda podem reiniciar; com o swarm ligado ele
+     nao vale e fica de fora.
+2. **Sistema atualizado**: `apt-get update` e `full-upgrade`; instala `sudo`,
+   `ufw`, `fail2ban` e `unattended-upgrades`. A TUI mostra quantos pacotes
+   ja foram instalados e avisa quando o Docker esta na lista.
+3. **Atualizacoes de seguranca automaticas**
    (`/etc/apt/apt.conf.d/20auto-upgrades`). Sao so as de seguranca e a VPS nao
    reinicia sozinha: o `cais host check` avisa quando um reinicio fica
-   pendente.
-3. **Logs dos containers com limite** (`/etc/docker/daemon.json`, driver
-   `local`, 10 MB x 3 arquivos). As outras chaves do arquivo ficam. Vale pros
-   containers criados depois (o proximo deploy); o Docker nao e reiniciado.
+   pendente (e o [horario automatico](#reinicio) reinicia de madrugada).
 4. **Usuario admin**: criado se faltar, no grupo `sudo`, com as chaves SSH do
    root (`/root/.ssh/authorized_keys`) e as do `-key arquivo.pub`. Sem
    nenhuma chave o harden recusa, porque desligar a senha trancaria todo mundo.
@@ -125,6 +134,38 @@ O **Corrigir** (dois cliques) roda `apt-get update` e `full-upgrade`. Se o
 Docker atualizar, os containers reiniciam por alguns segundos; se o kernel
 atualizar, aparece o **Reinicio pendente**. A mao:
 `sudo apt update && sudo apt full-upgrade`.
+
+## Reinicio
+
+Atualizacao de kernel ou biblioteca so vale depois de reiniciar, e com
+varios apps na VPS reiniciar no meio do dia derruba todos por 1 a 2
+minutos. Na TUI, em **Setup > Seguranca > Reinicio**, com o **Horario**
+(HH:MM, no fuso da VPS):
+
+- **Agendar uma vez**: reinicia na proxima vez desse horario (hoje ou
+  amanha). **Cancelar o agendado** desfaz.
+- **Sempre neste horario**: o horario automatico (`reboot_time` na
+  config). Quando uma atualizacao pedir reinicio, a VPS reinicia sozinha
+  na proxima vez desse horario; sem reinicio pendente, nada acontece. O
+  daemon confere de hora em hora. **Desligar o automatico** volta ao manual.
+
+O **Corrigir** do item "Reinicio pendente" continua reiniciando na hora.
+Com o reinicio agendado, o item fica `[ok]` com a hora.
+
+Pelo terminal, na VPS:
+
+```sh
+sudo cais host reboot             # o pendente, o agendado e o automatico
+sudo cais host reboot 01:00       # uma vez, na proxima 01:00
+sudo cais host reboot cancel      # desfaz o agendado
+sudo cais host reboot auto 01:00  # sempre que uma atualizacao pedir
+sudo cais host reboot auto off    # desliga o automatico
+```
+
+O agendado e um timer do systemd (`cais-reboot-at.timer`) que some no
+proprio reinicio. Como no Corrigir, o reinicio espera os deploys e backups
+em andamento; os containers e o daemon voltam sozinhos. Evite o mesmo
+horario do backup: ele atrasa o reinicio ate terminar.
 
 ## Tailscale: SSH so pela VPN
 

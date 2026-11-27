@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -81,18 +82,27 @@ func lastUpgradeIn(log string) time.Time {
 // poucos) aparecem na lista, mas o full-upgrade ainda nao instala, e o aviso
 // nao sairia nem depois de atualizar.
 func pendingUpgrades(ctx context.Context, sys System) (int, error) {
+	pkgs, err := upgradeList(ctx, sys)
+	return len(pkgs), err
+}
+
+// upgradeList sao os pacotes que o full-upgrade instalaria agora.
+func upgradeList(ctx context.Context, sys System) ([]string, error) {
 	out, err := sys.Run(ctx, "apt-get", "-s", "-o", "Debug::NoLocking=1", "full-upgrade")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n := 0
+	var pkgs []string
 	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(l, "Inst ") {
-			n++
+		if f := strings.Fields(l); len(f) >= 2 && f[0] == "Inst" {
+			pkgs = append(pkgs, f[1])
 		}
 	}
-	return n, nil
+	return pkgs, nil
 }
+
+// dockerPackages reiniciam o Docker quando atualizam.
+var dockerPackages = []string{"docker-ce", "containerd.io", "docker.io", "containerd"}
 
 // checkUpgrades: os pacotes que nao sao de seguranca, uma vez por mes. So
 // cobra com pacote esperando e a ultima atualizacao a mao ha mais de
@@ -127,11 +137,8 @@ func checkUpgrades(ctx context.Context, sys System) Item {
 // atualizar, os containers reiniciam sozinhos; se o kernel atualizar, a
 // checagem pede o reinicio.
 func (h *hardener) upgrade(ctx context.Context) (string, bool, error) {
-	if err := h.apt(ctx, "update"); err != nil {
-		return "", false, err
-	}
-	before, _ := pendingUpgrades(ctx, h.sys)
-	if err := h.apt(ctx, "full-upgrade"); err != nil {
+	before, err := h.fullUpgrade(ctx)
+	if err != nil {
 		return "", false, err
 	}
 	detail := fmt.Sprintf("%d pacotes atualizados", before)
@@ -139,4 +146,93 @@ func (h *hardener) upgrade(ctx context.Context) (string, bool, error) {
 		detail += "; falta reiniciar (Reinicio pendente)"
 	}
 	return detail, true, nil
+}
+
+// dpkgLog e o log do dpkg: uma linha "upgrade" ou "install" por pacote, o
+// andamento da atualizacao.
+const dpkgLog = "/var/log/dpkg.log"
+
+// dpkgEvery e de quanto em quanto tempo o andamento le o dpkg.log.
+var dpkgEvery = 2 * time.Second
+
+// fullUpgrade atualiza a lista e todos os pacotes, contando o andamento
+// (baixando; depois quantos ja foram instalados, pelo dpkg.log). Devolve
+// quantos pacotes havia pra atualizar.
+func (h *hardener) fullUpgrade(ctx context.Context) (int, error) {
+	h.say("atualizando a lista de pacotes", "")
+	if err := h.apt(ctx, "update"); err != nil {
+		return 0, err
+	}
+	// sem a simulacao (n -1), atualiza igual, so sem o total
+	pkgs, err := upgradeList(ctx, h.sys)
+	n := len(pkgs)
+	switch {
+	case err != nil:
+		n = -1
+	case n == 0:
+		return 0, nil
+	}
+	phase := fmt.Sprintf("atualizando %d pacotes (baixar e instalar pode levar varios minutos)", n)
+	if n < 0 {
+		phase = "atualizando os pacotes (baixar e instalar pode levar varios minutos)"
+	}
+	// o Docker reinicia quando atualiza: com o live-restore os containers
+	// ficam no ar, sem ele caem junto
+	if slices.ContainsFunc(pkgs, func(p string) bool { return slices.Contains(dockerPackages, p) }) {
+		if liveRestoreOn(ctx, h.sys) {
+			phase += "; inclui o Docker (os containers ficam no ar)"
+		} else {
+			phase += "; inclui o Docker: os containers reiniciam junto"
+		}
+	}
+	h.say(phase, "baixando")
+	start := 0
+	if b, err := h.sys.ReadFile(dpkgLog); err == nil {
+		start = len(b)
+	}
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		t := time.NewTicker(dpkgEvery)
+		defer t.Stop()
+		last := -1
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+			}
+			b, err := h.sys.ReadFile(dpkgLog)
+			if err != nil || len(b) < start {
+				continue // sem log ou rodado (logrotate)
+			}
+			k := installed(string(b[start:]))
+			if k == last || k == 0 {
+				continue
+			}
+			last = k
+			prog := fmt.Sprintf("%d de %d instalados", min(k, n), n)
+			if n < 0 {
+				prog = fmt.Sprintf("%d instalados", k)
+			}
+			h.say(phase, prog)
+		}
+	}()
+	err = h.apt(ctx, "full-upgrade")
+	close(done)
+	<-stopped
+	return max(n, 0), err
+}
+
+// installed conta os pacotes instalados ou atualizados num trecho do
+// dpkg.log ("2026-11-27 12:40:01 upgrade libc6:amd64 2.39-0 2.39-1").
+func installed(log string) int {
+	n := 0
+	for _, l := range strings.Split(log, "\n") {
+		f := strings.Fields(l)
+		if len(f) >= 3 && (f[2] == "upgrade" || f[2] == "install") {
+			n++
+		}
+	}
+	return n
 }

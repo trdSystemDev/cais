@@ -254,6 +254,12 @@ var handlers = map[string]handler{
 		text, err := a.FixHostItem(ctx, p.ID)
 		return textResult{Text: text}, err
 	}),
+	MethodRebootSchedule: do(func(a core.API, ctx context.Context, p rebootParams) error {
+		return a.ScheduleReboot(ctx, p.Time)
+	}),
+	MethodRebootAuto: do(func(a core.API, ctx context.Context, p rebootParams) error {
+		return a.SetAutoReboot(ctx, p.Time)
+	}),
 	MethodGitHubLink: call(func(a core.API, ctx context.Context, p githubLinkParams) (textResult, error) {
 		link, err := a.GitHubConnectLink(ctx, p.Org)
 		return textResult{Text: link}, err

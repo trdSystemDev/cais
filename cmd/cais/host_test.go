@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"io/fs"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core/coretest"
 	"github.com/trdSystemDev/cais/internal/host"
 )
@@ -116,5 +119,40 @@ func TestAppShellPedeTerminal(t *testing.T) {
 	c := newTestCLI(coretest.NewRecorder())
 	if code := c.run([]string{"app", "shell", "loja"}); code != 1 || !strings.Contains(c.errb.String(), "ssh -t cais@vps app shell loja") {
 		t.Errorf("%d %s", code, c.errb)
+	}
+}
+
+// o cais host reboot: HH:MM agenda uma vez (o timer), auto grava o horario
+// na config (sem o Setup ainda, so ele) e horario errado nem chega na VPS
+func TestHostReboot(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("so no Linux")
+	}
+	v := withVPS(t)
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	old := hostConfigFile
+	hostConfigFile = func() string { return cfg }
+	t.Cleanup(func() { hostConfigFile = old })
+
+	c := newTestCLI(nil)
+	if code := c.run([]string{"host", "reboot", "1:00"}); code == 0 || slices.ContainsFunc(v.calls, func(s string) bool { return strings.HasPrefix(s, "systemd-run") }) {
+		t.Fatalf("aceitou 1:00: %d %q", code, v.calls)
+	}
+	c = newTestCLI(nil)
+	if code := c.run([]string{"host", "reboot", "01:00"}); code != 0 {
+		t.Fatalf("saida %d: %s", code, c.errb.String())
+	}
+	if !slices.ContainsFunc(v.calls, func(s string) bool { return strings.HasPrefix(s, "systemd-run --unit="+host.RebootAtUnit) }) {
+		t.Errorf("sem o timer: %q", v.calls)
+	}
+	c = newTestCLI(nil)
+	if code := c.run([]string{"host", "reboot", "auto", "02:00"}); code != 0 {
+		t.Fatalf("saida %d: %s", code, c.errb.String())
+	}
+	if got, err := config.Load(cfg); err != nil || got.RebootTime != "02:00" {
+		t.Errorf("config: %q %v", got.RebootTime, err)
+	}
+	if !strings.Contains(c.out.String(), "Horario automatico: 02:00") {
+		t.Errorf("saida: %s", c.out.String())
 	}
 }

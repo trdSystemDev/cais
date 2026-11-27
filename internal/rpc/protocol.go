@@ -38,11 +38,13 @@ const (
 	MethodHostConfirm      = "host.confirm" // params: hostConfirmParams
 	MethodTailscaleConnect = "tailscale.connect"
 	MethodSSHClose         = "host.ssh-close"
-	MethodGitHubTest       = "github.test"     // params: githubTestParams
-	MethodGitHubLink       = "github.link"     // params: githubLinkParams
-	MethodGitHubConnect    = "github.connect"  // params: githubConnectParams
-	MethodServiceSet       = "service.set"     // params: serviceParams
-	MethodServiceControl   = "service.control" // params: serviceControlParams
+	MethodRebootSchedule   = "host.reboot-at"   // params: rebootParams
+	MethodRebootAuto       = "host.reboot-auto" // params: rebootParams
+	MethodGitHubTest       = "github.test"      // params: githubTestParams
+	MethodGitHubLink       = "github.link"      // params: githubLinkParams
+	MethodGitHubConnect    = "github.connect"   // params: githubConnectParams
+	MethodServiceSet       = "service.set"      // params: serviceParams
+	MethodServiceControl   = "service.control"  // params: serviceControlParams
 	MethodAppsCheck        = "apps.check"
 	MethodAppCreate        = "app.create"        // params: apps.App
 	MethodAppUpdate        = "app.update"        // params: apps.App
@@ -214,6 +216,11 @@ type githubConnectParams struct {
 // updateParams: Version e a tag (vazia: o release mais novo).
 type updateParams struct {
 	Version string `json:"version,omitempty"`
+}
+
+// rebootParams e o horario do reinicio (HH:MM; vazio desfaz/desliga).
+type rebootParams struct {
+	Time string `json:"time"`
 }
 
 // hostFixParams e o item da checagem de seguranca a corrigir.
