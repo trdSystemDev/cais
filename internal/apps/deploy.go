@@ -209,6 +209,45 @@ func (m Manager) deployTarget(ctx context.Context, name, ref string, dl *deadlin
 	return a, commit, nil
 }
 
+// ForeignProjectError e um projeto do docker compose com o nome do app que
+// nao foi criado pelo cais (um compose solto da VPS, de antes da migracao).
+// O deploy para antes do build: nada do projeto antigo e tocado.
+type ForeignProjectError struct {
+	App        string
+	Files      string   // o compose do projeto antigo
+	Containers []string // os containers dele
+}
+
+func (e *ForeignProjectError) Error() string {
+	return fmt.Sprintf("ja existe um projeto %q no docker que nao e do cais (%s; containers: %s). O deploy trocaria esses containers "+
+		"e apagaria os que nao estao no compose do app (o banco antigo, por exemplo), com o app antigo no ar; nada foi feito. "+
+		"Primeiro importe os dados; depois derrube o projeto antigo (docker compose -p %s down: os volumes ficam) e faca o deploy, "+
+		"ou crie o app no cais com outro nome",
+		e.App, e.Files, strings.Join(e.Containers, ", "), e.App)
+}
+
+// checkForeign recusa o deploy quando o projeto do app tem containers que
+// vieram de um compose fora da pasta do app no cais.
+func (m Manager) checkForeign(ctx context.Context, a App, p docker.Project) error {
+	cs, err := m.Docker.PS(ctx, p)
+	if err != nil {
+		return err
+	}
+	own := m.dir(a.Name) + string(filepath.Separator)
+	e := &ForeignProjectError{App: a.Name}
+	for _, c := range cs {
+		if c.ConfigFiles == "" || strings.HasPrefix(c.ConfigFiles, own) {
+			continue
+		}
+		e.Files = c.ConfigFiles
+		e.Containers = append(e.Containers, c.Name)
+	}
+	if len(e.Containers) > 0 {
+		return e
+	}
+	return nil
+}
+
 // buildNext prepara o codigo baixado em NextDir: confere o compose contra o
 // formato do cais (problemas e avisos vao em res) e faz o build, ou usa as
 // imagens guardadas de um rollback. Devolve o compose resolvido e as
@@ -234,6 +273,12 @@ func (m Manager) buildNext(ctx context.Context, a App, commit string, tag Deploy
 	}
 	if len(res.Problems) > 0 {
 		return nil, nil, &ComposeError{App: name, Problems: res.Problems}
+	}
+	// um compose solto (fora do cais) com o mesmo nome de projeto: o up
+	// trocaria os containers dele e o --remove-orphans apagaria o resto (o
+	// banco, por exemplo), com o app antigo no ar
+	if err := m.checkForeign(ctx, a, p); err != nil {
+		return nil, nil, err
 	}
 	// voltar pra um deploy anterior usa as imagens guardadas dele (sem
 	// build); sem elas, ou num deploy normal, o build faz

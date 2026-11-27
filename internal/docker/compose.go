@@ -72,6 +72,10 @@ type Container struct {
 	// Job: outro service espera este terminar (depends_on com
 	// service_completed_successfully), ou seja, e tarefa e nao servico.
 	Job bool `json:"job,omitempty"`
+	// ConfigFiles e o compose que criou o container (label
+	// com.docker.compose.project.config_files): diz se o container e do cais
+	// ou de um compose solto com o mesmo nome de projeto. Fica no daemon.
+	ConfigFiles string `json:"-"`
 }
 
 // Done diz que o container e uma tarefa que ja terminou bem (migracao,
@@ -126,7 +130,8 @@ func parsePS(out string) ([]Container, error) {
 	cs := make([]Container, 0, len(rows))
 	for _, r := range rows {
 		cs = append(cs, Container{Name: r.Name, Service: r.Service, Image: r.Image, State: r.State,
-			Health: r.Health, Status: r.Status, ExitCode: r.ExitCode, URLs: traefikURLs(r.Labels), Job: jobs[r.Service]})
+			Health: r.Health, Status: r.Status, ExitCode: r.ExitCode, URLs: traefikURLs(r.Labels), Job: jobs[r.Service],
+			ConfigFiles: parseLabels(r.Labels)["com.docker.compose.project.config_files"]})
 	}
 	return cs, nil
 }

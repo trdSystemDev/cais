@@ -33,7 +33,7 @@ func TestParsePS(t *testing.T) {
 // 0) continua sendo.
 func TestParsePSTarefa(t *testing.T) {
 	out := `{"Name":"r-grade-1","Service":"grade","State":"exited","Status":"Exited (0) 2 minutes ago","ExitCode":0,"Labels":"com.docker.compose.project=r"}
-{"Name":"r-meteo-1","Service":"meteo","State":"running","Status":"Up","Labels":"com.docker.compose.depends_on=grade:service_completed_successfully:false,web:service_healthy:false,com.docker.compose.project=r"}
+{"Name":"r-meteo-1","Service":"meteo","State":"running","Status":"Up","Labels":"com.docker.compose.depends_on=grade:service_completed_successfully:false,web:service_healthy:false,com.docker.compose.project=r,com.docker.compose.project.config_files=/root/r/docker-compose.yml"}
 {"Name":"r-web-1","Service":"web","State":"exited","Status":"Exited (0) 1 minute ago","ExitCode":0,"Labels":"com.docker.compose.project=r"}`
 	cs, err := parsePS(out)
 	if err != nil {
@@ -41,6 +41,9 @@ func TestParsePSTarefa(t *testing.T) {
 	}
 	if !cs[0].Job || !cs[0].Done() {
 		t.Errorf("grade: %+v", cs[0])
+	}
+	if cs[1].ConfigFiles != "/root/r/docker-compose.yml" {
+		t.Errorf("config_files %q", cs[1].ConfigFiles)
 	}
 	if cs[1].Job || cs[1].Done() || cs[2].Job || cs[2].Done() {
 		t.Errorf("meteo/web viraram tarefa: %+v %+v", cs[1], cs[2])

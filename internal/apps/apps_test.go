@@ -1446,3 +1446,34 @@ func TestCheckComposeBuildSecret(t *testing.T) {
 		t.Errorf("avisos dos build args %v", w)
 	}
 }
+
+// Um compose solto da VPS com o mesmo nome de projeto (de antes da
+// migracao) para o deploy antes do build: o up trocaria os containers dele e
+// o --remove-orphans apagaria o banco antigo. Os do proprio cais passam.
+func TestDeployRecusaProjetoForaDoCais(t *testing.T) {
+	m, _, d := newManager(t)
+	m.Create(App{Name: "web", Repo: "o/web"})
+	d.ps = map[string][]docker.Container{"v1": {
+		{Name: "web-backend-1", Service: "backend", State: "running", ConfigFiles: "/root/web/docker-compose.yml"},
+		{Name: "web-db-1", Service: "db", State: "running", ConfigFiles: "/root/web/docker-compose.yml"},
+	}}
+
+	_, err := m.Deploy(context.Background(), "web", "c1")
+	var fe *ForeignProjectError
+	if !errors.As(err, &fe) || fe.Files != "/root/web/docker-compose.yml" || len(fe.Containers) != 2 {
+		t.Fatalf("erro %v", err)
+	}
+	if !strings.Contains(err.Error(), "docker compose -p web down") || !strings.Contains(err.Error(), "nada foi feito") {
+		t.Errorf("mensagem %v", err)
+	}
+	if slices.ContainsFunc(d.calls, func(c string) bool { return strings.HasPrefix(c, "build") || strings.HasPrefix(c, "up") }) {
+		t.Errorf("buildou ou subiu: %v", d.calls)
+	}
+
+	// os containers do proprio cais (a pasta do app) nao contam
+	own := filepath.Join(m.dir("web"), SrcDir, "docker-compose.yml")
+	d.ps = map[string][]docker.Container{"v1": {{Name: "web-web-1", State: "running", ConfigFiles: own}}}
+	if _, err := m.Deploy(context.Background(), "web", "c1"); err != nil {
+		t.Fatalf("deploy com os containers do cais: %v", err)
+	}
+}

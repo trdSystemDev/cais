@@ -190,7 +190,14 @@ dominio dele pro Traefik do cais, que entrega pro container.
    o docker publica por cima do `ufw`) e o Traefik aceita o `X-Forwarded-For`
    do nginx, pros apps verem o IP de quem acessa.
 
-2. Faca o deploy do app no cais e troque o site dele no nginx:
+2. Faca o deploy do app no cais e troque o site dele no nginx. Se o compose
+   antigo usa o mesmo nome de projeto que o app (o `name:` dele, ou o nome
+   da pasta), o deploy recusa antes do build e nao toca no app antigo: o up
+   trocaria os containers dele e apagaria os que sobram (o banco). Importe
+   os dados, derrube o antigo (`docker compose -p <nome> down`, os volumes
+   ficam) e faca o deploy; ou crie o app com outro nome.
+
+   O site no nginx:
 
    ```nginx
    server {
