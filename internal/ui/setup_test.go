@@ -673,6 +673,10 @@ func TestSetupAcessos(t *testing.T) {
 	if m.setup.acc.key.Value() != joao || m.setup.items[m.setup.focus].id != "accUser" {
 		t.Fatalf("usar: %q, foco %q", m.setup.acc.key.Value(), m.setup.items[m.setup.focus].id)
 	}
+	// a chave no campo diz onde ja entra; uma nova, que ainda nao entra
+	waitFor(t, m, "Essa chave ja entra: TUI")
+	m.setup.acc.key.SetValue("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHnD6ePWgnF2tO2Tu7NfQ8cFTaPhrYm2pXkF0hm8iEh3 maria@pc")
+	waitFor(t, m, "Chave nova: maria@pc ainda nao entra.")
 	m.setup.acc.key.SetValue("")
 	m.setup.acc.user.SetValue("")
 

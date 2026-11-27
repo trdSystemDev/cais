@@ -278,6 +278,11 @@ func (p *setupPage) viewAccess(w int) string {
 			label = t.fg(t.accent).Bold(true).Width(16).Render(f.label)
 		}
 		rows = append(rows, focusMarked(focusID == f.id, p.zones.Mark(f.id, marker+label+t.input(f.in, f.width)))+muted.Render(f.note))
+		if f.id == "accKey" {
+			if hint, c := p.keyHint(); hint != "" {
+				rows = append(rows, lipgloss.NewStyle().Width(w).PaddingLeft(18).Foreground(c).Render(hint))
+			}
+		}
 	}
 	btns := button("accAddAdmin", "Dar acesso de admin", btnNormal)
 	if a.TUI {
@@ -289,4 +294,24 @@ func (p *setupPage) viewAccess(w int) string {
 		rows = append(rows, "", wrap.Foreground(c).Render(p.acc.msg))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// keyHint diz, enquanto a chave e colada, se ela ja entra (e onde) ou e
+// nova; com a chave invalida, o porque.
+func (p *setupPage) keyHint() (string, color.Color) {
+	t := p.th
+	v := strings.TrimSpace(p.acc.key.Value())
+	if v == "" {
+		return "", nil
+	}
+	_, k, err := host.ParseKey(v)
+	if err != nil {
+		return err.Error(), t.danger
+	}
+	for _, have := range p.acc.a.Keys {
+		if have.Fingerprint == k.Fingerprint {
+			return "Essa chave ja entra: " + whereLabel(have.Users) + ". Dar acesso so acrescenta o que falta.", t.warn
+		}
+	}
+	return "Chave nova: " + cmpOrUI(k.Comment, k.Fingerprint) + " ainda nao entra.", t.ok
 }

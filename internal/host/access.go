@@ -184,8 +184,12 @@ func AddAccess(ctx context.Context, sys System, req AccessRequest) (string, erro
 		if !ok {
 			return "", errors.New("sem o usuario cais (o install.sh rodou sem --ssh): de acesso como admin, ou reinstale com --ssh")
 		}
-		if _, err := addKey(ctx, sys, CaisUser, home, line); err != nil {
+		changed, err := addKey(ctx, sys, CaisUser, home, line)
+		if err != nil {
 			return "", err
+		}
+		if !changed {
+			return label + " ja entrava na TUI: nada mudou", nil
 		}
 		return label + " entra na TUI: ssh " + CaisUser + "@<vps>", nil
 	}
@@ -219,7 +223,9 @@ func AddAccess(ctx context.Context, sys System, req AccessRequest) (string, erro
 	if _, err := sys.Run(ctx, "usermod", "--expiredate", "", u); err != nil {
 		return "", err
 	}
-	if out, _ := sys.Run(ctx, "id", "-nG", u); !slices.Contains(strings.Fields(out), "sudo") {
+	out, _ := sys.Run(ctx, "id", "-nG", u)
+	wasAdmin := exists && slices.Contains(strings.Fields(out), "sudo")
+	if !wasAdmin {
 		if _, err := sys.Run(ctx, "usermod", "-aG", "sudo", u); err != nil {
 			return "", err
 		}
@@ -233,7 +239,8 @@ func AddAccess(ctx context.Context, sys System, req AccessRequest) (string, erro
 	if !ok {
 		return "", errors.New("usuario " + u + " nao encontrado depois de criar")
 	}
-	if _, err := addKey(ctx, sys, u, home, line); err != nil {
+	keyAdded, err := addKey(ctx, sys, u, home, line)
+	if err != nil {
 		return "", err
 	}
 	// os admins entram tambem na TUI (como no harden)
@@ -243,8 +250,15 @@ func AddAccess(ctx context.Context, sys System, req AccessRequest) (string, erro
 		}
 	}
 	verb := "ja era admin"
-	if !exists {
+	switch {
+	case !exists:
 		verb = "admin criado"
+	case !wasAdmin:
+		verb = "virou admin"
+	case !keyAdded && req.Password == "":
+		return fmt.Sprintf("%s ja era admin com essa chave: nada mudou", u), nil
+	case !keyAdded:
+		return fmt.Sprintf("%s ja era admin com essa chave: so a senha do sudo mudou", u), nil
 	}
 	return fmt.Sprintf("%s: %s, entra com ssh %s@<vps> (sudo com a senha dele)", u, verb, u), nil
 }

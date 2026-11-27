@@ -73,9 +73,11 @@ func TestAcessos(t *testing.T) {
 		t.Errorf("tui: %q", f.files)
 	}
 	f.index(t, "chown -R cais: /home/cais/.ssh")
-	// de novo: nada muda
+	// de novo: nada muda, e diz
 	before := f.files["/home/cais/.ssh/authorized_keys"]
-	AddAccess(ctx, f, AccessRequest{Key: keyJoao + " outro-comentario"})
+	if d, _ := AddAccess(ctx, f, AccessRequest{Key: keyJoao + " outro-comentario"}); !strings.Contains(d, "ja entrava na TUI") {
+		t.Errorf("de novo: %q", d)
+	}
 	if f.files["/home/cais/.ssh/authorized_keys"] != before {
 		t.Error("duplicou a chave")
 	}
@@ -89,6 +91,9 @@ func TestAcessos(t *testing.T) {
 	}
 	if _, err := AddAccess(ctx, f, AccessRequest{Key: keyMaria, Admin: "maria", Password: "s3nha-forte"}); err != nil {
 		t.Fatal(err)
+	}
+	if d, _ := AddAccess(ctx, f, AccessRequest{Key: keyMaria, Admin: "maria"}); !strings.Contains(d, "ja era admin com essa chave: nada mudou") {
+		t.Errorf("admin de novo: %q", d)
 	}
 	if !f.users["maria"] || !slices.Contains(f.groups["maria"], "sudo") || !strings.Contains(f.files["/home/maria/.ssh/authorized_keys"], keyMaria) ||
 		!strings.Contains(f.files["/home/cais/.ssh/authorized_keys"], keyMaria) || !slices.Contains(f.inputs, "maria:s3nha-forte\n") {
