@@ -91,7 +91,8 @@ Cada passo confere antes e so muda o que falta: rodar de novo e seguro.
    (`/etc/apt/apt.conf.d/20auto-upgrades`). Sao so as de seguranca e a VPS nao
    reinicia sozinha: o `cais host check` avisa quando um reinicio fica
    pendente (e o [horario automatico](#reinicio) reinicia de madrugada).
-4. **Usuario admin**: criado se faltar, no grupo `sudo`, com as chaves SSH do
+4. **Usuario admin**: criado se faltar, nos grupos `sudo` e `docker` (roda o
+   `docker` sem `sudo`; com o Docker instalado), com as chaves SSH do
    root (`/root/.ssh/authorized_keys`) e as do `-key arquivo.pub`. Sem
    nenhuma chave o harden recusa, porque desligar a senha trancaria todo mundo.
 5. **Chaves do usuario `cais`** (o `ssh cais@vps` da TUI, se o `install.sh`
@@ -178,14 +179,14 @@ senha): quem ja e admin cadastra a chave da pessoa. Em **Setup > Acessos**:
   copia as chaves dele). **Remover** (dois apertos) tira a chave de todo
   lugar, senao o proximo harden ou Corrigir a traria de volta.
 - **Admins**: os usuarios do grupo `sudo`. **Remover admin** tira do `sudo`,
-  expira a conta (o SSH recusa ate com chave) e tira as chaves so dele, dele e
+  expira a conta (o SSH recusa ate com chave), tira do `docker` e tira as chaves so dele, dele e
   do `cais`. A pasta `/home/<nome>` fica.
 - **Dar acesso**: cole a chave PUBLICA da pessoa (a linha do
   `~/.ssh/id_ed25519.pub`; sem uma: `ssh-keygen -t ed25519`) e escolha:
   - **Dar acesso a TUI**: so o `ssh cais@vps` (deploy, logs, apps; sem shell).
     A TUI controla a VPS inteira, entao e pra quem administra os apps.
-  - **Dar acesso de admin**: um usuario proprio com shell e `sudo` (`ssh
-    maria@vps`), criado se faltar, com a senha do `sudo` (duas vezes; o SSH
+  - **Dar acesso de admin**: um usuario proprio com shell, `sudo` e o grupo
+    `docker` (`ssh maria@vps`; roda o `docker` sem `sudo`), criado se faltar, com a senha do `sudo` (duas vezes; o SSH
     continua so por chave). A chave entra tambem no `cais`, como a dos outros
     admins. Um usuario por pessoa: nao compartilhe o `deploy`.
 

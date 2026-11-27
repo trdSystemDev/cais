@@ -135,6 +135,18 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 		}
 		slices.Sort(members)
 		return "sudo:x:27:" + strings.Join(members, ","), nil
+	case cmd == "getent group docker":
+		if !f.docker {
+			return "", errors.New("exit status 2")
+		}
+		var members []string
+		for u, gs := range f.groups {
+			if slices.Contains(gs, "docker") {
+				members = append(members, u)
+			}
+		}
+		slices.Sort(members)
+		return "docker:x:999:" + strings.Join(members, ","), nil
 	case name == "getent":
 		if !f.users[last] {
 			return "", errors.New("exit status 2")
@@ -145,14 +157,14 @@ func (f *fakeSys) RunInput(_ context.Context, input, name string, args ...string
 	case cmd == "id -nG "+last:
 		return strings.Join(append([]string{last}, f.groups[last]...), " "), nil
 	case name == "gpasswd" && len(args) == 3:
-		f.groups[args[1]] = slices.DeleteFunc(f.groups[args[1]], func(g string) bool { return g == "sudo" })
+		f.groups[args[1]] = slices.DeleteFunc(f.groups[args[1]], func(g string) bool { return g == last })
 	case name == "usermod" && args[0] == "--expiredate":
 		if f.expired == nil {
 			f.expired = map[string]bool{}
 		}
 		f.expired[last] = args[1] == "1"
-	case strings.HasPrefix(cmd, "usermod -aG sudo"):
-		f.groups[last] = append(f.groups[last], "sudo")
+	case name == "usermod" && args[0] == "-aG":
+		f.groups[last] = append(f.groups[last], args[1])
 	case name == "passwd":
 		if f.pw[last] {
 			return last + " P 2026-11-24 0 99999 7 -1", nil
@@ -294,7 +306,7 @@ func TestHardenVPSNova(t *testing.T) {
 	if f.files["/home/deploy/.ssh/authorized_keys"] != "ssh-ed25519 AAAAC3Nza patrick@note\n" {
 		t.Errorf("chaves do admin: %q", f.files["/home/deploy/.ssh/authorized_keys"])
 	}
-	if !slices.Contains(f.groups["deploy"], "sudo") || !f.pw["deploy"] {
+	if !slices.Contains(f.groups["deploy"], "sudo") || !slices.Contains(f.groups["deploy"], "docker") || !f.pw["deploy"] {
 		t.Errorf("admin sem sudo ou sem senha: %v %v", f.groups, f.pw)
 	}
 	// a senha so pelo stdin

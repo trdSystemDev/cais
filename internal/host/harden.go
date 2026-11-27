@@ -401,10 +401,9 @@ func (h *hardener) admin(ctx context.Context) (string, bool, error) {
 		}
 		changed = true
 	}
-	if out, _ := h.sys.Run(ctx, "id", "-nG", u); !slices.Contains(strings.Fields(out), "sudo") {
-		if _, err := h.sys.Run(ctx, "usermod", "-aG", "sudo", u); err != nil {
-			return "", false, err
-		}
+	if added, err := adminGroups(ctx, h.sys, u); err != nil {
+		return "", false, err
+	} else if added {
 		changed = true
 	}
 	home, ok := userHome(ctx, h.sys, u)

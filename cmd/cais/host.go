@@ -117,7 +117,7 @@ func (e *cli) hostHarden(args []string) error {
 		"Docker: limite nos logs e o live-restore (atualizar o Docker nao derruba os containers)",
 		"atualizar o sistema; instalar ufw, fail2ban e unattended-upgrades",
 		"atualizacoes de seguranca automaticas (sem reiniciar sozinho)",
-		fmt.Sprintf("%s com sudo e %d chave(s) SSH (as do root entram)", admin, len(plan.Keys)),
+		fmt.Sprintf("%s com sudo, docker e %d chave(s) SSH (as do root entram)", admin, len(plan.Keys)),
 		"firewall: entram so 22 (SSH), 80 e 443 (proxy)",
 		"fail2ban no SSH",
 		"SSH: sem login do root e sem senha, so chave",

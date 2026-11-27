@@ -241,7 +241,7 @@ func (p *setupPage) viewAccess(w int) string {
 			line += chip("akrm:"+k.Fingerprint, "Remover")
 			rows = append(rows, wrap.Render(line))
 		}
-		rows = append(rows, "", t.bold().Render("Admins")+muted.Render("  usuario proprio com shell e sudo; entram tambem na TUI"))
+		rows = append(rows, "", t.bold().Render("Admins")+muted.Render("  usuario proprio com shell, sudo e docker; entram tambem na TUI"))
 		if len(a.Admins) == 0 {
 			rows = append(rows, muted.Render("  nenhum (o Preparar VPS, na Seguranca, cria o primeiro)"))
 		}
@@ -261,7 +261,7 @@ func (p *setupPage) viewAccess(w int) string {
 	}
 	rows = append(rows, wrap.Render("Peca a chave PUBLICA da pessoa (o conteudo do ~/.ssh/id_ed25519.pub; se ela nao tiver: ssh-keygen -t ed25519). "+
 		"Dois jeitos:"), muted.Width(w).PaddingLeft(2).Render(tui),
-		muted.Width(w).PaddingLeft(2).Render("admin: usuario proprio com shell e sudo (ssh nome@<vps>); a senha e so do sudo, o SSH continua so por chave."), "")
+		muted.Width(w).PaddingLeft(2).Render("admin: usuario proprio com shell, sudo e o grupo docker (ssh nome@<vps>); a senha e so do sudo, o SSH continua so por chave."), "")
 	for _, f := range []struct {
 		id, label, note string
 		in              *textinput.Model

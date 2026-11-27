@@ -225,10 +225,8 @@ func AddAccess(ctx context.Context, sys System, req AccessRequest) (string, erro
 	}
 	out, _ := sys.Run(ctx, "id", "-nG", u)
 	wasAdmin := exists && slices.Contains(strings.Fields(out), "sudo")
-	if !wasAdmin {
-		if _, err := sys.Run(ctx, "usermod", "-aG", "sudo", u); err != nil {
-			return "", err
-		}
+	if _, err := adminGroups(ctx, sys, u); err != nil {
+		return "", err
 	}
 	if req.Password != "" {
 		if _, err := sys.RunInput(ctx, u+":"+req.Password+"\n", "chpasswd"); err != nil {
@@ -367,6 +365,11 @@ func RemoveAdmin(ctx context.Context, sys System, user string) (string, error) {
 	if _, err := sys.Run(ctx, "gpasswd", "-d", user, "sudo"); err != nil {
 		return "", err
 	}
+	if out, _ := sys.Run(ctx, "id", "-nG", user); slices.Contains(strings.Fields(out), "docker") {
+		if _, err := sys.Run(ctx, "gpasswd", "-d", user, "docker"); err != nil {
+			return "", err
+		}
+	}
 	if _, err := sys.Run(ctx, "usermod", "--expiredate", "1", user); err != nil {
 		return "", err
 	}
@@ -428,4 +431,27 @@ func AdminNeedsPassword(ctx context.Context, sys System, user string) bool {
 	out, _ := sys.Run(ctx, "passwd", "-S", user)
 	f := strings.Fields(out)
 	return len(f) < 2 || f[1] != "P"
+}
+
+// adminGroups poe o admin no sudo e, com o Docker instalado, no docker
+// (roda o docker sem sudo; o grupo docker ja e root na pratica, como o
+// sudo). Diz se mudou.
+func adminGroups(ctx context.Context, sys System, user string) (bool, error) {
+	out, _ := sys.Run(ctx, "id", "-nG", user)
+	have := strings.Fields(out)
+	groups := []string{"sudo"}
+	if g, err := sys.Run(ctx, "getent", "group", "docker"); err == nil && strings.HasPrefix(g, "docker:") {
+		groups = append(groups, "docker")
+	}
+	changed := false
+	for _, g := range groups {
+		if slices.Contains(have, g) {
+			continue
+		}
+		if _, err := sys.Run(ctx, "usermod", "-aG", g, user); err != nil {
+			return changed, err
+		}
+		changed = true
+	}
+	return changed, nil
 }

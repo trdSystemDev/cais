@@ -95,6 +95,9 @@ func TestAcessos(t *testing.T) {
 	if d, _ := AddAccess(ctx, f, AccessRequest{Key: keyMaria, Admin: "maria"}); !strings.Contains(d, "ja era admin com essa chave: nada mudou") {
 		t.Errorf("admin de novo: %q", d)
 	}
+	if !slices.Contains(f.groups["maria"], "docker") {
+		t.Errorf("admin fora do docker: %v", f.groups["maria"])
+	}
 	if !f.users["maria"] || !slices.Contains(f.groups["maria"], "sudo") || !strings.Contains(f.files["/home/maria/.ssh/authorized_keys"], keyMaria) ||
 		!strings.Contains(f.files["/home/cais/.ssh/authorized_keys"], keyMaria) || !slices.Contains(f.inputs, "maria:s3nha-forte\n") {
 		t.Fatalf("admin: %+v %q", f.groups, f.files)
@@ -113,7 +116,7 @@ func TestAcessos(t *testing.T) {
 	if _, err := RemoveAdmin(ctx, f, "maria"); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(f.groups["maria"], "sudo") || !f.expired["maria"] || f.files["/home/maria/.ssh/authorized_keys"] != "" ||
+	if slices.Contains(f.groups["maria"], "sudo") || slices.Contains(f.groups["maria"], "docker") || !f.expired["maria"] || f.files["/home/maria/.ssh/authorized_keys"] != "" ||
 		strings.Contains(f.files["/home/cais/.ssh/authorized_keys"], "maria@pc") || !strings.Contains(f.files["/home/cais/.ssh/authorized_keys"], "patrick@note") {
 		t.Errorf("remover admin: %+v %v %q", f.groups, f.expired, f.files)
 	}
@@ -140,5 +143,17 @@ func TestParseKeyVazia(t *testing.T) {
 	}
 	if _, k, _ := ParseKey(keyMaria + "  "); k.Key != keyMaria {
 		t.Errorf("Key: %q", k.Key)
+	}
+}
+
+// sem o Docker instalado (sem o grupo), o admin entra so no sudo
+func TestAdminSemDocker(t *testing.T) {
+	f := accessVPS(t)
+	f.docker = false
+	if _, err := AddAccess(context.Background(), f, AccessRequest{Key: keyMaria, Admin: "maria", Password: "s3nha-forte"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.groups["maria"], []string{"sudo"}) {
+		t.Errorf("%v", f.groups["maria"])
 	}
 }

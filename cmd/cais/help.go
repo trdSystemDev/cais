@@ -139,8 +139,8 @@ completa o que falta):
      da atualizacao
   2. atualiza o sistema; instala ufw, fail2ban e unattended-upgrades
   3. atualizacoes de seguranca automaticas, sem reiniciar sozinho
-  4. o admin NOME: criado se faltar, no grupo sudo, com as chaves SSH do
-     root (e as do -key); pede a senha do sudo dele
+  4. o admin NOME: criado se faltar, nos grupos sudo e docker, com as
+     chaves SSH do root (e as do -key); pede a senha do sudo dele
   5. firewall: entram so 22 (SSH), 80 e 443 (proxy)
   6. fail2ban no SSH (5 erros em 10 min bloqueiam o IP por 1 hora)
   7. SSH sem login do root e sem senha, so chave
@@ -166,7 +166,8 @@ O SSH so entra por chave: cada pessoa com a propria, e tire quando ela sair.
   cais host access add joao.pub         so a TUI: ssh cais@vps (deploy, logs,
                                         apps; sem shell)
   cais host access add -admin maria maria.pub
-                                        admin: usuario proprio com shell e sudo
+                                        admin: usuario proprio com shell, sudo e
+                                        o grupo docker
                                         (criado se faltar; pede a senha do sudo)
   cais host access remove SHA256:...    tira a chave de todo lugar (admins, TUI
                                         e root)

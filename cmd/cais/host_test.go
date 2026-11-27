@@ -61,7 +61,7 @@ func TestHostHardenPedeSim(t *testing.T) {
 	if code := c.run([]string{"host", "harden", "-user", "deploy"}); code != 1 {
 		t.Fatalf("saida %d", code)
 	}
-	if !strings.Contains(c.out.String(), "criar o admin deploy com sudo e 1 chave(s)") || !strings.Contains(c.errb.String(), "cancelado") {
+	if !strings.Contains(c.out.String(), "criar o admin deploy com sudo, docker e 1 chave(s)") || !strings.Contains(c.errb.String(), "cancelado") {
 		t.Errorf("%s\n%s", c.out, c.errb)
 	}
 	if len(v.calls) > 3 { // so as leituras do Prepare
