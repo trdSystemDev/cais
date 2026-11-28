@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +54,11 @@ type Config struct {
 	// (postgres, mysql, garage); sem ela, a padrao do cais. O formato de
 	// cada uma e conferido no pacote stacks.
 	Versions map[string]string `yaml:"versions,omitempty" json:"versions,omitempty"`
+	// DBPorts e a porta no loopback da VPS (127.0.0.1) dos bancos (postgres,
+	// mysql), a do tunel SSH; sem ela, 5432 e 3306. Outra so quando a padrao
+	// ja esta ocupada na VPS (ex: um banco de fora do cais nela). Os apps nao
+	// usam: chegam em postgres:5432 e mysql:3306 pela rede do banco.
+	DBPorts map[string]int `yaml:"db_ports,omitempty" json:"db_ports,omitempty"`
 
 	// campos de versoes antigas (CI e registry saíram): aceitos na leitura
 	// pra config velha continuar valendo, e descartados ao gravar
@@ -108,6 +114,17 @@ const (
 	DefaultHTTPPort  = 80
 	DefaultHTTPSPort = 443
 )
+
+// DefaultDBPorts sao as portas dos bancos no loopback da VPS.
+var DefaultDBPorts = map[string]int{"postgres": 5432, "mysql": 3306}
+
+// DBPort e a porta do banco no loopback da VPS: a escolhida ou a padrao.
+func (c Config) DBPort(name string) int {
+	if p := c.DBPorts[name]; p != 0 {
+		return p
+	}
+	return DefaultDBPorts[name]
+}
 
 // StandardPorts diz se o proxy esta em 80 e 443. Fora delas o Let's Encrypt
 // nao emite certificado: ele valida pela porta 80 da internet.
@@ -291,6 +308,7 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("versions.%s: tag invalida %q", name, v))
 		}
 	}
+	errs = append(errs, c.checkDBPorts()...)
 	if c.TLS != "" && c.TLS != TLSLetsEncrypt && c.TLS != TLSSelfSigned {
 		errs = append(errs, fmt.Errorf("tls: %q invalido (use %s ou %s)", c.TLS, TLSLetsEncrypt, TLSSelfSigned))
 	}
@@ -394,6 +412,27 @@ func validEmail(e string) error {
 		return fmt.Errorf("%q nao e um e-mail valido", e)
 	}
 	return nil
+}
+
+// checkDBPorts confere as portas dos bancos: so postgres e mysql, porta
+// valida e sem bater uma na outra nem nas do proxy (o docker recusaria).
+func (c Config) checkDBPorts() []error {
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(c.DBPorts)) {
+		p := c.DBPorts[name]
+		switch {
+		case DefaultDBPorts[name] == 0:
+			errs = append(errs, fmt.Errorf("db_ports: %q nao e banco (so postgres e mysql)", name))
+		case !validPort(p):
+			errs = append(errs, fmt.Errorf("db_ports.%s: porta invalida %d", name, p))
+		case p == c.Proxy.HTTPPort || p == c.Proxy.HTTPSPort:
+			errs = append(errs, fmt.Errorf("db_ports.%s: a porta %d e do proxy", name, p))
+		}
+	}
+	if c.DBPort("postgres") == c.DBPort("mysql") {
+		errs = append(errs, fmt.Errorf("db_ports: postgres e mysql na mesma porta %d", c.DBPort("mysql")))
+	}
+	return errs
 }
 
 func validPort(p int) bool { return p > 0 && p <= 65535 }

@@ -917,3 +917,40 @@ func TestInfraVersaoDoBanco(t *testing.T) {
 		t.Fatalf("gravou a outra major: %v", info.Config.Versions)
 	}
 }
+
+// a porta do banco no loopback pelo painel dele: grava, aplica e vazio
+// volta pra padrao (sai da config)
+func TestInfraPortaDoBanco(t *testing.T) {
+	c, ups, _ := testCore(t, okChecker)
+	setupDone(t, c, "mysql")
+	m := open(t, c)
+	click(t, m, "tab:Infra")
+	click(t, m, "stack:mysql")
+	waitFor(t, m, "mysql  ✓ no ar")
+	waitFor(t, m, "pro tunel SSH: outra se a 3306")
+	before := ups.Load()
+	typeIn(t, m, "svc-port", "3307")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "config aplicada no mysql.")
+	if info, _ := c.LoadConfig(context.Background()); info.Config.DBPorts["mysql"] != 3307 {
+		t.Fatalf("db_ports = %v", info.Config.DBPorts)
+	}
+	if ups.Load() == before {
+		t.Fatal("nao aplicou")
+	}
+
+	click(t, m, "svc-port")
+	m.svc.port.SetValue("abc")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "porta invalida")
+	if info, _ := c.LoadConfig(context.Background()); info.Config.DBPorts["mysql"] != 3307 {
+		t.Fatalf("gravou porta invalida: %v", info.Config.DBPorts)
+	}
+
+	m.svc.port.SetValue("")
+	click(t, m, "cfg-save")
+	waitFor(t, m, "config aplicada no mysql.")
+	if info, _ := c.LoadConfig(context.Background()); info.Config.DBPorts != nil {
+		t.Fatalf("vazio devia voltar pra padrao: %v", info.Config.DBPorts)
+	}
+}

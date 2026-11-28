@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -35,6 +36,9 @@ type svcConfig struct {
 	s3     *textinput.Model // garage: endereco publico do S3
 	// version e a tag da imagem (postgres, mysql, garage); vazio e a do cais
 	version *textinput.Model
+	// port e a porta do banco no loopback da VPS (postgres, mysql); vazio e
+	// a padrao
+	port *textinput.Model
 	// running e a tag do container no ar (vazio: parado ou sem subir)
 	running string
 	email   *textinput.Model
@@ -74,6 +78,7 @@ func newSvcConfig(api core.API, zones *zone.Manager, th theme) *svcConfig {
 	p.domain = mk("ex: trd.localhost", 253, 28)
 	p.s3 = mk("ex: s3.exemplo.com.br", 253, 28)
 	p.version = mk("", 128, 28)
+	p.port = mk("", 5, 8)
 	p.http, p.https = mk(strconv.Itoa(config.DefaultHTTPPort), 5, 8), mk(strconv.Itoa(config.DefaultHTTPSPort), 5, 8)
 	p.setTheme(th)
 	return p
@@ -87,7 +92,7 @@ func (p *svcConfig) setTheme(th theme) {
 }
 
 func (p *svcConfig) inputs() []*textinput.Model {
-	return []*textinput.Model{p.email, p.token, p.wild, p.domain, p.http, p.https, p.s3, p.version}
+	return []*textinput.Model{p.email, p.token, p.wild, p.domain, p.http, p.https, p.s3, p.version, p.port}
 }
 
 // hasConfig diz se o servico tem o painel de config.
@@ -100,7 +105,7 @@ func (p *svcConfig) ids() []string {
 	case "garage":
 		return []string{"s3-host", "svc-version", "cfg-save"}
 	case "postgres", "mysql":
-		return []string{"svc-version", "cfg-save"}
+		return []string{"svc-version", "svc-port", "cfg-save"}
 	}
 	ids := []string{"cert-tls"}
 	switch {
@@ -132,6 +137,8 @@ func (p *svcConfig) input(id string) *textinput.Model {
 		return p.s3
 	case "svc-version":
 		return p.version
+	case "svc-port":
+		return p.port
 	}
 	return nil
 }
@@ -200,6 +207,11 @@ func (p *svcConfig) fill(c config.Config) {
 	if img, ok := stacks.Images[p.name]; ok {
 		p.version.Placeholder = "vazio: " + img.Default + " (a do cais)"
 	}
+	p.port.SetValue("")
+	if n := c.DBPorts[p.name]; n != 0 {
+		p.port.SetValue(strconv.Itoa(n))
+	}
+	p.port.Placeholder = strconv.Itoa(config.DefaultDBPorts[p.name])
 }
 
 func (p *svcConfig) close() {
@@ -224,6 +236,15 @@ func (p *svcConfig) save() tea.Cmd {
 	email, local, domain, behind := strings.TrimSpace(p.email.Value()), p.local, strings.TrimSpace(p.domain.Value()), p.behind
 	dns, token, wild := p.dns && !p.local, strings.TrimSpace(p.token.Value()), wildcards(p.wild.Value())
 	name, s3, version := p.name, strings.TrimSpace(p.s3.Value()), strings.TrimSpace(p.version.Value())
+	// vazio e a padrao (0); texto que nao e numero vira -1, e a validacao explica
+	dbPort := 0
+	if v := strings.TrimSpace(p.port.Value()); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			dbPort = n
+		} else {
+			dbPort = -1
+		}
+	}
 	p.busy, p.err = true, ""
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -244,6 +265,17 @@ func (p *svcConfig) save() tea.Cmd {
 			}
 			if name == "garage" {
 				c.Hosts.S3 = s3
+			}
+			if config.DefaultDBPorts[name] != 0 {
+				c.DBPorts = maps.Clone(c.DBPorts)
+				if c.DBPorts == nil {
+					c.DBPorts = map[string]int{}
+				}
+				c.DBPorts[name] = dbPort
+				// vazio ou a padrao: sai da config
+				if dbPort == 0 || dbPort == config.DefaultDBPorts[name] {
+					delete(c.DBPorts, name)
+				}
 			}
 			return svcConfigSavedMsg{name, p.api.SaveConfig(ctx, c)}
 		}
@@ -390,6 +422,10 @@ func (p *svcConfig) view(c config.Config, on bool, w int) string {
 		}
 		b.WriteString(field("svc-version", "Versao", 22) + "  " + p.zones.Mark("cfg-save", t.button(saveLabel(on, p.busy), btnNormal, focusID == "cfg-save")) + "\n")
 		b.WriteString(note("Tag de " + img.Repo + " (ex: " + img.Example + "), " + running + ". " + versionNote[p.name]))
+		if def := config.DefaultDBPorts[p.name]; def != 0 {
+			b.WriteString(field("svc-port", "Porta", 8) + "\n")
+			b.WriteString(note(fmt.Sprintf("No 127.0.0.1, pro tunel SSH: outra se a %d estiver ocupada. Os apps seguem em %s:%d.", def, p.name, def)))
+		}
 		if !on {
 			b.WriteString("\n" + wrap.Inherit(muted).Render("O "+p.name+" esta desligado: isso vale quando ele ligar.") + "\n")
 		}

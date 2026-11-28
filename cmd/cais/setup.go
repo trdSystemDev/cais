@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/trdSystemDev/cais/internal/bootstrap"
+	"github.com/trdSystemDev/cais/internal/config"
 	"github.com/trdSystemDev/cais/internal/core"
 	"github.com/trdSystemDev/cais/internal/github"
 	"github.com/trdSystemDev/cais/internal/stacks"
@@ -392,8 +394,11 @@ func (e *cli) runService(args []string) error {
 	if fs.NArg() >= 2 && fs.Arg(1) == "version" {
 		return e.serviceVersion(*socket, fs.Args())
 	}
+	if fs.NArg() >= 2 && fs.Arg(1) == "port" {
+		return e.servicePort(*socket, fs.Args())
+	}
 	if fs.NArg() != 2 || (fs.Arg(1) != "on" && fs.Arg(1) != "off" && actions[fs.Arg(1)] == "") {
-		return errors.New("uso: cais service <proxy|postgres|mysql|garage> on|off|start|stop|restart (bancos e garage: version [tag])")
+		return errors.New("uso: cais service <proxy|postgres|mysql|garage> on|off|start|stop|restart (bancos e garage: version [tag]; bancos: port [porta])")
 	}
 	c, err := e.connect(*socket)
 	if err != nil {
@@ -458,6 +463,64 @@ func (e *cli) serviceVersion(socket string, args []string) error {
 		return nil
 	}
 	fmt.Fprintf(e.out, "%s: aplicando %s (baixa a imagem e recria o container)\n", name, stacks.ImageRef(cfg, name))
+	return e.withProgress(c, func(ctx context.Context) error {
+		_, err := c.SetService(ctx, name, true)
+		return err
+	})
+}
+
+// servicePort mostra ou troca a porta de um banco no loopback da VPS (a do
+// tunel SSH): cais service <postgres|mysql> port [porta|padrao]. Trocar
+// grava na config e, com o banco ligado, aplica (recria o container).
+func (e *cli) servicePort(socket string, args []string) error {
+	name := args[0]
+	def := config.DefaultDBPorts[name]
+	if def == 0 || len(args) > 3 {
+		return errors.New("uso: cais service <postgres|mysql> port [porta|padrao]")
+	}
+	c, err := e.connect(socket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	ctx := context.Background()
+	info, err := c.LoadConfig(ctx)
+	if err != nil {
+		return err
+	}
+	cfg := info.Config
+	if len(args) == 2 {
+		fmt.Fprintf(e.out, "%s: 127.0.0.1:%d", name, cfg.DBPort(name))
+		if cfg.DBPorts[name] == 0 {
+			fmt.Fprint(e.out, " (a padrao do cais)")
+		}
+		fmt.Fprintf(e.out, "\nTroca com: cais service %s port <porta> (ex: %d)\n", name, def+1)
+		return nil
+	}
+	cfg.DBPorts = maps.Clone(cfg.DBPorts)
+	if cfg.DBPorts == nil {
+		cfg.DBPorts = map[string]int{}
+	}
+	if v := args[2]; v == "padrao" || v == "default" {
+		delete(cfg.DBPorts, name)
+	} else {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("porta invalida %q: um numero (ex: %d) ou padrao", v, def+1)
+		}
+		cfg.DBPorts[name] = n
+		if n == def {
+			delete(cfg.DBPorts, name)
+		}
+	}
+	if err := c.SaveConfig(ctx, cfg); err != nil {
+		return err
+	}
+	if !cfg.HasStack(name) {
+		fmt.Fprintf(e.out, "%s: porta %d gravada; vale quando ligar (cais service %s on).\n", name, cfg.DBPort(name), name)
+		return nil
+	}
+	fmt.Fprintf(e.out, "%s: aplicando a porta %d (recria o container: o banco cai por segundos)\n", name, cfg.DBPort(name))
 	return e.withProgress(c, func(ctx context.Context) error {
 		_, err := c.SetService(ctx, name, true)
 		return err

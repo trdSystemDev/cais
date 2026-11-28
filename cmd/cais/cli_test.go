@@ -204,6 +204,10 @@ func TestCLIComandos(t *testing.T) {
 		// servicos e setup
 		{name: "service sem acao", args: "service proxy", code: 1, noCalls: true},
 		{name: "service restart", args: "service proxy restart", calls: []string{"ControlService"}},
+		{name: "service port mostra", args: "service mysql port", calls: []string{"LoadConfig"}, out: []string{"mysql: 127.0.0.1:3306 (a padrao do cais)"}},
+		{name: "service port grava desligado", args: "service mysql port 3307", calls: []string{"LoadConfig", "SaveConfig"}, out: []string{"porta 3307 gravada"}},
+		{name: "service port invalida", args: "service mysql port abc", code: 1, calls: []string{"LoadConfig"}, errOut: []string{"porta invalida"}},
+		{name: "service port fora dos bancos", args: "service garage port 3900", code: 1, noCalls: true},
 		{name: "setup plan", args: "setup",
 			setup: func(f *coretest.Recorder) { f.SetOut("PlanSetup", bootstrap.Plan{}) }},
 		{name: "setup config", args: "setup config -email a@b.c -test-domain exemplo.com"},

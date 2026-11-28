@@ -156,6 +156,17 @@ func TestPlanDizComoChegarNosBancos(t *testing.T) {
 	if p.Tunnel != "ssh -N -L 3306:127.0.0.1:3306 <usuario>@<vps>" {
 		t.Errorf("Tunnel = %q", p.Tunnel)
 	}
+
+	// com outra porta no loopback, o tunel e o cliente vao nela
+	writeConfig(t, d, func(c *config.Config) {
+		c.Stacks, c.DBPorts = []string{"proxy", "mysql"}, map[string]int{"mysql": 3307}
+	})
+	if p, err = MakePlan(d); err != nil {
+		t.Fatal(err)
+	}
+	if p.Databases[0].Port != 3307 || p.Tunnel != "ssh -N -L 3307:127.0.0.1:3307 <usuario>@<vps>" {
+		t.Errorf("porta escolhida: Databases = %+v, Tunnel = %q", p.Databases, p.Tunnel)
+	}
 }
 
 func TestRunSobeTudoEmOrdem(t *testing.T) {
@@ -392,5 +403,24 @@ func TestStackLegadaEDerrubada(t *testing.T) {
 	}
 	if f.calls[0] != "down infra" {
 		t.Errorf("chamadas %v", f.calls)
+	}
+}
+
+// porta do loopback ocupada no up de um banco: o erro diz a saida (outra
+// porta ou liberar); nos outros erros e stacks, o erro fica como veio
+func TestPortaOcupadaDizASaida(t *testing.T) {
+	busy := errors.New("Bind for 0.0.0.0:3306 failed: port is already allocated")
+	err := portTaken(config.Default(), "mysql", busy)
+	for _, want := range []string{"port is already allocated", "A porta 3306 da VPS ja esta ocupada", "cais service mysql port 3307", "mysql:3306"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("sem %q: %v", want, err)
+		}
+	}
+	if !errors.Is(err, busy) {
+		t.Error("perdeu o erro do docker")
+	}
+	other := errors.New("outro erro")
+	if portTaken(config.Default(), "mysql", other) != other || portTaken(config.Default(), "proxy", busy) != busy || portTaken(config.Default(), "mysql", nil) != nil {
+		t.Error("mexeu em erro que nao e de porta de banco")
 	}
 }

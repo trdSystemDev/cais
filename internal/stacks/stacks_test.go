@@ -242,6 +242,22 @@ func TestBancosIsolados(t *testing.T) {
 	}
 }
 
+// a porta no loopback e a padrao ou a de db_ports; dentro, a do banco
+func TestPortaDoBancoNoLoopback(t *testing.T) {
+	c := validConfig()
+	for db, want := range map[string]string{"postgres": "127.0.0.1:5432:5432", "mysql": "127.0.0.1:3306:3306"} {
+		if _, cf := render(t, db, c); cf.Services[db].Ports[0] != want {
+			t.Errorf("%s padrao: %v, esperava %s", db, cf.Services[db].Ports, want)
+		}
+	}
+	c.DBPorts = map[string]int{"postgres": 5433, "mysql": 3307}
+	for db, want := range map[string]string{"postgres": "127.0.0.1:5433:5432", "mysql": "127.0.0.1:3307:3306"} {
+		if _, cf := render(t, db, c); cf.Services[db].Ports[0] != want {
+			t.Errorf("%s escolhida: %v, esperava %s", db, cf.Services[db].Ports, want)
+		}
+	}
+}
+
 // escolher um banco so gera os secrets dele
 func TestSoOBancoEscolhido(t *testing.T) {
 	c := validConfig()

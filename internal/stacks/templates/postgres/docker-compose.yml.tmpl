@@ -4,7 +4,8 @@ name: postgres
 
 # Postgres compartilhado. Nunca na proxy_network nem aberto na internet: a
 # porta e publicada so no loopback da VPS, pra administracao por tunel SSH
-# (ssh -L 5432:127.0.0.1:5432 ...). Os apps que usam Postgres entram na
+# (ssh -L 5432:127.0.0.1:5432 ...; a porta do host e a de
+# db_ports na config, padrao 5432). Os apps que usam Postgres entram na
 # postgres_network; quem nao usa nem enxerga o banco.
 
 services:
@@ -19,7 +20,7 @@ services:
       driver: json-file
       options: {max-size: "20m", max-file: "5"}
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:{{dbport "postgres"}}:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_DB: postgres

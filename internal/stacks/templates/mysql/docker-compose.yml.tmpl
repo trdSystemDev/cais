@@ -4,7 +4,8 @@ name: mysql
 
 # MySQL compartilhado. Nunca na proxy_network nem aberto na internet: a
 # porta e publicada so no loopback da VPS, pra administracao por tunel SSH
-# (ssh -L 3306:127.0.0.1:3306 ...). Os apps que usam MySQL entram na
+# (ssh -L 3306:127.0.0.1:3306 ...; a porta do host e a de
+# db_ports na config, padrao 3306). Os apps que usam MySQL entram na
 # mysql_network; quem nao usa nem enxerga o banco.
 
 services:
@@ -17,7 +18,7 @@ services:
       driver: json-file
       options: {max-size: "20m", max-file: "5"}
     ports:
-      - "127.0.0.1:3306:3306"
+      - "127.0.0.1:{{dbport "mysql"}}:3306"
     environment:
       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
     secrets:

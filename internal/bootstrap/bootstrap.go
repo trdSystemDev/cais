@@ -135,12 +135,25 @@ type DBAccess struct {
 // databases sao os bancos que o cais sobe, na ordem das stacks.
 var databases = []struct {
 	stack, name string
-	port        int
 	user        string
 	secret      string
 }{
-	{"postgres", "Postgres", 5432, "postgres", "postgres_password"},
-	{"mysql", "MySQL", 3306, "root", "mysql_root_password"},
+	{"postgres", "Postgres", "postgres", "postgres_password"},
+	{"mysql", "MySQL", "root", "mysql_root_password"},
+}
+
+// portTaken poe no erro do up de um banco com a porta do loopback ocupada
+// (um banco de fora do cais publicado nela, numa migracao) a saida: outra
+// porta pro banco do cais, ou liberar essa.
+func portTaken(cfg config.Config, stack string, err error) error {
+	def := config.DefaultDBPorts[stack]
+	if err == nil || def == 0 || !strings.Contains(err.Error(), "port is already allocated") {
+		return err
+	}
+	p := cfg.DBPort(stack)
+	return fmt.Errorf("%w\nA porta %d da VPS ja esta ocupada (outro container ou processo publicado nela, ex: um banco de fora do cais em %d:%d). "+
+		"Troque a Porta do %s na aba Infra (ou cais service %s port %d) e aplique, ou libere a %d. Os apps nao mudam: chegam em %s:%d pela rede do banco.",
+		err, p, p, p, stack, stack, p+1, p, stack, def)
 }
 
 // Ready diz se o Setup pode rodar.
@@ -180,10 +193,10 @@ func MakePlan(d Deps) (Plan, error) {
 			continue
 		}
 		p.Databases = append(p.Databases, DBAccess{
-			Name: db.name, Port: db.port, User: db.user,
+			Name: db.name, Port: cfg.DBPort(db.stack), User: db.user,
 			PasswordFile: filepath.Join(d.SecretsDir, db.secret),
 		})
-		tunnel += fmt.Sprintf(" -L %d:127.0.0.1:%d", db.port, db.port)
+		tunnel += fmt.Sprintf(" -L %d:127.0.0.1:%d", cfg.DBPort(db.stack), cfg.DBPort(db.stack))
 	}
 	if len(p.Databases) > 0 {
 		p.Tunnel = tunnel + " <usuario>@<vps>"
@@ -362,7 +375,7 @@ func Run(ctx context.Context, d Deps, report func([]Step)) ([]Step, error) {
 		// com o container recriado
 		recreate := slices.Contains(created.Recreate, sp.Name)
 		if err := r.do(stackStepPrefix+sp.Name, func() (string, error) {
-			return "", d.ComposeUp(ctx, sp.File, recreate)
+			return "", portTaken(cfg, sp.Name, d.ComposeUp(ctx, sp.File, recreate))
 		}); err != nil {
 			return r.steps, err
 		}

@@ -158,6 +158,13 @@ func Render(name string, c config.Config, secretsDir string) (Rendered, error) {
 			}
 			return ImageRef(c, n), nil
 		},
+		// a porta do banco no loopback da VPS (config.DBPorts) ou a padrao
+		"dbport": func(n string) (int, error) {
+			if config.DefaultDBPorts[n] == 0 {
+				return 0, fmt.Errorf("servico sem porta de banco %q", n)
+			}
+			return c.DBPort(n), nil
+		},
 	}
 	path := "templates/" + name + "/docker-compose.yml.tmpl"
 	tmpl, err := template.New(filepath.Base(path)).Funcs(funcs).ParseFS(templates, path)

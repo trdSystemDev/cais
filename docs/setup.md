@@ -35,7 +35,8 @@ ou use ↑/↓; ←/→ troca a secao; enter ou tab entra nos botoes e esc volta
   ele ligado: no proxy, os **certificados** (Let's Encrypt com o e-mail dos
   avisos, ou a CA local com o dominio do teste) e as **portas**; no Garage, o
   **endereco do S3**; no Postgres, MySQL e Garage, a **versao** (a tag da
-  imagem; vazio e a do cais). E o **Novo banco** no Postgres/MySQL e o **Novo
+  imagem; vazio e a do cais); no Postgres e no MySQL, a **porta** no loopback
+  da VPS (a do tunel SSH; vazio e 5432 e 3306). E o **Novo banco** no Postgres/MySQL e o **Novo
   bucket** no Garage, com a lista dos ja criados.
 - **Logs**: os logs do container (ultimas 200 linhas, atualizadas a cada 2
   segundos). Enter entra e ←/→ troca o container nas stacks com mais de um;
@@ -50,6 +51,15 @@ e recria o container: o banco cai por alguns segundos); `padrao` volta pra do
 cais. Os dados do volume nao voltam, entao o cais recusa versao mais velha que
 a do ar e outra major do Postgres (pg_upgrade, ou dump e restore) ou do Garage
 (garage migrate).
+
+A porta dos bancos no loopback: `cais service mysql port` mostra a de agora e
+`cais service mysql port 3307` grava e aplica (recria o container). Serve
+quando a padrao ja esta ocupada na VPS: na migracao, um banco de fora do cais
+publicado em `3306:3306` (o `0.0.0.0` dele pega o `127.0.0.1` tambem) faz o
+MySQL do cais falhar com `port is already allocated`. Os apps nao mudam:
+chegam em `postgres:5432` e `mysql:3306` pela rede do banco. `padrao` volta
+pra do cais.
+
 Ligar e aplicar podem ser repetidos: nada que existe e regenerado e servico
 sem mudanca nao e recriado. O que for ligado pelo CLI aparece ao vivo na TUI
 aberta, e vice-versa.
@@ -280,7 +290,7 @@ Traefik reinicia e os contadores voltam a zero.
 ## Acesso aos bancos
 
 Os bancos nao tem painel web: so escutam no loopback da VPS (`127.0.0.1:5432` e
-`:3306`), e a administracao e por tunel SSH, com o cliente que preferir no seu
+`:3306`, ou a porta escolhida no banco, na aba Infra), e a administracao e por tunel SSH, com o cliente que preferir no seu
 computador. Nenhuma porta nova fica aberta na internet:
 
 ```sh
@@ -288,7 +298,8 @@ ssh -N -L 5432:127.0.0.1:5432 -L 3306:127.0.0.1:3306 voce@vps
 # e conecte em localhost:5432 (postgres) e localhost:3306 (root)
 ```
 
-O `cais setup` mostra esse comando e onde ler as senhas root.
+O `cais setup` mostra esse comando (com as portas escolhidas) e onde ler as
+senhas root.
 
 ## Avisos por e-mail
 

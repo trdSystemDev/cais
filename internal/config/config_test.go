@@ -105,23 +105,28 @@ func TestLoadRecusaCampoDesconhecido(t *testing.T) {
 
 func TestValidateRecusa(t *testing.T) {
 	cases := map[string]func(*Config){
-		"selfsigned sem dominio": func(c *Config) { c.TLS = TLSSelfSigned },
-		"garage sem host do s3":  func(c *Config) { c.Stacks = []string{"garage"} },
-		"dominio sem ponto":      func(c *Config) { c.TestDomain = "localhost" },
-		"dominio maiusculo":      func(c *Config) { c.TestDomain = "Exemplo.com" },
-		"dominio com aspas":      func(c *Config) { c.TestDomain = `x".com` },
-		"dominio com espaco":     func(c *Config) { c.Hosts.S3 = "a b.com" },
-		"label com hifen final":  func(c *Config) { c.Hosts.S3 = "a-.com" },
-		"email sem arroba":       func(c *Config) { c.Email = "admin.exemplo.com" },
-		"sem email com o proxy":  func(c *Config) { c.Email, c.Stacks = "", []string{"proxy"} },
-		"email dominio invalido": func(c *Config) { c.Email = "a@b" },
-		"email com aspas":        func(c *Config) { c.Email = `a"b@exemplo.com` },
-		"host s3 invalido":       func(c *Config) { c.Hosts.S3 = "s3_x.exemplo.com" },
-		"dominio .local":         func(c *Config) { c.TestDomain, c.TLS = "trd.local", TLSSelfSigned },
-		"tls desconhecido":       func(c *Config) { c.TLS = "acme" },
-		"porta zero":             func(c *Config) { c.Proxy.HTTPPort = 0 },
-		"porta alta":             func(c *Config) { c.Proxy.HTTPSPort = 70000 },
-		"portas iguais":          func(c *Config) { c.Proxy.HTTPSPort = c.Proxy.HTTPPort },
+		"selfsigned sem dominio":  func(c *Config) { c.TLS = TLSSelfSigned },
+		"garage sem host do s3":   func(c *Config) { c.Stacks = []string{"garage"} },
+		"dominio sem ponto":       func(c *Config) { c.TestDomain = "localhost" },
+		"dominio maiusculo":       func(c *Config) { c.TestDomain = "Exemplo.com" },
+		"dominio com aspas":       func(c *Config) { c.TestDomain = `x".com` },
+		"dominio com espaco":      func(c *Config) { c.Hosts.S3 = "a b.com" },
+		"label com hifen final":   func(c *Config) { c.Hosts.S3 = "a-.com" },
+		"email sem arroba":        func(c *Config) { c.Email = "admin.exemplo.com" },
+		"sem email com o proxy":   func(c *Config) { c.Email, c.Stacks = "", []string{"proxy"} },
+		"email dominio invalido":  func(c *Config) { c.Email = "a@b" },
+		"email com aspas":         func(c *Config) { c.Email = `a"b@exemplo.com` },
+		"host s3 invalido":        func(c *Config) { c.Hosts.S3 = "s3_x.exemplo.com" },
+		"dominio .local":          func(c *Config) { c.TestDomain, c.TLS = "trd.local", TLSSelfSigned },
+		"tls desconhecido":        func(c *Config) { c.TLS = "acme" },
+		"porta zero":              func(c *Config) { c.Proxy.HTTPPort = 0 },
+		"porta alta":              func(c *Config) { c.Proxy.HTTPSPort = 70000 },
+		"portas iguais":           func(c *Config) { c.Proxy.HTTPSPort = c.Proxy.HTTPPort },
+		"porta de banco invalida": func(c *Config) { c.DBPorts = map[string]int{"mysql": -1} },
+		"porta de banco alta":     func(c *Config) { c.DBPorts = map[string]int{"postgres": 70000} },
+		"porta de nao banco":      func(c *Config) { c.DBPorts = map[string]int{"garage": 3900} },
+		"bancos na mesma porta":   func(c *Config) { c.DBPorts = map[string]int{"mysql": 5432} },
+		"banco na porta do proxy": func(c *Config) { c.DBPorts = map[string]int{"mysql": c.Proxy.HTTPSPort} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -134,6 +139,11 @@ func TestValidateRecusa(t *testing.T) {
 	}
 	if err := validConfig().Validate(); err != nil {
 		t.Fatalf("recusou config valida: %v", err)
+	}
+	ports := validConfig()
+	ports.DBPorts = map[string]int{"mysql": 3307, "postgres": 5433}
+	if err := ports.Validate(); err != nil {
+		t.Fatalf("recusou porta de banco valida: %v", err)
 	}
 	local := validConfig()
 	local.TestDomain, local.TLS = "trd.localhost", TLSSelfSigned

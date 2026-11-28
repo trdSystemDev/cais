@@ -267,7 +267,7 @@ Usa o App ID da config e a chave (cais setup secret github_app_key). Se o
 GitHub recusar, o motivo aparece aqui; nao abre nenhum repositorio.`},
 	}},
 	{title: "Servicos (nada sobe sem ser ligado):", cmds: []command{
-		{name: "service", usage: "service <nome> on|off|start|stop|restart|version", short: "liga/desliga, inicia/para, reinicia ou troca a versao", long: `
+		{name: "service", usage: "service <nome> on|off|start|stop|restart|version|port", short: "liga/desliga, inicia/para, reinicia, troca a versao ou a porta", long: `
 Ligar gera os secrets que faltam, grava o compose e sobe o servico (e
 mostra o progresso, tambem na TUI aberta). "on" num servico ja ligado
 aplica nele a config salva no Setup. Desligar derruba os containers e
@@ -289,12 +289,20 @@ a do ar, outra major do Postgres (precisa de pg_upgrade ou dump e
 restore) e outra major do Garage (garage migrate). O mesmo na TUI: aba
 Infra, no servico, campo Versao.
 
+port mostra a porta do postgres ou do mysql no loopback da VPS (a do
+tunel SSH; padrao 5432 e 3306); com uma porta, grava e, ligado, aplica
+(recria o container). Serve quando a padrao ja esta ocupada na VPS (ex:
+um banco de fora do cais publicado nela). Os apps nao mudam: chegam em
+postgres:5432 e mysql:3306 pela rede do banco. padrao volta pra do cais.
+Na TUI: aba Infra, no banco, campo Porta.
+
 Exemplos:
   cais service proxy on
   cais service postgres on
   cais service postgres restart
   cais service postgres version 18-3.6-alpine
   cais service mysql version padrao
+  cais service mysql port 3307
   cais service garage off`},
 	}},
 	{title: "Bancos (no Postgres/MySQL da infra):", group: "db", cmds: []command{
